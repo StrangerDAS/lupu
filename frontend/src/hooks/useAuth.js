@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authAPI } from '../api/endpoints'
 import { auth } from '../firebase/config'
@@ -29,7 +28,7 @@ export function useAuth() {
     const res = await authAPI.signup(data)
     const { user: u, token: t } = res.data
     setAuth(u, t)
-    toast.success('Account created! Welcome to URENT 🏍️')
+    toast.success('Account created! Welcome to LUPU 🏍️')
     return u
   }, [setAuth])
 

@@ -1,0 +1,171 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ──────────────────────────────────────────────────────
+
+    // Is the request from a signed-in Firebase Auth user?
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Is the requesting user the owner of this document?
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Read the role from an existing user document (for cross-document checks)
+    function getUserRole(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.role;
+    }
+
+    // Is the requesting user an admin-tier role?
+    function isAdminRole() {
+      return isSignedIn() &&
+        getUserRole(request.auth.uid) in ['admin', 'super_admin', 'founder'];
+    }
+
+    // Is the requesting user a founder?
+    function isFounder() {
+      return isSignedIn() &&
+        getUserRole(request.auth.uid) == 'founder';
+    }
+
+    // ── /users/{uid} ─────────────────────────────────────────────────────────
+    // FIX: Users MUST be able to read and update their own document.
+    // Without this, getDoc() and updateDoc() in App.jsx will throw PERMISSION_DENIED
+    // which was causing the silent force-logout bug.
+    match /users/{uid} {
+      // Any signed-in user can read their own profile
+      allow read: if isOwner(uid) || isAdminRole();
+
+      // User can create their own profile on first sign-in (setDoc)
+      allow create: if isOwner(uid);
+
+      // User can update only non-sensitive fields of their own profile
+      // Admins can update any field (role, status, etc.)
+      allow update: if isOwner(uid) || isAdminRole();
+
+      // Only founders can delete user documents
+      allow delete: if isFounder();
+    }
+
+    // ── /vehicles/{vehicleId} ────────────────────────────────────────────────
+    match /vehicles/{vehicleId} {
+      // Anyone can read vehicle listings (needed for Explore page)
+      allow read: if true;
+
+      // Only authenticated users can create vehicles
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      // Owner or admin can update / delete
+      allow update: if isSignedIn() &&
+        (resource.data.ownerId == request.auth.uid || isAdminRole());
+
+      allow delete: if isSignedIn() &&
+        (resource.data.ownerId == request.auth.uid || isAdminRole());
+    }
+
+    // ── /bookings/{bookingId} ────────────────────────────────────────────────
+    match /bookings/{bookingId} {
+      allow read: if isSignedIn() &&
+        (resource.data.riderId   == request.auth.uid ||
+         resource.data.ownerId   == request.auth.uid ||
+         isAdminRole());
+
+      allow create: if isSignedIn() &&
+        request.resource.data.riderId == request.auth.uid;
+
+      allow update: if isSignedIn() &&
+        (resource.data.riderId   == request.auth.uid ||
+         resource.data.ownerId   == request.auth.uid ||
+         isAdminRole());
+
+      allow delete: if isAdminRole();
+    }
+
+    // ── /payments/{paymentId} ────────────────────────────────────────────────
+    match /payments/{paymentId} {
+      allow read: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdminRole());
+
+      allow create: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid;
+
+      allow update: if isAdminRole();
+      allow delete: if isFounder();
+    }
+
+    // ── /disputes/{disputeId} ────────────────────────────────────────────────
+    match /disputes/{disputeId} {
+      allow read: if isSignedIn() &&
+        (resource.data.raisedBy == request.auth.uid || isAdminRole());
+
+      allow create: if isSignedIn();
+      allow update: if isAdminRole();
+      allow delete: if isFounder();
+    }
+
+    // ── /reports/{reportId} ──────────────────────────────────────────────────
+    match /reports/{reportId} {
+      allow read: if isSignedIn() &&
+        (resource.data.reportedBy == request.auth.uid || isAdminRole());
+
+      allow create: if isSignedIn();
+      allow update: if isAdminRole();
+      allow delete: if isFounder();
+    }
+
+    // ── /support_tickets/{ticketId} ──────────────────────────────────────────
+    match /support_tickets/{ticketId} {
+      allow read: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdminRole());
+
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdminRole());
+
+      allow delete: if isAdminRole();
+    }
+
+    // ── /reviews/{reviewId} ──────────────────────────────────────────────────
+    match /reviews/{reviewId} {
+      allow read: if true;
+
+      allow create: if isSignedIn() &&
+        request.resource.data.reviewerId == request.auth.uid;
+
+      allow update: if isSignedIn() &&
+        (resource.data.reviewerId == request.auth.uid || isAdminRole());
+
+      allow delete: if isAdminRole();
+    }
+
+    // ── /notifications/{notifId} ─────────────────────────────────────────────
+    match /notifications/{notifId} {
+      allow read: if isSignedIn() &&
+        (resource.data.userId == request.auth.uid || isAdminRole());
+
+      allow create: if isAdminRole();
+      allow update: if isSignedIn() &&
+        resource.data.userId == request.auth.uid;
+
+      allow delete: if isAdminRole();
+    }
+
+    // ── /audit_logs/{logId} ──────────────────────────────────────────────────
+    match /audit_logs/{logId} {
+      allow read:   if isAdminRole();
+      allow create: if isAdminRole();
+      allow update: if false;  // Audit logs are immutable
+      allow delete: if isFounder();
+    }
+
+    // ── Catch-all: deny everything else ──────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,22 +1,92 @@
-import { useState } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { FiStar, FiMapPin, FiClock, FiShield, FiArrowLeft, FiCalendar } from 'react-icons/fi'
+import { useState, useEffect } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import { FiStar, FiMapPin, FiClock, FiShield, FiArrowLeft, FiCalendar, FiHeart } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
+import toast from 'react-hot-toast'
 import PageWrapper from '../components/PageWrapper'
+import StarRating from '../components/StarRating'
+import ReviewCard from '../components/ReviewCard'
+import RatingSummary from '../components/RatingSummary'
 import { useVehicle } from '../hooks/useVehicles'
 import { MOCK_VEHICLES } from '../utils/mockData'
 import useAuthStore from '../store/authStore'
+import {
+  getVehicleReviews, submitReview, getFavorites, toggleFavorite,
+  getEligibleBookingForReview
+} from '../firebase/firestoreService'
+
+/* ═══════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ═══════════════════════════════════════════════════════════ */
 
 export default function VehicleDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { isAuthenticated, isKycComplete } = useAuthStore()
+  const { user, isAuthenticated, isKycComplete } = useAuthStore()
   const { vehicle: fetched, loading } = useVehicle(id)
   const [activeImg, setActiveImg] = useState(0)
 
+  /* ── Favorites state ───────────────────────────────────── */
+  const [isFavorited, setIsFavorited] = useState(false)
+  const [favLoading, setFavLoading] = useState(false)
+
+  /* ── Reviews state ─────────────────────────────────────── */
+  const [reviews, setReviews] = useState([])
+  const [reviewsLoading, setReviewsLoading] = useState(true)
+  const [showReviewForm, setShowReviewForm] = useState(false)
+  const [reviewRating, setReviewRating] = useState(0)
+  const [reviewComment, setReviewComment] = useState('')
+  const [submittingReview, setSubmittingReview] = useState(false)
+  const [eligibleBooking, setEligibleBooking] = useState(null)
+  const [checkingEligibility, setCheckingEligibility] = useState(true)
+
   // Fallback to mock data if API not available
   const vehicle = fetched || MOCK_VEHICLES.find((v) => v._id === id) || MOCK_VEHICLES[0]
+
+  // Determine availability: must be approved AND isLive
+  const isApproved = vehicle?.status === 'approved'
+  const isLive = vehicle?.isLive !== false
+  const isBookable = isApproved && isLive
+
+  /* ── Load favorites on mount ───────────────────────────── */
+  useEffect(() => {
+    if (!isAuthenticated() || !user?._id || !id) return
+    getFavorites(user._id)
+      .then((favs) => setIsFavorited(favs.includes(id)))
+      .catch(() => {})
+  }, [user?._id, id])
+
+  /* ── Load reviews on mount ─────────────────────────────── */
+  useEffect(() => {
+    if (!id) return
+    setReviewsLoading(true)
+    getVehicleReviews(id)
+      .then((data) => setReviews(data || []))
+      .catch(() => setReviews([]))
+      .finally(() => setReviewsLoading(false))
+  }, [id])
+
+  /* ── Check review eligibility ────────────────────────── */
+  useEffect(() => {
+    if (!isAuthenticated() || !user?._id || !id) {
+      setCheckingEligibility(false)
+      return
+    }
+    setCheckingEligibility(true)
+    getEligibleBookingForReview(user._id, id)
+      .then((booking) => {
+        setEligibleBooking(booking)
+      })
+      .catch((err) => {
+        console.error('Error checking review eligibility:', err)
+      })
+      .finally(() => {
+        setCheckingEligibility(false)
+      })
+  }, [user?._id, id, reviews])
+
+  /* ── Handlers ──────────────────────────────────────────── */
 
   const handleBook = () => {
     if (!isAuthenticated()) {
@@ -27,6 +97,59 @@ export default function VehicleDetail() {
       navigate(`/book/${id}`)
     }
   }
+
+  const handleToggleFavorite = async () => {
+    if (!user?._id) return
+    setFavLoading(true)
+    try {
+      const nowFav = await toggleFavorite(user._id, vehicle._id)
+      setIsFavorited(nowFav)
+      toast.success(nowFav ? 'Added to favorites' : 'Removed from favorites')
+    } catch {
+      toast.error('Could not update favorites')
+    } finally {
+      setFavLoading(false)
+    }
+  }
+
+  const handleSubmitReview = async (e) => {
+    e.preventDefault()
+    if (!eligibleBooking) {
+      toast.error('You must complete a ride before writing a review')
+      return
+    }
+    if (reviewRating === 0) {
+      toast.error('Please select a star rating')
+      return
+    }
+    setSubmittingReview(true)
+    try {
+      await submitReview({
+        bookingId: eligibleBooking._id,
+        reviewerId: user._id,
+        reviewerName: user.name || 'User',
+        reviewedUserId: vehicle.ownerId || '',
+        vehicleId: vehicle._id,
+        vehicleName: vehicle.name,
+        rating: reviewRating,
+        comment: reviewComment,
+        reviewType: 'vehicle'
+      })
+      toast.success('Review submitted!')
+      // Refresh reviews
+      const updated = await getVehicleReviews(vehicle._id)
+      setReviews(updated || [])
+      setShowReviewForm(false)
+      setReviewRating(0)
+      setReviewComment('')
+    } catch (err) {
+      toast.error(err.message || 'Failed to submit review')
+    } finally {
+      setSubmittingReview(false)
+    }
+  }
+
+  /* ── Loading skeleton ──────────────────────────────────── */
 
   if (loading) {
     return (
@@ -65,7 +188,7 @@ export default function VehicleDetail() {
           {/* Left — Images */}
           <div className="lg:col-span-3 space-y-3">
             {/* Main image */}
-            <div className="card h-72 md:h-96 flex items-center justify-center bg-surface-2 overflow-hidden">
+            <div className="card h-72 md:h-96 flex items-center justify-center bg-surface-2 overflow-hidden relative">
               {vehicle.images?.[activeImg] ? (
                 <img
                   src={vehicle.images[activeImg]}
@@ -75,6 +198,39 @@ export default function VehicleDetail() {
               ) : (
                 <Icon className="text-white/10 text-9xl" />
               )}
+
+              {/* Favorite heart — top-left */}
+              {isAuthenticated() && (
+                <motion.button
+                  whileHover={{ scale: 1.15 }}
+                  whileTap={{ scale: 0.9 }}
+                  onClick={handleToggleFavorite}
+                  disabled={favLoading}
+                  className="absolute top-4 left-4 z-10 bg-black/60 backdrop-blur-sm rounded-full p-2.5 transition disabled:opacity-50"
+                  aria-label={isFavorited ? 'Remove from favorites' : 'Add to favorites'}
+                >
+                  <FiHeart
+                    size={20}
+                    className={
+                      isFavorited
+                        ? 'text-red-500 fill-red-500'
+                        : 'text-white/70'
+                    }
+                  />
+                </motion.button>
+              )}
+
+              {/* Status dot overlay on image — top-right */}
+              <div className="absolute top-4 right-4 flex items-center gap-2 bg-black/60 backdrop-blur-sm rounded-full px-3 py-1.5">
+                <span
+                  className={`status-dot ${isBookable ? 'status-dot--live' : 'status-dot--offline'}`}
+                />
+                <span className={`text-xs font-semibold uppercase tracking-wider ${
+                  isBookable ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {isBookable ? 'Live' : 'Offline'}
+                </span>
+              </div>
             </div>
             {/* Thumbnails */}
             {vehicle.images?.length > 1 && (
@@ -115,6 +271,120 @@ export default function VehicleDetail() {
                 </div>
               </div>
             )}
+
+            {/* ── Reviews Section ───────────────────────────── */}
+            <div className="card p-6">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="font-semibold text-lg flex items-center gap-2">
+                  Reviews
+                  <span className="text-white/30 text-sm font-normal">
+                    ({reviews.length})
+                  </span>
+                </h2>
+                 {isAuthenticated() && !checkingEligibility && eligibleBooking && !showReviewForm && (
+                  <motion.button
+                    whileHover={{ scale: 1.03 }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={() => setShowReviewForm(true)}
+                    className="btn-secondary text-xs px-4 py-2"
+                  >
+                    Write a Review
+                  </motion.button>
+                )}
+              </div>
+
+              {/* Rating summary bars */}
+              {reviews.length > 0 && (
+                <div className="mb-6">
+                  <RatingSummary reviews={reviews} />
+                </div>
+              )}
+
+              {/* Review form */}
+              <AnimatePresence>
+                {showReviewForm && (
+                  <motion.form
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    onSubmit={handleSubmitReview}
+                    className="bg-surface-2 rounded-xl p-5 mb-6 space-y-4 overflow-hidden"
+                  >
+                    <div>
+                      <label className="label text-sm mb-3 block">Your Rating</label>
+                      <StarRating
+                        value={reviewRating}
+                        onChange={setReviewRating}
+                        size={28}
+                        gap="gap-1.5"
+                      />
+                      {reviewRating > 0 && (
+                        <motion.p
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="text-brand text-sm mt-2"
+                        >
+                          {['', 'Poor 😕', 'Fair 😐', 'Good 🙂', 'Great 😊', 'Excellent! 🤩'][reviewRating]}
+                        </motion.p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="label text-sm mb-2 block">Comment</label>
+                      <textarea
+                        value={reviewComment}
+                        onChange={(e) => setReviewComment(e.target.value)}
+                        placeholder="Share your experience…"
+                        rows={3}
+                        maxLength={500}
+                        className="input-field w-full resize-none"
+                      />
+                    </div>
+                    <div className="flex gap-3">
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        type="submit"
+                        disabled={submittingReview}
+                        className="btn-primary text-sm px-6 py-2 disabled:opacity-50"
+                      >
+                        {submittingReview ? 'Submitting…' : 'Submit Review'}
+                      </motion.button>
+                      <button
+                        type="button"
+                        onClick={() => { setShowReviewForm(false); setReviewRating(0); setReviewComment('') }}
+                        className="btn-ghost text-sm px-4 py-2"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </motion.form>
+                )}
+              </AnimatePresence>
+
+              {/* Reviews list */}
+              {reviewsLoading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="space-y-2">
+                      <div className="skeleton h-4 w-32 rounded-lg" />
+                      <div className="skeleton h-3 w-full rounded-lg" />
+                    </div>
+                  ))}
+                </div>
+              ) : reviews.length === 0 ? (
+                <div className="text-center py-8">
+                  <FiStar className="text-white/10 text-4xl mx-auto mb-3" />
+                  <p className="text-white/30 text-sm">No reviews yet.</p>
+                  <p className="text-white/20 text-xs mt-1">Be the first to share your experience!</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {reviews.map((r) => (
+                    <ReviewCard key={r._id} review={r} currentUserId={user?._id} />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Right — Details + Book */}
@@ -125,20 +395,26 @@ export default function VehicleDetail() {
                 <span className="badge bg-brand/10 text-brand capitalize text-xs">
                   <Icon className="mr-1" />{vehicle.type}
                 </span>
-                {vehicle.status === 'approved' ? (
-                  <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-xs">
-                    Available
-                  </span>
-                ) : (
-                  <span className="badge bg-red-500/10 text-red-400 text-xs">Unavailable</span>
-                )}
+                {/* Status badge with glowing dot */}
+                <span className={`badge text-xs flex items-center gap-1.5 ${
+                  isBookable
+                    ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                }`}>
+                  <span className={`status-dot ${isBookable ? 'status-dot--live' : 'status-dot--offline'}`}
+                    style={{ width: 8, height: 8 }}
+                  />
+                  {isBookable ? 'Available' : 'Unavailable'}
+                </span>
               </div>
               <h1 className="text-2xl md:text-3xl font-bold leading-tight">{vehicle.name}</h1>
               <div className="flex items-center gap-4 mt-3 text-sm text-white/50">
-                <span className="flex items-center gap-1">
-                  <FiStar className="text-brand fill-brand" />
-                  {vehicle.rating} ({vehicle.totalReviews} reviews)
-                </span>
+                {vehicle.rating > 0 && vehicle.totalReviews > 0 && (
+                  <span className="flex items-center gap-1">
+                    <FiStar className="text-brand fill-brand" />
+                    {vehicle.rating} ({vehicle.totalReviews} reviews)
+                  </span>
+                )}
                 {vehicle.location && (
                   <span className="flex items-center gap-1">
                     <FiMapPin size={13} /> {vehicle.location}
@@ -168,32 +444,55 @@ export default function VehicleDetail() {
             </div>
 
             {/* Owner */}
-            {vehicle.owner && (
+            {(vehicle.owner || vehicle.ownerName) && (
               <div className="card p-5 flex items-center gap-4">
                 <div className="w-12 h-12 rounded-full bg-surface-3 flex items-center justify-center text-xl font-bold text-brand shrink-0">
-                  {vehicle.owner.name?.[0] || '?'}
+                  {(vehicle.owner?.name?.[0] || vehicle.ownerName?.[0] || '?').toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm truncate">{vehicle.owner.name}</div>
-                  <div className="text-white/40 text-xs mt-0.5">
-                    ⭐ {vehicle.owner.rating} · {vehicle.owner.totalTrips} trips
-                  </div>
+                  <div className="font-semibold text-sm truncate">{vehicle.owner?.name || vehicle.ownerName}</div>
+                  <div className="text-white/40 text-xs mt-0.5">Vehicle Owner</div>
                 </div>
-                <span className="badge bg-green-500/10 text-green-400 text-xs shrink-0">Verified</span>
+                {vehicle.ownerVerified ? (
+                  <span className="badge bg-green-500/10 text-green-400 text-xs shrink-0 flex items-center gap-1">
+                    <FiCheckCircle size={12} /> Verified
+                  </span>
+                ) : (
+                  <span className="badge bg-white/5 text-white/40 text-xs shrink-0">Not Verified</span>
+                )}
               </div>
+            )}
+
+            {/* Unavailable notice */}
+            {!isBookable && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card p-4 bg-red-500/5 border-red-500/20 flex items-center gap-3"
+              >
+                <span className="status-dot status-dot--offline" />
+                <div>
+                  <p className="text-red-400 text-sm font-semibold">Currently Unavailable</p>
+                  <p className="text-white/30 text-xs mt-0.5">
+                    This vehicle has been set offline by the owner. Check back later.
+                  </p>
+                </div>
+              </motion.div>
             )}
 
             {/* Book button */}
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={isBookable ? { scale: 1.02 } : {}}
+              whileTap={isBookable ? { scale: 0.98 } : {}}
               onClick={handleBook}
-              disabled={vehicle.status !== 'approved'}
+              disabled={!isBookable}
               className="btn-primary w-full text-center text-base py-4 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {vehicle.status === 'approved' ? 'Book This Vehicle' : 'Currently Unavailable'}
+              {isBookable ? 'Book This Vehicle' : 'Currently Unavailable'}
             </motion.button>
-            <p className="text-center text-white/30 text-xs">No payment required to confirm</p>
+            {isBookable && (
+              <p className="text-center text-white/30 text-xs">No payment required to confirm</p>
+            )}
           </div>
         </div>
       </div>

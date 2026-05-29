@@ -108,7 +108,7 @@ export default function Login() {
     >
       <div className="text-center mb-8">
         <h1 className="text-3xl font-bold">Welcome back</h1>
-        <p className="text-white/40 mt-2">Sign in to your URENT account</p>
+        <p className="text-white/40 mt-2">Sign in to your LUPU account</p>
       </div>
 
       <div className="card p-8 shadow-2xl">

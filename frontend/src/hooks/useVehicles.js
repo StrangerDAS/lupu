@@ -1,18 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
-import { vehicleAPI, itemAPI } from '../api/endpoints'
 import useVehicleStore from '../store/vehicleStore'
+import { getVehicleById } from '../firebase/firestoreService'
+import { MOCK_VEHICLES } from '../utils/mockData'
 
 /**
- * useVehicles — fetches unified items (vehicles + accessories) and exposes filter state.
+ * useVehicles — subscribes to Firestore vehicles and exposes filter state.
+ * Falls back to mock data if Firestore returns empty.
  */
 export function useVehicles() {
   const store = useVehicleStore()
-  const { fetchVehicles, getFiltered, filters, setFilter, clearFilters, loading } = store
+  const { subscribeVehicles, unsubscribeVehicles, getFiltered, filters, setFilter, clearFilters, loading } = store
 
   useEffect(() => {
-    fetchVehicles(() =>
-      itemAPI.getAll().then((res) => res.data?.items || res.data)
-    )
+    const unsub = subscribeVehicles()
+    return () => {
+      if (unsub) unsub()
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
@@ -25,7 +28,8 @@ export function useVehicles() {
 }
 
 /**
- * useVehicle — fetches a single vehicle by ID.
+ * useVehicle — fetches a single vehicle by ID from Firestore.
+ * Falls back to store cache, then mock data.
  */
 export function useVehicle(id) {
   const [vehicle, setVehicle] = useState(null)
@@ -39,10 +43,18 @@ export function useVehicle(id) {
     if (cached) { setVehicle(cached); setLoading(false); return }
     setLoading(true)
     try {
-      const { data } = await vehicleAPI.getById(id)
-      setVehicle(data)
-    } catch {
-      // fallback handled in component via mock
+      const data = await getVehicleById(id)
+      if (data) {
+        setVehicle(data)
+      } else {
+        // Fallback to mock data
+        const mock = MOCK_VEHICLES.find((v) => v._id === id)
+        setVehicle(mock || MOCK_VEHICLES[0])
+      }
+    } catch (err) {
+      console.error('Error fetching vehicle:', err)
+      const mock = MOCK_VEHICLES.find((v) => v._id === id)
+      setVehicle(mock || MOCK_VEHICLES[0])
       setError('Could not load vehicle')
     } finally {
       setLoading(false)

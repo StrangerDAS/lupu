@@ -16,12 +16,6 @@ const fadeUp = {
 }
 
 /* ── Data ─────────────────────────────────────────────── */
-const stats = [
-  { value: '500+', label: 'Happy Riders' },
-  { value: '80+', label: 'Vehicles Listed' },
-  { value: '4.8★', label: 'Average Rating' },
-  { value: '₹49', label: 'Starting/hr' },
-]
 
 const howItWorks = [
   {
@@ -67,26 +61,6 @@ const features = [
   },
 ]
 
-const testimonials = [
-  {
-    name: 'Priya Borah',
-    role: 'College Student',
-    text: 'Rented a scooty for a week during my internship. Super affordable and the owner was very helpful. Will use URENT again!',
-    rating: 5,
-  },
-  {
-    name: 'Rahul Gogoi',
-    role: 'Delivery Partner',
-    text: 'Listed my bike on URENT and I make extra ₹8,000 every month. The process was smooth and the platform is very easy to use.',
-    rating: 5,
-  },
-  {
-    name: 'Anjali Das',
-    role: 'Tourist from Guwahati',
-    text: 'Explored Dibrugarh on a rented bike. The prices are unbeatable and the process was completely online. Loved it!',
-    rating: 5,
-  },
-]
 
 /* ── Component ────────────────────────────────────────── */
 export default function Home() {
@@ -157,21 +131,7 @@ export default function Home() {
               </Link>
             </motion.div>
 
-            {/* Stats */}
-            <motion.div
-              variants={fadeUp}
-              initial="hidden"
-              animate="show"
-              custom={4}
-              className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-16 max-w-2xl mx-auto"
-            >
-              {stats.map((s) => (
-                <div key={s.label} className="text-center">
-                  <div className="text-2xl font-bold text-gradient">{s.value}</div>
-                  <div className="text-xs text-white/40 mt-1">{s.label}</div>
-                </div>
-              ))}
-            </motion.div>
+
           </div>
         </div>
 
@@ -260,7 +220,7 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-14"
           >
-            <h2 className="section-title">How URENT works</h2>
+            <h2 className="section-title">How LUPU works</h2>
             <p className="section-sub">Ride in three simple steps</p>
           </motion.div>
 
@@ -316,7 +276,7 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-14"
           >
-            <h2 className="section-title">Why choose URENT?</h2>
+            <h2 className="section-title">Why choose LUPU?</h2>
             <p className="section-sub">Built for trust, speed, and local convenience</p>
           </motion.div>
 
@@ -342,46 +302,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── Testimonials ───────────────────────────────── */}
-      <section className="py-20 md:py-28 bg-surface/40">
-        <div className="container-main">
-          <motion.div
-            variants={fadeUp}
-            initial="hidden"
-            whileInView="show"
-            viewport={{ once: true }}
-            className="text-center mb-14"
-          >
-            <h2 className="section-title">What riders are saying</h2>
-            <p className="section-sub">Real feedback from Dibrugarh's community</p>
-          </motion.div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {testimonials.map((t, i) => (
-              <motion.div
-                key={t.name}
-                variants={fadeUp}
-                initial="hidden"
-                whileInView="show"
-                viewport={{ once: true }}
-                custom={i}
-                className="card p-6"
-              >
-                <div className="flex gap-0.5 mb-4">
-                  {Array.from({ length: t.rating }).map((_, j) => (
-                    <FiStar key={j} className="text-brand fill-brand" size={14} />
-                  ))}
-                </div>
-                <p className="text-white/60 text-sm leading-relaxed mb-5">"{t.text}"</p>
-                <div>
-                  <div className="font-semibold text-sm">{t.name}</div>
-                  <div className="text-white/30 text-xs mt-0.5">{t.role}</div>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
 
       {/* ── Owner CTA ──────────────────────────────────── */}
       <section className="py-20 md:py-28">
@@ -401,7 +321,7 @@ export default function Home() {
               </h2>
               <p className="text-white/50 text-lg max-w-xl">
                 Put your idle vehicle to work. Earn up to ₹15,000/month by listing it
-                on URENT. Free to list, no commission until you earn.
+                on LUPU. Free to list, no commission until you earn.
               </p>
             </div>
             <div className="mt-6 md:mt-0 shrink-0">

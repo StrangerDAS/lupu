@@ -26,7 +26,7 @@ export default function Overview() {
         </div>
 
         <h1 className="text-6xl md:text-8xl font-bold text-white mb-6 tracking-tight">
-          URENT
+          LUPU
         </h1>
 
         <h2 className="text-2xl md:text-3xl text-white/90 font-medium mb-4">

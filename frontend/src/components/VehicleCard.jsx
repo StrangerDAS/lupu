@@ -1,10 +1,11 @@
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
-import { FiClock, FiMapPin, FiStar } from 'react-icons/fi'
+import { FiClock, FiMapPin, FiStar, FiCheckCircle } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
 
 /**
  * Vehicle card shown in explore grid and related listings.
+ * Shows a glowing LIVE/OFFLINE status indicator in top-right corner.
  */
 export default function VehicleCard({ vehicle, index = 0 }) {
   const {
@@ -15,12 +16,17 @@ export default function VehicleCard({ vehicle, index = 0 }) {
     pricePerHour,
     images,
     location,
-    rating = 4.5,
-    totalReviews = 12,
+    rating,
+    totalReviews,
     status,
+    isLive,
   } = vehicle
 
-  const isAvailable = status === 'approved'
+  // Only show rating if there are real reviews
+  const hasRating = rating > 0 && totalReviews > 0
+
+  const isApproved = status === 'approved'
+  const isAvailable = isApproved && isLive !== false
   const Icon = type === 'bike' ? RiMotorbikeLine : RiEBikeLine
 
   return (
@@ -49,23 +55,39 @@ export default function VehicleCard({ vehicle, index = 0 }) {
               <Icon className="mr-1 text-brand" />
               {type}
             </span>
-            {/* Status badge */}
-            {!isAvailable && (
-              <span className="absolute top-3 right-3 badge bg-red-500/20 text-red-400 border border-red-500/20">
-                Unavailable
+            {/* Owner verified badge */}
+            {vehicle.ownerVerified && (
+              <span className="absolute bottom-3 left-3 badge bg-green-500/80 text-white backdrop-blur-sm text-[10px] flex items-center gap-1">
+                <FiCheckCircle size={10} /> Verified Owner
               </span>
             )}
+            {/* Status dot — top right */}
+            <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-2.5 py-1">
+              <span
+                className={`status-dot ${isAvailable ? 'status-dot--live' : 'status-dot--offline'}`}
+                title={isAvailable ? 'Live' : 'Offline'}
+              />
+              <span className={`text-[10px] font-semibold uppercase tracking-wider ${
+                isAvailable ? 'text-green-400' : 'text-red-400'
+              }`}>
+                {isAvailable ? 'Live' : 'Offline'}
+              </span>
+            </div>
           </div>
 
           {/* Content */}
           <div className="p-4">
             <div className="flex items-start justify-between gap-2">
               <h3 className="font-semibold text-base leading-tight line-clamp-1">{name}</h3>
-              <div className="flex items-center gap-1 shrink-0">
-                <FiStar className="text-brand fill-brand" size={13} />
-                <span className="text-sm font-medium">{rating}</span>
-                <span className="text-xs text-white/30">({totalReviews})</span>
-              </div>
+              {hasRating ? (
+                <div className="flex items-center gap-1 shrink-0">
+                  <FiStar className="text-brand fill-brand" size={13} />
+                  <span className="text-sm font-medium">{rating}</span>
+                  <span className="text-xs text-white/30">({totalReviews})</span>
+                </div>
+              ) : (
+                <span className="text-xs text-white/20">No reviews</span>
+              )}
             </div>
 
             {location && (
@@ -94,10 +116,10 @@ export default function VehicleCard({ vehicle, index = 0 }) {
                 className={`badge text-xs ${
                   isAvailable
                     ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                    : 'bg-surface-3 text-white/30'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
                 }`}
               >
-                {isAvailable ? 'Available' : 'Booked'}
+                {isAvailable ? 'Available' : 'Unavailable'}
               </span>
             </div>
           </div>

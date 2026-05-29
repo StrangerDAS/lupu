@@ -1,223 +1,283 @@
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { FiUsers, FiPackage, FiCalendar, FiTrendingUp, FiCheck, FiX, FiSearch, FiTrash2 } from 'react-icons/fi'
-import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
-import toast from 'react-hot-toast'
+import { useParams, useNavigate } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
+import { 
+  FiUsers, FiCalendar, FiDollarSign, FiAlertCircle, 
+  FiMessageSquare, FiStar, FiFileText, FiBell, FiShield, 
+  FiSettings, FiGrid, FiMenu, FiX, FiLogOut, FiAnchor, FiPercent
+} from 'react-icons/fi'
+import { RiMotorbikeLine } from 'react-icons/ri'
+import { getVisibleModules, isFounder as checkFounder, isSuperAdmin as checkSuperAdmin } from '../lib/roleUtils'
+
+// Firebase Services
+import { 
+  subscribeToAllUsers, 
+  subscribeToAllVehicles, 
+  subscribeToAllBookings, 
+  subscribeToAllPayments, 
+  subscribeToDisputes, 
+  subscribeToSupportTickets, 
+  subscribeToReports, 
+  subscribeToAuditLogs, 
+  subscribeToAllReviews 
+} from '../firebase/firestoreService'
+
+// Auth Store
+import useAuthStore from '../store/authStore'
 import PageWrapper from '../components/PageWrapper'
-import { userAPI, vehicleAPI, adminAPI } from '../api/endpoints'
-import { StatCardSkeleton } from '../components/Skeletons'
-import { MOCK_ADMIN_STATS, MOCK_ADMIN_VEHICLES, MOCK_USERS } from '../utils/mockData'
 
-function StatusBadge({ status }) {
-  const map = {
-    approved: 'bg-green-500/10 text-green-400 border border-green-500/20',
-    pending: 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20',
-    rejected: 'bg-red-500/10 text-red-400 border border-red-500/20',
-    user: 'bg-blue-500/10 text-blue-400',
-    owner: 'bg-brand/10 text-brand',
-    admin: 'bg-purple-500/10 text-purple-400',
-  }
-  return <span className={`badge capitalize text-xs ${map[status] || 'bg-surface-3 text-white/30'}`}>{status}</span>
-}
-
-const TABS = ['overview', 'listings', 'users']
+// Administrative Subviews
+import DashboardView from '../components/admin/DashboardView'
+import FounderDashboard from '../components/admin/FounderDashboard'
+import UsersView from '../components/admin/UsersView'
+import VehiclesView from '../components/admin/VehiclesView'
+import BookingsView from '../components/admin/BookingsView'
+import PaymentsView from '../components/admin/PaymentsView'
+import DisputesView from '../components/admin/DisputesView'
+import ReportsView from '../components/admin/ReportsView'
+import SupportView from '../components/admin/SupportView'
+import ReviewsView from '../components/admin/ReviewsView'
+import NotificationsView from '../components/admin/NotificationsView'
+import AuditLogsView from '../components/admin/AuditLogsView'
+import AdminsView from '../components/admin/AdminsView'
+import CommissionView from '../components/admin/CommissionView'
+import SettingsView from '../components/admin/SettingsView'
 
 export default function AdminPanel() {
-  const [tab, setTab] = useState('overview')
-  const [stats, setStats] = useState(null)
-  const [vehicles, setVehicles] = useState([])
-  const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
+  const { subview } = useParams()
+  const navigate = useNavigate()
+  const { user, logout } = useAuthStore()
+  
+  // Navigation / Sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // Real-time Database States
+  const [users, setUsers] = useState([])
+  const [vehicles, setVehicles] = useState([])
+  const [bookings, setBookings] = useState([])
+  const [payments, setPayments] = useState([])
+  const [disputes, setDisputes] = useState([])
+  const [tickets, setTickets] = useState([])
+  const [reports, setReports] = useState([])
+  const [adminActions, setAdminActions] = useState([])
+  const [reviews, setReviews] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  // Determine active subview
+  const activeTab = subview || 'dashboard'
+
+  // Subscriptions hooks
   useEffect(() => {
-    const fetchAll = async () => {
-      setLoading(true)
-      try {
-        const [sRes, vRes, uRes] = await Promise.all([
-          adminAPI.getDashboardStats(),
-          vehicleAPI.getAll(),
-          userAPI.getAll(),
-        ])
-        setStats(sRes.data)
-        setVehicles(vRes.data?.vehicles || vRes.data)
-        setUsers(uRes.data?.users || uRes.data)
-      } catch {
-        setStats(MOCK_ADMIN_STATS)
-        setVehicles(MOCK_ADMIN_VEHICLES)
-        setUsers(MOCK_USERS)
-      } finally {
+    setLoading(true)
+    const unsubscribes = [
+      subscribeToAllUsers(setUsers),
+      subscribeToAllVehicles(setVehicles),
+      subscribeToAllBookings(setBookings),
+      subscribeToAllPayments(setPayments),
+      subscribeToDisputes(setDisputes),
+      subscribeToSupportTickets(setTickets),
+      subscribeToReports(setReports),
+      subscribeToAuditLogs(setAdminActions),
+      subscribeToAllReviews((list) => {
+        setReviews(list)
         setLoading(false)
-      }
+      })
+    ]
+
+    return () => {
+      unsubscribes.forEach(unsub => unsub())
     }
-    fetchAll()
   }, [])
 
-  const handleApprove = async (id) => {
-    try { await adminAPI.approveVehicle(id) } catch { /* offline */ }
-    setVehicles((v) => v.map((x) => x._id === id ? { ...x, status: 'approved' } : x))
-    toast.success('Vehicle approved ✓')
+  // Icon map — keyed by roleUtils module id
+  const MODULE_ICONS = {
+    dashboard:     FiGrid,
+    founder:       FiAnchor,
+    users:         FiUsers,
+    vehicles:      RiMotorbikeLine,
+    bookings:      FiCalendar,
+    payments:      FiDollarSign,
+    disputes:      FiAlertCircle,
+    reports:       FiAlertCircle,
+    support:       FiMessageSquare,
+    reviews:       FiStar,
+    'audit-logs':  FiFileText,
+    admins:        FiShield,
+    commission:    FiPercent,
+    settings:      FiSettings,
+    notifications: FiBell,
   }
 
-  const handleReject = async (id) => {
-    try { await adminAPI.rejectVehicle(id) } catch { /* offline */ }
-    setVehicles((v) => v.map((x) => x._id === id ? { ...x, status: 'rejected' } : x))
-    toast.success('Vehicle rejected')
+  // Badge counts for urgent items
+  const MODULE_BADGES = {
+    disputes:  disputes.filter(d => d.status === 'open').length || null,
+    reports:   reports.filter(r => r.status === 'open').length  || null,
+    support:   tickets.filter(t => t.status === 'open').length  || null,
   }
 
-  const handleDeleteUser = async (id) => {
-    if (!confirm('Delete this user permanently?')) return
-    try { await userAPI.deleteUser(id) } catch { /* offline */ }
-    setUsers((u) => u.filter((x) => x._id !== id))
-    toast.success('User removed')
+  // Derive visible modules from Firestore role (via roleUtils — no hardcoding)
+  const visibleMenuItems = getVisibleModules(user).map(m => ({
+    ...m,
+    icon:  MODULE_ICONS[m.id] || FiGrid,
+    badge: MODULE_BADGES[m.id] || null,
+  }))
+
+  // Select which view to render
+  const renderActiveView = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return <DashboardView users={users} vehicles={vehicles} bookings={bookings} disputes={disputes} tickets={tickets} reports={reports} adminActions={adminActions} />
+      case 'founder':
+        if (!checkFounder(user)) return <UnauthorizedMessage />
+        return <FounderDashboard users={users} vehicles={vehicles} bookings={bookings} payments={payments} />
+      case 'users':
+        return <UsersView users={users} />
+      case 'vehicles':
+        return <VehiclesView vehicles={vehicles} />
+      case 'bookings':
+        return <BookingsView bookings={bookings} />
+      case 'payments':
+        return <PaymentsView payments={payments} />
+      case 'disputes':
+        return <DisputesView disputes={disputes} />
+      case 'reports':
+        return <ReportsView reports={reports} />
+      case 'support':
+        return <SupportView tickets={tickets} />
+      case 'reviews':
+        return <ReviewsView reviews={reviews} />
+      case 'audit-logs':
+        return <AuditLogsView adminActions={adminActions} />
+      case 'admins':
+        if (!checkSuperAdmin(user)) return <UnauthorizedMessage />
+        return <AdminsView />
+      case 'commission':
+        if (!checkFounder(user)) return <UnauthorizedMessage />
+        return <CommissionView />
+      case 'settings':
+        if (!checkFounder(user)) return <UnauthorizedMessage />
+        return <SettingsView />
+      case 'notifications':
+        return <NotificationsView />
+      default:
+        return <DashboardView users={users} vehicles={vehicles} bookings={bookings} disputes={disputes} tickets={tickets} reports={reports} adminActions={adminActions} />
+    }
   }
 
-  const statCards = stats ? [
-    { label: 'Total Users', value: stats.users, icon: FiUsers, color: 'text-blue-400' },
-    { label: 'Vehicles Listed', value: stats.vehicles, icon: FiPackage, color: 'text-brand' },
-    { label: 'Total Bookings', value: stats.bookings, icon: FiCalendar, color: 'text-green-400' },
-    { label: 'Pending Approvals', value: stats.pendingListings, icon: FiTrendingUp, color: 'text-yellow-400' },
-  ] : []
-
-  const filteredVehicles = vehicles.filter((v) =>
-    v.name?.toLowerCase().includes(search.toLowerCase()) ||
-    v.ownerId?.name?.toLowerCase().includes(search.toLowerCase())
-  )
-
-  const filteredUsers = users.filter((u) =>
-    u.name?.toLowerCase().includes(search.toLowerCase()) ||
-    u.email?.toLowerCase().includes(search.toLowerCase())
-  )
-
-  const pendingVehicles = vehicles.filter((v) => v.status === 'pending')
+  const navigateToTab = (tabId) => {
+    navigate(`/admin/${tabId}`)
+    setSidebarOpen(false)
+  }
 
   return (
     <PageWrapper>
-      <div className="container-main py-10">
-        <div className="mb-10">
-          <h1 className="text-2xl md:text-3xl font-bold">Admin Panel</h1>
-          <p className="text-white/40 text-sm mt-1">Manage the URENT platform</p>
-        </div>
+      <div className="flex min-h-screen bg-black text-white relative">
+        {/* Toggle Mobile Menu Button */}
+        <button
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          className="lg:hidden fixed bottom-6 right-6 z-50 p-4 bg-brand rounded-full shadow-lg text-white"
+        >
+          {sidebarOpen ? <FiX size={20} /> : <FiMenu size={20} />}
+        </button>
 
-        {/* Tabs */}
-        <div className="flex gap-1 bg-surface-2 rounded-xl p-1 w-fit mb-8">
-          {TABS.map((t) => (
-            <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition ${tab === t ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}>
-              {t}
-            </button>
-          ))}
-        </div>
-
-        {/* Overview */}
-        {tab === 'overview' && (
-          <div className="space-y-8">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {loading
-                ? [...Array(4)].map((_, i) => <StatCardSkeleton key={i} />)
-                : statCards.map((s, i) => (
-                    <motion.div key={s.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }} className="card p-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-white/40 text-xs">{s.label}</span>
-                        <s.icon className={`${s.color} text-xl`} />
-                      </div>
-                      <div className="text-3xl font-bold">{s.value}</div>
-                    </motion.div>
-                  ))}
+        {/* Sidebar Container */}
+        <div className={`fixed inset-y-0 left-0 z-40 w-64 bg-[#0d0d0d] border-r border-white/5 transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } lg:relative lg:flex lg:flex-col`}>
+          <div className="flex flex-col h-full">
+            {/* Sidebar Branding */}
+            <div className="p-6 border-b border-white/5">
+              <h1 className="text-gradient text-lg font-bold tracking-wider">LUPU ADMIN</h1>
+              <p className="text-[10px] text-white/30 tracking-widest uppercase mt-0.5">Control Center</p>
             </div>
 
-            <div>
-              <h2 className="font-semibold mb-4 flex items-center gap-2">
-                Pending Approvals
-                {pendingVehicles.length > 0 && (
-                  <span className="w-5 h-5 bg-yellow-500 text-black text-xs rounded-full flex items-center justify-center font-bold">
-                    {pendingVehicles.length}
-                  </span>
-                )}
-              </h2>
-              {pendingVehicles.length === 0 ? (
-                <p className="text-white/30 text-sm">No pending listings 🎉</p>
-              ) : (
-                <div className="space-y-3">
-                  {pendingVehicles.map((v) => {
-                    const Icon = v.type === 'bike' ? RiMotorbikeLine : RiEBikeLine
-                    return (
-                      <div key={v._id} className="card p-4 flex items-center gap-4">
-                        <Icon className="text-brand text-2xl shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-sm truncate">{v.name}</div>
-                          <div className="text-white/40 text-xs">by {v.ownerId?.name || 'Owner'} · ₹{v.pricePerHour}/hr</div>
-                        </div>
-                        <div className="flex gap-2 shrink-0">
-                          <button onClick={() => handleApprove(v._id)} className="btn-ghost p-2 text-green-400 hover:bg-green-500/10 rounded-xl" title="Approve"><FiCheck /></button>
-                          <button onClick={() => handleReject(v._id)} className="btn-ghost p-2 text-red-400 hover:bg-red-500/10 rounded-xl" title="Reject"><FiX /></button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+            {/* Profile widget */}
+            <div className="p-4 border-b border-white/5 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-brand/10 border border-brand/20 flex items-center justify-center font-bold text-xs uppercase text-brand">
+                {user?.name?.[0] || 'A'}
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-white truncate">{user?.name || 'Administrator'}</div>
+                <div className="text-[9px] font-bold text-brand uppercase tracking-wider">{user?.role || 'Admin'}</div>
+              </div>
             </div>
-          </div>
-        )}
 
-        {/* Listings */}
-        {tab === 'listings' && (
-          <div>
-            <div className="relative mb-5">
-              <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-              <input type="text" placeholder="Search vehicles or owner…" value={search} onChange={(e) => setSearch(e.target.value)} className="input-field pl-11" />
-            </div>
-            <div className="space-y-3">
-              {filteredVehicles.map((v, i) => {
-                const Icon = v.type === 'bike' ? RiMotorbikeLine : RiEBikeLine
+            {/* Menu Items */}
+            <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto hide-scrollbar">
+              {visibleMenuItems.map((item) => {
+                const Icon = item.icon
+                const isActive = activeTab === item.id
                 return (
-                  <motion.div key={v._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} className="card p-4 flex flex-col sm:flex-row sm:items-center gap-4">
-                    <Icon className="text-brand text-2xl shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-sm truncate">{v.name}</div>
-                      <div className="text-white/40 text-xs mt-0.5">{v.ownerId?.name || 'Owner'} · ₹{v.pricePerHour}/hr</div>
+                  <button
+                    key={item.id}
+                    onClick={() => navigateToTab(item.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition text-xs font-semibold ${
+                      isActive 
+                        ? 'bg-brand text-white shadow-lg shadow-brand/10' 
+                        : 'text-white/50 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Icon className="text-sm shrink-0" />
+                      <span>{item.label}</span>
                     </div>
-                    <StatusBadge status={v.status} />
-                    {v.status === 'pending' && (
-                      <div className="flex gap-2 shrink-0">
-                        <button onClick={() => handleApprove(v._id)} className="btn-ghost p-1.5 text-green-400 hover:bg-green-500/10 rounded-lg"><FiCheck size={15} /></button>
-                        <button onClick={() => handleReject(v._id)} className="btn-ghost p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg"><FiX size={15} /></button>
-                      </div>
+                    {item.badge > 0 && (
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                        isActive ? 'bg-white text-brand' : 'bg-brand text-white'
+                      }`}>
+                        {item.badge}
+                      </span>
                     )}
-                  </motion.div>
+                  </button>
                 )
               })}
-            </div>
-          </div>
-        )}
+            </nav>
 
-        {/* Users */}
-        {tab === 'users' && (
-          <div>
-            <div className="relative mb-5">
-              <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-              <input type="text" placeholder="Search users…" value={search} onChange={(e) => setSearch(e.target.value)} className="input-field pl-11" />
-            </div>
-            <div className="space-y-3">
-              {filteredUsers.map((u, i) => (
-                <motion.div key={u._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }} className="card p-4 flex flex-col sm:flex-row sm:items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-surface-3 flex items-center justify-center font-bold text-brand shrink-0">
-                    {u.name?.[0] || '?'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm">{u.name}</div>
-                    <div className="text-white/40 text-xs">{u.email}</div>
-                  </div>
-                  <StatusBadge status={u.role} />
-                  <button onClick={() => handleDeleteUser(u._id)} className="btn-ghost p-1.5 text-red-400 hover:bg-red-500/10 rounded-lg shrink-0" title="Delete user">
-                    <FiTrash2 size={14} />
-                  </button>
-                </motion.div>
-              ))}
+            {/* Logout button — calls Firebase signOut + clears Zustand + localStorage */}
+            <div className="p-4 border-t border-white/5">
+              <button
+                onClick={() => logout(navigate)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold text-red-400/70 hover:text-red-400 hover:bg-red-500/5 transition"
+              >
+                <FiLogOut className="text-sm" />
+                <span>Sign Out</span>
+              </button>
             </div>
           </div>
-        )}
+        </div>
+
+        {/* Content view container */}
+        <div className="flex-1 p-6 lg:p-10 overflow-y-auto">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] text-xs text-white/30 gap-2">
+              <div className="w-6 h-6 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+              <span>Subscribing to real-time operations engine...</span>
+            </div>
+          ) : (
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.15 }}
+              >
+                {renderActiveView()}
+              </motion.div>
+            </AnimatePresence>
+          )}
+        </div>
       </div>
     </PageWrapper>
+  )
+}
+
+function UnauthorizedMessage() {
+  return (
+    <div className="text-center py-20 text-white/40 text-xs space-y-2">
+      <FiShield size={36} className="mx-auto text-red-500 mb-2" />
+      <h3 className="font-bold text-white text-sm">Privileged Access Required</h3>
+      <p>Your administrative permissions do not permit access to this module.</p>
+    </div>
   )
 }

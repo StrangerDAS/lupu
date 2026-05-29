@@ -23,7 +23,7 @@ function StatusBadge({ status }) {
 }
 
 export default function Profile() {
-  const { user, token, setAuth, updateUser } = useAuthStore()
+  const { user, token, setAuth, updateUser, isKycComplete } = useAuthStore()
   const [editing, setEditing] = useState(false)
   const [bookings, setBookings] = useState([])
   const [loadingBookings, setLoadingBookings] = useState(true)
@@ -91,7 +91,14 @@ export default function Profile() {
               {user?.name?.[0]?.toUpperCase() || '?'}
             </div>
             <div className="flex-1 min-w-0">
-              <h2 className="text-xl font-semibold">{user?.name}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-semibold">{user?.name}</h2>
+                {isKycComplete() && (
+                  <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-xs flex items-center gap-1.5 py-0.5">
+                    <FiCheckCircle size={10} className="text-green-400" /> Verified
+                  </span>
+                )}
+              </div>
               <p className="text-white/40 text-sm mt-0.5">{user?.email}</p>
               {/* Dual-role badges */}
               <div className="flex gap-2 mt-2 flex-wrap">
@@ -173,57 +180,44 @@ export default function Profile() {
           <h2 className="font-semibold mb-4 flex items-center gap-2">
             <FiShield className="text-brand" /> Verification Status
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             
-            <div className="card p-4 flex flex-col gap-2 border border-green-500/20 bg-green-500/5">
+            <div className={`card p-4 flex flex-col gap-2 border ${
+              user?.phoneVerified ? 'border-green-500/20 bg-green-500/5' : 'border-white/10 bg-surface-2'
+            }`}>
               <div className="flex items-center justify-between">
-                <FiPhone className="text-green-400" />
-                <FiCheck className="text-green-400 bg-green-400/20 rounded-full p-0.5" />
+                <FiPhone className={user?.phoneVerified ? 'text-green-400' : 'text-white/40'} />
+                {user?.phoneVerified && <FiCheck className="text-green-400 bg-green-400/20 rounded-full p-0.5" />}
               </div>
               <div>
                 <p className="text-sm font-semibold text-white">Phone Number</p>
-                <p className="text-xs text-green-400">Verified</p>
+                <p className={`text-xs ${user?.phoneVerified ? 'text-green-400' : 'text-white/40'}`}>
+                  {user?.phoneVerified ? 'Verified' : 'Not Verified'}
+                </p>
               </div>
             </div>
 
-            <div className="card p-4 flex flex-col gap-2 border border-green-500/20 bg-green-500/5">
+            <div className={`card p-4 flex flex-col gap-2 border ${
+              user?.emailVerified ? 'border-green-500/20 bg-green-500/5' : 'border-white/10 bg-surface-2'
+            }`}>
               <div className="flex items-center justify-between">
-                <FiMail className="text-green-400" />
-                <FiCheck className="text-green-400 bg-green-400/20 rounded-full p-0.5" />
+                <FiMail className={user?.emailVerified ? 'text-green-400' : 'text-white/40'} />
+                {user?.emailVerified && <FiCheck className="text-green-400 bg-green-400/20 rounded-full p-0.5" />}
               </div>
               <div>
                 <p className="text-sm font-semibold text-white">Email Address</p>
-                <p className="text-xs text-green-400">Verified</p>
-              </div>
-            </div>
-
-            <div className="card p-4 flex flex-col gap-2 border border-amber-500/20 bg-amber-500/5 relative overflow-hidden group cursor-pointer" onClick={() => window.location.href='/verify'}>
-              <div className="absolute inset-0 bg-amber-500/10 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-300" />
-              <div className="flex items-center justify-between relative z-10">
-                <FiUser className="text-amber-400" />
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-              </div>
-              <div className="relative z-10">
-                <p className="text-sm font-semibold text-white">Identity (Aadhaar)</p>
-                <p className="text-xs text-amber-400">Pending</p>
-              </div>
-            </div>
-
-            <div className="card p-4 flex flex-col gap-2 border border-white/10 bg-surface-2 opacity-50 pointer-events-none">
-              <div className="flex items-center justify-between">
-                <RiMotorbikeLine className="text-white/40" />
-                <span className="w-1.5 h-1.5 rounded-full bg-white/20" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-white/50">Driving License</p>
-                <p className="text-xs text-white/40">Locked</p>
+                <p className={`text-xs ${user?.emailVerified ? 'text-green-400' : 'text-white/40'}`}>
+                  {user?.emailVerified ? 'Verified' : 'Not Verified'}
+                </p>
               </div>
             </div>
 
           </div>
-          <div className="mt-3 text-right">
-             <a href="/verify" className="text-xs text-brand hover:underline">Complete verification →</a>
-          </div>
+          {!isKycComplete() && (
+            <div className="mt-3 text-right">
+               <a href="/verify" className="text-xs text-brand hover:underline">Complete verification →</a>
+            </div>
+          )}
         </motion.div>
 
         {/* User Activity */}

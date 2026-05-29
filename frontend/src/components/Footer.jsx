@@ -10,14 +10,15 @@ const footerLinks = {
     { label: 'How it Works', modalType: 'howItWorks' },
   ],
   Company: [
-    { label: 'About', to: '/#about' },
+    { label: 'About', to: '/about' },
     { label: 'Contact', to: '/#contact' },
     { label: 'Safety', to: '/#safety' },
   ],
   Legal: [
+    { label: 'Legal Center', to: '/legal' },
     { label: 'Privacy Policy', to: '/privacy' },
     { label: 'Terms of Service', to: '/terms' },
-  ],
+  ]
 }
 
 import InfoModal from './InfoModal'
@@ -36,7 +37,7 @@ export default function Footer() {
   return (
     <footer className="bg-surface border-t border-white/5 mt-auto">
       <div className="container-main py-12 md:py-16">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-12">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-6">
           {/* Brand */}
           <div className="col-span-2 md:col-span-1">
             <Link to="/" className="flex items-center gap-2 mb-4">
@@ -44,7 +45,7 @@ export default function Footer() {
                 <RiMotorbikeLine className="text-white text-xl" />
               </div>
               <span className="text-xl font-bold">
-                urent<span className="text-brand">.</span>
+                lupu<span className="text-brand">.</span>
               </span>
             </Link>
             <p className="text-white/40 text-sm leading-relaxed">
@@ -105,7 +106,7 @@ export default function Footer() {
 
         <div className="divider mt-10 pt-6 flex flex-col sm:flex-row items-center justify-between gap-2">
           <p className="text-white/30 text-sm">
-            © {new Date().getFullYear()} URENT Technologies. All rights reserved.
+            © {new Date().getFullYear()} LUPU Technologies. All rights reserved.
           </p>
           <p className="text-white/20 text-xs">Made with ❤️ in Dibrugarh, Assam</p>
         </div>

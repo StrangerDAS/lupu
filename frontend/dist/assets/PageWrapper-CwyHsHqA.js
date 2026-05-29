@@ -1,1 +1,0 @@
-import{j as a,m as o}from"./index-CcKU8QVu.js";function n({children:t,className:i=""}){return a.jsx(o.div,{initial:{opacity:0,y:12},animate:{opacity:1,y:0},exit:{opacity:0,y:-8},transition:{duration:.3,ease:"easeOut"},className:i,children:t})}export{n as P};

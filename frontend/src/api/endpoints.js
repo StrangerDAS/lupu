@@ -20,6 +20,7 @@ export const vehicleAPI = {
   }),
   delete: (id) => api.delete(`/vehicles/${id}`),
   myVehicles: () => api.get('/vehicles/my'),
+  toggleStatus: (id) => api.patch(`/vehicles/${id}/toggle-status`),
 }
 
 /* ── Bookings ───────────────────────────────────────────── */

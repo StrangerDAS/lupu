@@ -1,25 +1,57 @@
-import { Navigate, Outlet } from 'react-router-dom'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import useAuthStore from '../store/authStore'
+import PageLoader from './PageLoader'
 
 /**
- * Wraps routes that require authentication and/or specific roles.
- * @param {string[]} roles - allowed roles (e.g. ['owner', 'admin'])
+ * ProtectedRoute — gate for any authenticated user.
+ *
+ * Props:
+ *   requireOwner {boolean} — if true, user must have isOwner or an admin role.
+ *
+ * authReady flow:
+ *   - First install (no localStorage): authReady=false → show PageLoader until
+ *     Firebase resolves via onAuthStateChanged in App.jsx.
+ *   - Returning user (localStorage has token+user): authReady=true instantly →
+ *     no loader flash, direct access. Firebase still validates in background.
+ *   - After logout: authReady=true, token=null → redirect to login immediately.
  */
-export default function ProtectedRoute({ roles = [] }) {
-  const { user, isAuthenticated } = useAuthStore()
+export default function ProtectedRoute({ requireOwner = false }) {
+  const { user, token, authReady, isAdmin } = useAuthStore()
+  const location = useLocation()
 
-  if (!isAuthenticated()) {
+  console.log('[ProtectedRoute] 🔍 Evaluating', location.pathname, {
+    authReady,
+    hasToken:  !!token,
+    hasUser:   !!user,
+    role:      user?.role,
+  })
+
+  // ── Wait for first Firebase resolution ───────────────────────────────────
+  // Only happens on fresh install with no cached session
+  if (!authReady) {
+    console.log('[ProtectedRoute] ⏳ authReady=false — showing loader')
+    return <PageLoader />
+  }
+
+  // ── Not authenticated ─────────────────────────────────────────────────────
+  if (!token || !user) {
+    console.log(`[ProtectedRoute] ⛔ DENIED (not authenticated) → /auth/login | from: ${location.pathname}`)
+    return <Navigate to="/auth/login" state={{ from: location }} replace />
+  }
+
+  // ── Suspended / banned ────────────────────────────────────────────────────
+  const status = user.accountStatus || user.status
+  if (status === 'suspended' || status === 'banned') {
+    console.warn(`[ProtectedRoute] ⛔ DENIED (account ${status}) → /auth/login`)
     return <Navigate to="/auth/login" replace />
   }
 
-  if (roles.length > 0) {
-    const hasRole = roles.includes(user?.role)
-    const hasOwnerAccess = roles.includes('owner') && user?.isOwner
-    const hasUserAccess = roles.includes('user') && user?.isRider
-    if (!hasRole && !hasOwnerAccess && !hasUserAccess) {
-      return <Navigate to="/" replace />
-    }
+  // ── Owner gate ────────────────────────────────────────────────────────────
+  if (requireOwner && !user.isOwner && !isAdmin()) {
+    console.warn(`[ProtectedRoute] ⛔ DENIED (requireOwner=true, not owner/admin) → /hub`)
+    return <Navigate to="/hub" replace />
   }
 
+  console.log(`[ProtectedRoute] ✅ GRANTED | role=${user.role} | path=${location.pathname}`)
   return <Outlet />
 }

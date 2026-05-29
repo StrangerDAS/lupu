@@ -1,22 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
 import {
   FiCalendar, FiClock, FiUpload, FiCheck,
   FiArrowRight, FiArrowLeft, FiAlertCircle, FiShield,
+  FiUser, FiFileText, FiMapPin, FiBookOpen, FiActivity
 } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
 import toast from 'react-hot-toast'
+import jsPDF from 'jspdf'
 import PageWrapper from '../components/PageWrapper'
-import { bookingStep1Schema } from '../utils/schemas'
 import { useVehicle } from '../hooks/useVehicles'
-import useBookingStore from '../store/bookingStore'
-import { bookingAPI } from '../api/endpoints'
-import { MOCK_VEHICLES } from '../utils/mockData'
+import useAuthStore from '../store/authStore'
+import {
+  createBooking,
+  uploadBookingFile,
+  createPaymentRecord,
+  addNotification
+} from '../firebase/firestoreService'
 
-const STEPS = ['Select Time', 'Upload Docs', 'Agreement', 'Confirm']
+const STEPS = ['Select Time', 'Verify Identity', 'Sign Agreement', 'Advance Payment']
 
 const nowLocal = () => {
   const d = new Date()
@@ -31,68 +34,472 @@ const calcPrice = (start, end, ratePerHour) => {
   return Math.ceil(ms / (1000 * 60 * 60)) * ratePerHour
 }
 
-const AGREEMENT_TEXT = [
-  { title: '1. Vehicle Condition & Verification', text: 'User must inspect vehicle and record photos/videos at pickup.' },
-  { title: '2. Responsibility During Rental', text: 'User is fully responsible for vehicle during rental period.' },
-  { title: '3. Damage Policy', text: 'Without proof, user is liable for damages.' },
-  { title: '4. Platform Liability', text: 'URENT is only a connecting platform and not responsible for damage, theft, or disputes.' },
-  { title: '5. Owner Protection', text: 'Owner is not responsible for misuse or accidents.' },
-  { title: '6. Compliance', text: 'User must upload valid documents and follow traffic laws.' },
-  { title: '7. Acceptance', text: 'User agrees to all terms and accepts full responsibility.' },
-]
+const calcDuration = (start, end) => {
+  if (!start || !end) return 0
+  const ms = new Date(end) - new Date(start)
+  if (ms <= 0) return 0
+  return Math.ceil(ms / (1000 * 60 * 60))
+}
+
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = (error) => reject(error)
+  })
+}
 
 export default function BookingFlow() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [agreementChecked, setAgreementChecked] = useState(false)
+  const { user } = useAuthStore()
 
-  const { vehicle: fetchedVehicle, loading } = useVehicle(id)
-  const vehicle = fetchedVehicle || MOCK_VEHICLES.find((v) => v._id === id) || MOCK_VEHICLES[0]
+  const { vehicle, loading } = useVehicle(id)
+  const isBookable = vehicle?.status === 'approved' && vehicle?.isLive !== false
 
-  const {
-    currentStep, nextStep, prevStep, reset,
-    bookingDetails, setBookingDetails,
-    documents, setDocumentUploaded,
-    setSelectedVehicle,
-  } = useBookingStore()
+  // Step 1: Time Selection
+  const [startTime, setStartTime] = useState(nowLocal())
+  const [endTime, setEndTime] = useState('')
+  const [duration, setDuration] = useState(0)
+  const [totalPrice, setTotalPrice] = useState(0)
 
-  useEffect(() => {
-    if (vehicle) setSelectedVehicle(vehicle)
-    return () => reset()
-  }, [vehicle]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Step 2: Verification Details
+  const [currentAddress, setCurrentAddress] = useState('')
+  const [permanentAddress, setPermanentAddress] = useState('')
+  const [sameAddress, setSameAddress] = useState(false)
+  const [collegeName, setCollegeName] = useState('')
+  const [guardianName, setGuardianName] = useState('')
+  const [guardianPhone, setGuardianPhone] = useState('')
+  const [guardianEmail, setGuardianEmail] = useState('')
 
-  const {
-    register, handleSubmit, watch,
-    formState: { errors },
-  } = useForm({
-    resolver: zodResolver(bookingStep1Schema),
-    defaultValues: { startTime: bookingDetails.startTime, endTime: bookingDetails.endTime },
+  // Files
+  const [files, setFiles] = useState({
+    selfie: null,
+    aadhaarFront: null,
+    aadhaarBack: null,
+    collegeId: null,
+    guardianAadhaar: null,
+  })
+  const [previews, setPreviews] = useState({
+    selfie: '',
+    aadhaarFront: '',
+    aadhaarBack: '',
+    collegeId: '',
+    guardianAadhaar: '',
   })
 
-  const startTime = watch('startTime')
-  const endTime = watch('endTime')
-  const estimated = calcPrice(startTime, endTime, vehicle?.pricePerHour)
+  // Step 3: Signature & Checkboxes
+  const canvasRef = useRef(null)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [signatureData, setSignatureData] = useState('')
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const [authorizeVerification, setAuthorizeVerification] = useState(false)
 
-  const handleStep0 = (data) => {
-    setBookingDetails({ ...data, estimatedTotal: estimated })
-    nextStep()
+  // Step Tracker
+  const [currentStep, setCurrentStep] = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+  const [statusMessage, setStatusMessage] = useState('')
+
+  // Sync pricing on time change
+  useEffect(() => {
+    if (startTime && endTime && vehicle?.pricePerHour) {
+      const dur = calcDuration(startTime, endTime)
+      setDuration(dur)
+      setTotalPrice(dur * vehicle.pricePerHour)
+    } else {
+      setDuration(0)
+      setTotalPrice(0)
+    }
+  }, [startTime, endTime, vehicle])
+
+  // Sync permanent address if same address checked
+  useEffect(() => {
+    if (sameAddress) {
+      setPermanentAddress(currentAddress)
+    }
+  }, [sameAddress, currentAddress])
+
+  // File Upload Helper
+  const handleFileChange = async (key, file) => {
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) {
+      return toast.error('File size must be under 5MB')
+    }
+    try {
+      const base64 = await fileToBase64(file)
+      setFiles(prev => ({ ...prev, [key]: file }))
+      setPreviews(prev => ({ ...prev, [key]: base64 }))
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to parse file preview')
+    }
   }
 
-  const maxStep = 3
+  // Canvas Drawing Pad Handlers
+  const getCanvasCoords = (e) => {
+    const canvas = canvasRef.current
+    if (!canvas) return { x: 0, y: 0 }
+    const rect = canvas.getBoundingClientRect()
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    }
+  }
 
-  const handleConfirm = async () => {
-    if (!agreementChecked) return toast.error('Please accept the rental agreement')
+  const startDrawing = (e) => {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    ctx.strokeStyle = '#ff6b00'
+    ctx.lineWidth = 3.5
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    const { x, y } = getCanvasCoords(e)
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+    setIsDrawing(true)
+  }
+
+  const draw = (e) => {
+    if (!isDrawing) return
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const { x, y } = getCanvasCoords(e)
+    ctx.lineTo(x, y)
+    ctx.stroke()
+  }
+
+  const stopDrawing = () => {
+    if (isDrawing) {
+      setIsDrawing(false)
+      saveSignature()
+    }
+  }
+
+  const saveSignature = () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    // Check if canvas is blank
+    const blank = document.createElement('canvas')
+    blank.width = canvas.width
+    blank.height = canvas.height
+    if (canvas.toDataURL() === blank.toDataURL()) {
+      setSignatureData('')
+    } else {
+      setSignatureData(canvas.toDataURL('image/png'))
+    }
+  }
+
+  const clearSignature = () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    setSignatureData('')
+  }
+
+  // Step Validations
+  const validateStep = () => {
+    if (currentStep === 0) {
+      if (!startTime || !endTime) {
+        toast.error('Please select both start and end times')
+        return false
+      }
+      if (new Date(endTime) <= new Date(startTime)) {
+        toast.error('End time must be after start time')
+        return false
+      }
+      if (duration < 1) {
+        toast.error('Rental duration must be at least 1 hour')
+        return false
+      }
+      return true
+    }
+
+    if (currentStep === 1) {
+      if (!currentAddress || !permanentAddress || !collegeName) {
+        toast.error('Please fill in your address and college details')
+        return false
+      }
+      if (!guardianName || !guardianPhone || !guardianEmail) {
+        toast.error('Please fill in all parent/guardian details')
+        return false
+      }
+      if (!files.selfie || !files.aadhaarFront || !files.aadhaarBack || !files.collegeId || !files.guardianAadhaar) {
+        toast.error('All legal documents are mandatory to upload')
+        return false
+      }
+      return true
+    }
+
+    if (currentStep === 2) {
+      if (!signatureData) {
+        toast.error('Please draw your digital signature')
+        return false
+      }
+      if (!termsAccepted || !authorizeVerification) {
+        toast.error('Please accept both terms and verification agreements')
+        return false
+      }
+      return true
+    }
+
+    return true
+  }
+
+  const handleNext = () => {
+    if (validateStep()) {
+      setCurrentStep(prev => prev + 1)
+    }
+  }
+
+  const handlePrev = () => {
+    setCurrentStep(prev => Math.max(0, prev - 1))
+  }
+
+  // Compile PDF agreement in-browser and upload
+  const compilePDF = async (bookingId) => {
+    const doc = new jsPDF()
+
+    // Title banner
+    doc.setFillColor(255, 107, 0)
+    doc.rect(0, 0, 210, 30, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(18)
+    doc.text('LUPU VEHICLE RENTAL AGREEMENT', 20, 20)
+
+    doc.setTextColor(0, 0, 0)
+    doc.setFontSize(12)
+
+    // Section 1: Vehicle & Renter Details
+    doc.setFont('helvetica', 'bold')
+    doc.text('1. AGREEMENT DETAILS', 20, 45)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Booking Reference ID: ${bookingId}`, 20, 52)
+    doc.text(`Vehicle Booked: ${vehicle?.name}`, 20, 59)
+    doc.text(`Vehicle Location: ${vehicle?.location}`, 20, 66)
+    doc.text(`Vehicle Owner: ${vehicle?.ownerName || 'Owner'}`, 20, 73)
+
+    doc.setFont('helvetica', 'bold')
+    doc.text('2. RENTER INFORMATION', 20, 85)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Renter Name: ${user?.name}`, 20, 92)
+    doc.text(`Renter Email: ${user?.email || '—'}`, 20, 99)
+    doc.text(`Renter College: ${collegeName}`, 20, 106)
+    doc.text(`Current Address: ${currentAddress}`, 20, 113)
+    doc.text(`Permanent Address: ${permanentAddress}`, 20, 120)
+
+    // Section 2: Timing & Pricing
+    doc.setFont('helvetica', 'bold')
+    doc.text('3. TIMING & BILLING BREAKDOWN', 20, 135)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Start Time: ${new Date(startTime).toLocaleString('en-IN')}`, 20, 142)
+    doc.text(`End Time: ${new Date(endTime).toLocaleString('en-IN')}`, 20, 149)
+    doc.text(`Duration: ${duration} hours`, 20, 156)
+    doc.text(`Hourly Rate: INR ${vehicle?.pricePerHour}/hr`, 20, 163)
+    doc.text(`Total Agreed Price: INR ${totalPrice}`, 20, 170)
+    doc.text(`25% Advance Paid (Online): INR ${Math.round(totalPrice * 0.25)}`, 20, 177)
+    doc.text(`75% Balance Due at Pickup: INR ${Math.round(totalPrice * 0.75)}`, 20, 184)
+
+    // Page 2: Uploaded Verification Docs
+    doc.addPage()
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(16)
+    doc.text('VERIFICATION DOCUMENTS ATTACHMENT', 20, 20)
+
+    // Selfie
+    if (previews.selfie) {
+      try {
+        doc.setFontSize(10)
+        doc.text('Selfie Photo:', 20, 35)
+        doc.addImage(previews.selfie, 'JPEG', 20, 40, 50, 50)
+      } catch (err) { console.error('Selfie embed error:', err) }
+    }
+
+    // Signature
+    if (signatureData) {
+      try {
+        doc.setFontSize(10)
+        doc.text('Digital Signature:', 110, 35)
+        doc.addImage(signatureData, 'PNG', 110, 40, 60, 30)
+      } catch (err) { console.error('Signature embed error:', err) }
+    }
+
+    // Aadhaar Front & Back
+    const currentY = 105
+    if (previews.aadhaarFront) {
+      try {
+        doc.setFontSize(10)
+        doc.text('Aadhaar Card (Front):', 20, currentY)
+        doc.addImage(previews.aadhaarFront, 'JPEG', 20, currentY + 5, 75, 45)
+      } catch (err) { console.error('Aadhaar Front embed error:', err) }
+    }
+
+    if (previews.aadhaarBack) {
+      try {
+        doc.setFontSize(10)
+        doc.text('Aadhaar Card (Back):', 110, currentY)
+        doc.addImage(previews.aadhaarBack, 'JPEG', 110, currentY + 5, 75, 45)
+      } catch (err) { console.error('Aadhaar Back embed error:', err) }
+    }
+
+    // Page 3: College ID, Guardian Details & Guardian Aadhaar
+    doc.addPage()
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(16)
+    doc.text('GUARDIAN AND ACADEMIC DOCUMENTS', 20, 20)
+
+    const page3Y = 35
+    if (previews.collegeId) {
+      try {
+        doc.setFontSize(10)
+        doc.text('College Student ID:', 20, page3Y)
+        doc.addImage(previews.collegeId, 'JPEG', 20, page3Y + 5, 75, 45)
+      } catch (err) { console.error('College ID embed error:', err) }
+    }
+
+    if (previews.guardianAadhaar) {
+      try {
+        doc.setFontSize(10)
+        doc.text('Parent/Guardian Aadhaar:', 110, page3Y)
+        doc.addImage(previews.guardianAadhaar, 'JPEG', 110, page3Y + 5, 75, 45)
+      } catch (err) { console.error('Guardian Aadhaar embed error:', err) }
+    }
+
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'bold')
+    doc.text('GUARDIAN CONTACT DETAILS', 20, 100)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Guardian Name: ${guardianName}`, 20, 107)
+    doc.text(`Guardian Phone Number: ${guardianPhone}`, 20, 114)
+    doc.text(`Guardian Email Address: ${guardianEmail}`, 20, 121)
+
+    doc.setFont('helvetica', 'bold')
+    doc.text('LEGAL DECLARATION & TERMS', 20, 135)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    const declareText = 'The renter hereby declares that all information provided is accurate and authentic. Renter assumes full financial and legal responsibility for the vehicle during the specified rental duration. LUPU acts solely as a connecting platform and assumes no liability for disputes, accidents, or damage. Agreement completed digitally.'
+    doc.text(doc.splitTextToSize(declareText, 170), 20, 142)
+
+    // Save as blob
+    const pdfBlob = doc.output('blob')
+    const pdfFile = new File([pdfBlob], `agreement_${bookingId}.pdf`, { type: 'application/pdf' })
+    return await uploadBookingFile(`bookings/pdfs/${bookingId}_agreement.pdf`, pdfFile)
+  }
+
+  // Complete Booking Flow Submit
+  const handleFinalSubmit = async () => {
+    setSubmitting(true)
+    // Temporary booking ID to store documents under
+    const tempId = `LUPU_${Date.now()}_${Math.floor(Math.random() * 1000)}`
+
     try {
-      await bookingAPI.create({
-        items: [{ itemId: id }],
-        startTime: bookingDetails.startTime,
-        endTime: bookingDetails.endTime,
-        agreementAccepted: true,
+      setStatusMessage('Uploading secure documents...')
+      
+      // Upload images in parallel
+      const selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie)
+      const frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront)
+      const backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack)
+      const collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId)
+      const guardianUrl = await uploadBookingFile(`bookings/guardian-aadhaar/${tempId}_guardian.jpg`, files.guardianAadhaar)
+
+      // Upload Signature
+      setStatusMessage('Uploading signature...')
+      // Convert signature base64 back to Blob file
+      const sigRes = await fetch(signatureData)
+      const sigBlob = await sigRes.blob()
+      const sigFile = new File([sigBlob], `signature_${tempId}.png`, { type: 'image/png' })
+      const signatureUrl = await uploadBookingFile(`bookings/signatures/${tempId}_sig.png`, sigFile)
+
+      setStatusMessage('Compiling Verification Agreement PDF...')
+      const localPreviews = {
+        selfie: previews.selfie,
+        aadhaarFront: previews.aadhaarFront,
+        aadhaarBack: previews.aadhaarBack,
+        collegeId: previews.collegeId,
+        guardianAadhaar: previews.guardianAadhaar,
+      }
+      const pdfUrl = await compilePDF(tempId)
+
+      setStatusMessage('Processing 25% Advance Payment...')
+      const advanceAmount = Math.round(totalPrice * 0.25)
+      const remainingAmount = totalPrice - advanceAmount
+
+      // Save payment transaction record
+      const paymentRefId = await createPaymentRecord({
+        bookingId: tempId,
+        amount: advanceAmount,
+        type: 'advance',
+        status: 'completed',
+        renterId: user?._id || 'anonymous',
+        renterName: user?.name || 'Renter',
+        description: `25% Advance payment for booking ${tempId}`
       })
-    } catch { /* offline fallback */ }
-    toast.success('Booking confirmed! 🎉')
-    reset()
-    navigate('/profile')
+
+      setStatusMessage('Submitting booking to owner review...')
+      // Submit Booking details
+      await createBooking({
+        bookingId: tempId,
+        renterId: user?._id || 'anonymous',
+        renterName: user?.name || 'Renter',
+        renterEmail: user?.email || '',
+        ownerId: vehicle?.ownerId || '',
+        ownerName: vehicle?.ownerName || 'Owner',
+        vehicleId: id,
+        vehicleName: vehicle?.name || 'Vehicle',
+        vehicleType: vehicle?.type || 'bike',
+        startTime,
+        endTime,
+        duration,
+        totalPrice,
+        pricing: {
+          total: totalPrice,
+          advance: advanceAmount,
+          remaining: remainingAmount
+        },
+        verificationDetails: {
+          currentAddress,
+          permanentAddress,
+          collegeName,
+          guardianName,
+          guardianPhone,
+          guardianEmail,
+          selfieUrl,
+          aadhaarFrontUrl: frontUrl,
+          aadhaarBackUrl: backUrl,
+          collegeIdUrl: collegeUrl,
+          guardianAadhaarUrl: guardianUrl,
+          signatureUrl,
+          verificationPdfUrl: pdfUrl
+        },
+        bookingStatus: 'under_review', // Submitted for review
+        agreementAccepted: true
+      })
+
+      // Send owner notification
+      await addNotification(vehicle?.ownerId, {
+        title: 'New Booking Request 🚘',
+        message: `Renter ${user?.name} requested to book ${vehicle?.name}. Verification documents submitted.`,
+        bookingId: tempId,
+        type: 'status'
+      })
+
+      toast.success('Booking & Verification Submitted Successfully! 🎉')
+      navigate('/my-bookings')
+    } catch (err) {
+      console.error(err)
+      toast.error(err.message || 'Something went wrong. Please check your network and try again.')
+    } finally {
+      setSubmitting(false)
+      setStatusMessage('')
+    }
   }
 
   if (loading) {
@@ -106,22 +513,37 @@ export default function BookingFlow() {
     )
   }
 
+  if (!isBookable) {
+    return (
+      <PageWrapper>
+        <div className="container-main py-10 max-w-2xl text-center">
+          <div className="card p-10 space-y-4">
+            <span className="status-dot status-dot--offline mx-auto" style={{ width: 16, height: 16 }} />
+            <h2 className="text-xl font-bold text-red-400">Vehicle Unavailable</h2>
+            <p className="text-white/40 text-sm">This vehicle is currently offline and cannot be booked.</p>
+            <button onClick={() => navigate(-1)} className="btn-secondary mt-4">Go Back</button>
+          </div>
+        </div>
+      </PageWrapper>
+    )
+  }
+
   const Icon = vehicle?.type === 'bike' ? RiMotorbikeLine : RiEBikeLine
 
   return (
     <PageWrapper>
       <div className="container-main py-10 max-w-2xl">
         <button
-          onClick={() => (currentStep === 0 ? navigate(-1) : prevStep())}
+          onClick={() => (currentStep === 0 ? navigate(-1) : handlePrev())}
           className="flex items-center gap-2 text-white/40 hover:text-white text-sm mb-8 transition"
         >
           <FiArrowLeft /> {currentStep === 0 ? 'Back to vehicle' : 'Previous step'}
         </button>
 
         {/* Step indicator */}
-        <div className="flex items-center gap-2 mb-10">
+        <div className="flex items-center justify-between gap-2 mb-10 overflow-x-auto pb-2">
           {STEPS.map((label, i) => (
-            <div key={label} className="flex items-center gap-2">
+            <div key={label} className="flex items-center gap-2 shrink-0">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
                 i < currentStep ? 'bg-brand text-white' :
                 i === currentStep ? 'bg-brand/20 border border-brand text-brand' :
@@ -129,7 +551,7 @@ export default function BookingFlow() {
               }`}>
                 {i < currentStep ? <FiCheck size={14} /> : i + 1}
               </div>
-              <span className={`text-sm hidden sm:block ${i === currentStep ? 'text-white' : 'text-white/30'}`}>
+              <span className={`text-sm ${i === currentStep ? 'text-white font-medium' : 'text-white/30'}`}>
                 {label}
               </span>
               {i < STEPS.length - 1 && (
@@ -139,7 +561,7 @@ export default function BookingFlow() {
           ))}
         </div>
 
-        {/* Vehicle summary */}
+        {/* Vehicle summary card */}
         <div className="card p-4 flex items-center gap-4 mb-8">
           <div className="w-14 h-14 bg-surface-2 rounded-xl flex items-center justify-center shrink-0">
             <Icon className="text-brand text-3xl" />
@@ -154,155 +576,362 @@ export default function BookingFlow() {
         </div>
 
         <AnimatePresence mode="wait">
-          {/* Step 0: Time */}
+          {/* STEP 1: TIME SELECTION */}
           {currentStep === 0 && (
-            <motion.div key="step0" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.25 }}>
-              <form onSubmit={handleSubmit(handleStep0)} className="space-y-5">
-                <h2 className="text-xl font-bold">Select rental period</h2>
+            <motion.div
+              key="step0"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-6"
+            >
+              <h2 className="text-xl font-bold flex items-center gap-2"><FiCalendar className="text-brand" /> Select rental dates</h2>
+              <div className="space-y-4">
                 <div>
-                  <label className="label" htmlFor="startTime"><FiCalendar className="inline mr-1" />Start time</label>
-                  <input id="startTime" type="datetime-local" min={nowLocal()} className="input-field" {...register('startTime')} />
-                  {errors.startTime && <p className="text-red-400 text-xs mt-1.5 flex items-center gap-1"><FiAlertCircle size={12}/>{errors.startTime.message}</p>}
+                  <label className="label" htmlFor="startTime">Start Date & Time</label>
+                  <input
+                    id="startTime"
+                    type="datetime-local"
+                    min={nowLocal()}
+                    className="input-field"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                  />
                 </div>
                 <div>
-                  <label className="label" htmlFor="endTime"><FiClock className="inline mr-1" />End time</label>
-                  <input id="endTime" type="datetime-local" min={startTime || nowLocal()} className="input-field" {...register('endTime')} />
-                  {errors.endTime && <p className="text-red-400 text-xs mt-1.5 flex items-center gap-1"><FiAlertCircle size={12}/>{errors.endTime.message}</p>}
+                  <label className="label" htmlFor="endTime">End Date & Time</label>
+                  <input
+                    id="endTime"
+                    type="datetime-local"
+                    min={startTime || nowLocal()}
+                    className="input-field"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                  />
                 </div>
-                {estimated > 0 && (
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-4 bg-brand/5 border-brand/20">
-                    <div className="flex justify-between items-center">
-                      <span className="text-white/60 text-sm">Estimated total</span>
-                      <span className="text-2xl font-bold text-gradient">₹{estimated}</span>
-                    </div>
-                    <p className="text-white/30 text-xs mt-1">No payment required to confirm</p>
-                  </motion.div>
-                )}
-                <button type="submit" className="btn-primary w-full flex items-center justify-center gap-2 py-3.5">
-                  Continue <FiArrowRight />
-                </button>
-              </form>
-            </motion.div>
-          )}
+              </div>
 
-          {/* Step 1: Docs */}
-          {currentStep === 1 && (
-            <motion.div key="step1" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.25 }} className="space-y-5">
-              <h2 className="text-xl font-bold">Upload your documents</h2>
-              <p className="text-white/40 text-sm">Required for identity verification.</p>
-              {[
-                { key: 'licenseUploaded', id: 'doc-license', label: 'Driving License' },
-                { key: 'idProofUploaded', id: 'doc-id', label: 'Government ID (Aadhaar / Voter ID)' },
-              ].map(({ key, id, label }) => (
-                <div key={key}>
-                  <label className="label" htmlFor={id}>{label}</label>
-                  <label htmlFor={id} className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 cursor-pointer transition text-center ${
-                    documents[key] ? 'border-brand/50 bg-brand/5' : 'border-white/10 hover:border-white/20 bg-surface-2'
-                  }`}>
-                    {documents[key] ? (
-                      <><FiCheck className="text-brand text-2xl" /><span className="text-sm text-brand">Uploaded ✓</span></>
-                    ) : (
-                      <><FiUpload className="text-white/30 text-2xl" /><span className="text-sm text-white/40">Click to upload</span></>
-                    )}
-                    <input id={id} type="file" accept="image/*,.pdf" className="hidden" onChange={() => setDocumentUploaded(key, true)} />
-                  </label>
+              {duration > 0 && (
+                <div className="card p-5 bg-brand/5 border border-brand/20 divide-y divide-white/5 space-y-3">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-white/50">Calculated Duration</span>
+                    <span className="font-medium">{duration} hours</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm pt-3">
+                    <span className="text-white/50">Total Price</span>
+                    <span className="font-semibold">₹{totalPrice}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm pt-3">
+                    <span className="text-white/50">25% Refundable Advance Payment</span>
+                    <span className="text-brand font-bold">₹{Math.round(totalPrice * 0.25)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm pt-3">
+                    <span className="text-white/50">Remaining 75% Pay at pickup</span>
+                    <span className="font-medium text-white/80">₹{Math.round(totalPrice * 0.75)}</span>
+                  </div>
                 </div>
-              ))}
-              <button onClick={nextStep} className="btn-primary w-full flex items-center justify-center gap-2 py-3.5">
-                Continue <FiArrowRight />
+              )}
+
+              <button onClick={handleNext} className="btn-primary w-full flex items-center justify-center gap-2 py-3.5 mt-2">
+                Continue to Verification <FiArrowRight />
               </button>
-              <button onClick={nextStep} className="btn-ghost w-full text-white/30 text-sm">Skip for now</button>
             </motion.div>
           )}
 
-          {/* Step 2: Rental Agreement */}
-          {currentStep === 2 && (
-            <motion.div key="step2" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.25 }} className="space-y-5">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <FiShield className="text-brand" /> Rental Agreement
-              </h2>
-              <div className="card p-6 border border-white/10">
-                <h3 className="text-lg font-bold text-center mb-4 text-brand">
-                  User Responsibility & Rental Agreement
-                </h3>
-                <p className="text-white/50 text-sm mb-5 text-center">
-                  By proceeding with the booking on the URENT platform, you agree to the following:
-                </p>
+          {/* STEP 2: IDENTITY VERIFICATION */}
+          {currentStep === 1 && (
+            <motion.div
+              key="step1"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center gap-2">
+                <FiUser className="text-brand" size={20} />
+                <h2 className="text-xl font-bold">Identity & Background Details</h2>
+              </div>
+              <p className="text-xs text-white/40">Provide authentic documents and contact details to get approved. All files are encrypted & uploaded securely.</p>
+
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 gap-4">
+                  <div>
+                    <label className="label"><FiMapPin className="inline mr-1" />Current Residential Address</label>
+                    <textarea
+                      className="input-field min-h-[70px] py-2"
+                      placeholder="Enter your current address details"
+                      value={currentAddress}
+                      onChange={(e) => setCurrentAddress(e.target.value)}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-white/70">
+                    <input
+                      type="checkbox"
+                      checked={sameAddress}
+                      onChange={(e) => setSameAddress(e.target.checked)}
+                      className="accent-brand"
+                    />
+                    Permanent Address is same as Current Address
+                  </label>
+                  {!sameAddress && (
+                    <div>
+                      <label className="label"><FiMapPin className="inline mr-1" />Permanent Address</label>
+                      <textarea
+                        className="input-field min-h-[70px] py-2"
+                        placeholder="Enter permanent address as on Aadhaar"
+                        value={permanentAddress}
+                        onChange={(e) => setPermanentAddress(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <label className="label"><FiBookOpen className="inline mr-1" />College/University Name</label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="e.g. IIT Delhi, Christ University"
+                      value={collegeName}
+                      onChange={(e) => setCollegeName(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="divider opacity-20 my-2" />
+                <h3 className="text-sm font-semibold text-white/80">Parent / Guardian Details</h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="sm:col-span-2">
+                    <label className="label">Guardian's Full Name</label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="Enter guardian name"
+                      value={guardianName}
+                      onChange={(e) => setGuardianName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Guardian's Phone</label>
+                    <input
+                      type="tel"
+                      className="input-field"
+                      placeholder="Enter phone number"
+                      value={guardianPhone}
+                      onChange={(e) => setGuardianPhone(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Guardian's Email</label>
+                    <input
+                      type="email"
+                      className="input-field"
+                      placeholder="Enter email address"
+                      value={guardianEmail}
+                      onChange={(e) => setGuardianEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="divider opacity-20 my-2" />
+                <h3 className="text-sm font-semibold text-white/80">Document Uploads</h3>
+
                 <div className="space-y-4">
-                  {AGREEMENT_TEXT.map((clause) => (
-                    <div key={clause.title} className="bg-surface-2 rounded-xl p-4">
-                      <h4 className="text-sm font-semibold text-white/80 mb-1">{clause.title}</h4>
-                      <p className="text-xs text-white/40">{clause.text}</p>
+                  {[
+                    { key: 'selfie', label: 'Renter Selfie Photo' },
+                    { key: 'aadhaarFront', label: 'Aadhaar Card (Front Side)' },
+                    { key: 'aadhaarBack', label: 'Aadhaar Card (Back Side)' },
+                    { key: 'collegeId', label: 'College Student ID Card' },
+                    { key: 'guardianAadhaar', label: "Parent/Guardian's Aadhaar Card" }
+                  ].map(({ key, label }) => (
+                    <div key={key} className="card p-4 border border-white/5 bg-surface-1 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div>
+                        <h4 className="text-xs font-semibold text-white/80">{label}</h4>
+                        <p className="text-[10px] text-white/40 mt-0.5">Maximum size 5MB. JPEG format preferred.</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {previews[key] && (
+                          <img
+                            src={previews[key]}
+                            alt={label}
+                            className="w-12 h-12 rounded-lg object-cover border border-white/10"
+                          />
+                        )}
+                        <label className={`cursor-pointer text-xs font-medium px-4 py-2 rounded-xl transition ${
+                          files[key] ? 'bg-green-500/15 text-green-400 border border-green-500/20' : 'bg-brand/10 text-brand border border-brand/20 hover:bg-brand/20'
+                        }`}>
+                          {files[key] ? 'Replace File' : 'Choose File'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => handleFileChange(key, e.target.files[0])}
+                          />
+                        </label>
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <label className="flex items-start gap-3 cursor-pointer card p-4 border-2 transition group" style={{
-                borderColor: agreementChecked ? 'var(--color-brand)' : 'transparent',
-                background: agreementChecked ? 'rgba(255,107,0,0.05)' : undefined,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={agreementChecked}
-                  onChange={(e) => setAgreementChecked(e.target.checked)}
-                  className="mt-0.5 w-5 h-5 accent-brand rounded"
-                />
-                <span className="text-sm text-white/70 leading-relaxed">
-                  I have read and agree to the <strong className="text-white">User Responsibility & Rental Agreement</strong>.
-                  I accept full responsibility during the rental period.
-                </span>
-              </label>
-
-              <button
-                onClick={nextStep}
-                disabled={!agreementChecked}
-                className="btn-primary w-full flex items-center justify-center gap-2 py-3.5 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Accept & Continue <FiArrowRight />
-              </button>
+              <div className="flex items-center gap-3 pt-4">
+                <button onClick={handlePrev} className="btn-secondary w-1/3 py-3.5">Back</button>
+                <button onClick={handleNext} className="btn-primary w-2/3 flex items-center justify-center gap-2 py-3.5">
+                  Continue <FiArrowRight />
+                </button>
+              </div>
             </motion.div>
           )}
 
-          {/* Step 3: Confirm */}
-          {currentStep === 3 && (
-            <motion.div key="step3" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.25 }} className="space-y-5">
-              <h2 className="text-xl font-bold">Confirm your booking</h2>
-              <div className="card divide-y divide-white/5">
-                {[
-                  { label: 'Vehicle', value: vehicle?.name },
-                  { label: 'Location', value: vehicle?.location },
-                  { label: 'Start', value: bookingDetails.startTime ? new Date(bookingDetails.startTime).toLocaleString('en-IN') : '—' },
-                  { label: 'End', value: bookingDetails.endTime ? new Date(bookingDetails.endTime).toLocaleString('en-IN') : '—' },
-                  { label: 'Rate', value: `₹${vehicle?.pricePerHour}/hr` },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex justify-between items-center px-5 py-3.5 text-sm">
-                    <span className="text-white/40">{label}</span>
-                    <span className="font-medium text-right max-w-[60%]">{value}</span>
-                  </div>
-                ))}
-                <div className="flex justify-between items-center px-5 py-3.5 text-sm">
-                  <span className="text-white/40">Agreement</span>
-                  <span className="text-green-400 font-medium flex items-center gap-1"><FiCheck size={14} /> Accepted</span>
+          {/* STEP 3: DIGITAL SIGNATURE */}
+          {currentStep === 2 && (
+            <motion.div
+              key="step2"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center gap-2">
+                <FiShield className="text-brand" size={20} />
+                <h2 className="text-xl font-bold">Rental Agreement & Digital Signature</h2>
+              </div>
+              <p className="text-xs text-white/40">Please read the terms carefully and sign in the pad below using your mouse or touch.</p>
+
+              <div className="card p-5 border border-white/10 max-h-48 overflow-y-auto space-y-3 text-xs text-white/60 leading-relaxed bg-surface-1">
+                <h4 className="font-bold text-white mb-1">TERMS & RESPONSIBILITIES</h4>
+                <p>1. <strong>Vehicle Condition:</strong> The renter agrees to capture verification photos at pickup. Any existing damages must be reported instantly through the app.</p>
+                <p>2. <strong>Financial Liabilities:</strong> The renter accepts full responsibility for repairing costs in the event of minor/major damage or accidents during the rental period.</p>
+                <p>3. <strong>Identity Declaration:</strong> The documents uploaded (Aadhaar, Student ID) are verified legal representations. Fake or forged documents will result in booking cancellation, advance forfeit, and legal police reports.</p>
+                <p>4. <strong>LUPU Safety Rules:</strong> Renter certifies they possess a valid driving license, will obey Indian speed limits, and will never operate vehicles under influence.</p>
+              </div>
+
+              <div className="space-y-3">
+                <label className="label">Draw Your Signature Inside the Box</label>
+                <div className="relative border-2 border-dashed border-white/10 bg-surface-2 rounded-2xl overflow-hidden aspect-[3/1] max-w-full">
+                  <canvas
+                    ref={canvasRef}
+                    width={500}
+                    height={160}
+                    onMouseDown={startDrawing}
+                    onMouseMove={draw}
+                    onMouseUp={stopDrawing}
+                    onMouseLeave={stopDrawing}
+                    onTouchStart={startDrawing}
+                    onTouchMove={draw}
+                    onTouchEnd={stopDrawing}
+                    className="w-full h-full cursor-crosshair touch-none"
+                  />
+                  <button
+                    onClick={clearSignature}
+                    className="absolute right-3 bottom-3 text-xs text-white/50 hover:text-white bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 transition"
+                  >
+                    Clear Canvas
+                  </button>
                 </div>
-                <div className="flex justify-between items-center px-5 py-4">
-                  <span className="font-semibold">Estimated Total</span>
-                  <span className="text-xl font-bold text-gradient">
-                    {bookingDetails.estimatedTotal ? `₹${bookingDetails.estimatedTotal}` : '—'}
+              </div>
+
+              <div className="space-y-3.5 pt-2">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={termsAccepted}
+                    onChange={(e) => setTermsAccepted(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-brand rounded"
+                  />
+                  <span className="text-xs text-white/70 leading-relaxed">
+                    I declare that all details provided are correct and I accept the terms of the rental agreement.
                   </span>
+                </label>
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={authorizeVerification}
+                    onChange={(e) => setAuthorizeVerification(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-brand rounded"
+                  />
+                  <span className="text-xs text-white/70 leading-relaxed">
+                    I authorize LUPU and the vehicle owner to verify my legal document details and parent details.
+                  </span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-3 pt-4">
+                <button onClick={handlePrev} className="btn-secondary w-1/3 py-3.5">Back</button>
+                <button
+                  onClick={handleNext}
+                  disabled={!termsAccepted || !authorizeVerification || !signatureData}
+                  className="btn-primary w-2/3 flex items-center justify-center gap-2 py-3.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Continue to Payment <FiArrowRight />
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* STEP 4: ADVANCE PAYMENT & UPLOADS */}
+          {currentStep === 3 && (
+            <motion.div
+              key="step3"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-6"
+            >
+              <h2 className="text-xl font-bold flex items-center gap-2"><FiFileText className="text-brand" /> Confirm Booking & Pay Advance</h2>
+              <p className="text-xs text-white/40">Verify the checkout details. Clicking "Pay" compiles your agreement, uploads files to storage, and notifies the owner.</p>
+
+              <div className="card divide-y divide-white/5 bg-surface-1">
+                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
+                  <span className="text-white/40">Vehicle</span>
+                  <span className="font-semibold text-white">{vehicle?.name}</span>
+                </div>
+                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
+                  <span className="text-white/40">Duration</span>
+                  <span className="font-medium text-white">{duration} hours</span>
+                </div>
+                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
+                  <span className="text-white/40">Hourly Price</span>
+                  <span className="font-medium text-brand">₹{vehicle?.pricePerHour}/hr</span>
+                </div>
+                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
+                  <span className="text-white/40">Total Agreed Price</span>
+                  <span className="font-medium text-white">₹{totalPrice}</span>
+                </div>
+                <div className="flex justify-between items-center px-4 py-4 bg-brand/5">
+                  <span className="font-semibold text-white/90">25% Booking Advance</span>
+                  <span className="text-xl font-extrabold text-brand">₹{Math.round(totalPrice * 0.25)}</span>
                 </div>
               </div>
-              <div className="card p-4 bg-green-500/5 border-green-500/20 text-sm text-green-300">
-                ✅ No payment required. Pay the owner directly when you pick up the vehicle.
+
+              <div className="card p-4 bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300 leading-normal flex gap-2">
+                <FiAlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>
+                  The 25% booking advance is refundable up to 24 hours before your booking start time (if booked 2+ days early). The remaining 75% payment (₹{Math.round(totalPrice * 0.75)}) is due at vehicle pickup directly to the owner.
+                </span>
               </div>
-              <motion.button
-                onClick={handleConfirm}
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.98 }}
-                className="btn-primary w-full py-4 text-base"
-              >
-                Confirm Booking
-              </motion.button>
+
+              {submitting && (
+                <div className="card p-4 bg-surface-2 border border-white/5 flex flex-col items-center justify-center gap-3 text-center py-6">
+                  <div className="w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin" />
+                  <p className="text-xs font-semibold text-white/90">{statusMessage}</p>
+                  <p className="text-[10px] text-white/30 animate-pulse">This might take a minute, please do not close or reload this window.</p>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 pt-4">
+                <button onClick={handlePrev} disabled={submitting} className="btn-secondary w-1/3 py-3.5 disabled:opacity-40">Back</button>
+                <button
+                  onClick={handleFinalSubmit}
+                  disabled={submitting}
+                  className="btn-primary w-2/3 py-3.5 flex items-center justify-center gap-2 text-base font-bold disabled:opacity-50"
+                >
+                  {submitting ? 'Processing...' : `Pay ₹${Math.round(totalPrice * 0.25)} & Confirm`}
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

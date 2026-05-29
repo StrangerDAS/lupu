@@ -69,7 +69,7 @@ export default function HowItWorks() {
               animate={{ opacity: 1, y: 0 }}
               className="text-4xl md:text-6xl font-black mb-6 tracking-tight drop-shadow-xl"
             >
-              How <span className="text-brand">URENT</span> Works
+              How <span className="text-brand">LUPU</span> Works
             </motion.h1>
             <motion.p 
               initial={{ opacity: 0 }}
@@ -77,7 +77,7 @@ export default function HowItWorks() {
               transition={{ delay: 0.1 }}
               className="text-lg md:text-xl text-white/60"
             >
-              URENT connects vehicle owners with riders in a fast, secure, and affordable way. Whether you need a ride or want to earn money, we've got you covered.
+              LUPU connects vehicle owners with riders in a fast, secure, and affordable way. Whether you need a ride or want to earn money, we've got you covered.
             </motion.p>
           </div>
 

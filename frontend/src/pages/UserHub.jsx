@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { FiSearch, FiPlusCircle } from 'react-icons/fi'
 
 export default function UserHub() {
@@ -7,18 +7,18 @@ export default function UserHub() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-dark">
-      
+
       {/* Background ambient glow */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-4xl h-[500px] bg-brand/20 blur-[150px] rounded-full pointer-events-none" />
 
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, ease: "easeOut" }}
+        transition={{ duration: 0.8, ease: 'easeOut' }}
         className="relative z-10 text-center max-w-2xl mx-auto mb-16"
       >
         <h1 className="text-5xl md:text-7xl font-black tracking-tight mb-4 text-white drop-shadow-xl">
-          URENT
+          LUPU
         </h1>
         <p className="text-xl md:text-2xl font-medium text-brand mb-4">
           Rent bikes, scooters, and accessories easily around your city.
@@ -28,8 +28,8 @@ export default function UserHub() {
         </p>
       </motion.div>
 
-      <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
-        
+      <div className="relative z-10 grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-3xl">
+
         {/* RENT A VEHICLE CARD */}
         <motion.div
           initial={{ opacity: 0, x: -30 }}
@@ -39,9 +39,7 @@ export default function UserHub() {
           className="group relative cursor-pointer"
           onClick={() => navigate('/explore')}
         >
-          {/* Gradient Border Glow */}
-          <div className="absolute -inset-0.5 bg-gradient-to-br from-brand via-orange-500 to-transparent rounded-3xl blur opacity-30 group-hover:opacity-70 transition duration-500"></div>
-          
+          <div className="absolute -inset-0.5 bg-gradient-to-br from-brand via-orange-500 to-transparent rounded-3xl blur opacity-30 group-hover:opacity-70 transition duration-500" />
           <div className="relative h-full flex flex-col p-8 bg-[#111111]/80 backdrop-blur-xl border border-white/10 rounded-3xl overflow-hidden">
             <div className="w-16 h-16 rounded-2xl bg-brand/10 flex items-center justify-center mb-6 border border-brand/20 group-hover:bg-brand/20 transition-colors">
               <FiSearch className="w-8 h-8 text-brand" />
@@ -65,9 +63,7 @@ export default function UserHub() {
           className="group relative cursor-pointer"
           onClick={() => navigate('/owner/setup')}
         >
-          {/* Gradient Border Glow */}
-          <div className="absolute -inset-0.5 bg-gradient-to-bl from-purple-500 via-brand to-transparent rounded-3xl blur opacity-20 group-hover:opacity-60 transition duration-500"></div>
-          
+          <div className="absolute -inset-0.5 bg-gradient-to-bl from-purple-500 via-brand to-transparent rounded-3xl blur opacity-20 group-hover:opacity-60 transition duration-500" />
           <div className="relative h-full flex flex-col p-8 bg-[#111111]/80 backdrop-blur-xl border border-white/10 rounded-3xl overflow-hidden">
             <div className="w-16 h-16 rounded-2xl bg-purple-500/10 flex items-center justify-center mb-6 border border-purple-500/20 group-hover:bg-purple-500/20 transition-colors">
               <FiPlusCircle className="w-8 h-8 text-purple-400" />

@@ -1,5 +1,8 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiX, FiSearch, FiCamera, FiShield, FiDollarSign, FiCheckCircle, FiNavigation } from 'react-icons/fi'
+import {
+  FiX, FiSearch, FiCamera, FiShield, FiDollarSign,
+  FiCheckCircle, FiNavigation, FiUser, FiAlertTriangle, FiBookOpen, FiFileText
+} from 'react-icons/fi'
 
 const modalContent = {
   explore: {
@@ -29,12 +32,100 @@ const modalContent = {
     icon: FiNavigation,
     description: 'A seamless process designed for both owners and renters.',
     points: [
-      { text: '1. Owner lists vehicle securely on the platform.', icon: FiCamera },
-      { text: '2. URENT verifies the listing to maintain quality.', icon: FiShield },
-      { text: '3. User searches and books the vehicle for their dates.', icon: FiSearch },
-      { text: '4. Secure online payment locks in the reservation.', icon: FiDollarSign },
-      { text: '5. Pickup, inspect, and ride off safely.', icon: FiNavigation },
-      { text: '6. Return vehicle safely at the end of the trip.', icon: FiCheckCircle },
+      { text: '1. Owner lists vehicle securely on LUPU.', icon: FiCamera },
+      { text: '2. LUPU verifies listing RC & insurance metadata.', icon: FiShield },
+      { text: '3. Renter searches, books, and pays 25% advance.', icon: FiSearch },
+      { text: '4. Both complete pickup handover photos & sign agreement.', icon: FiNavigation },
+      { text: '5. Handover checklist automatically generates agreement PDF.', icon: FiFileText },
+      { text: '6. Return ride, settle remaining 75%, and close booking.', icon: FiCheckCircle },
+    ]
+  },
+  identityVerification: {
+    title: 'Identity Verification',
+    icon: FiShield,
+    description: 'Privacy-safe protocols ensuring authenticity.',
+    points: [
+      { text: 'Renter must physically present original Aadhaar card at pickup.', icon: FiShield },
+      { text: 'Owner verified online via RC verification checks.', icon: FiCheckCircle },
+      { text: 'Optional original ID hold allowed only if mutually agreed.', icon: FiUser },
+      { text: 'All legal documents are securely stored in private databases.', icon: FiShield }
+    ]
+  },
+  vehicleVerification: {
+    title: 'Vehicle Verification',
+    icon: FiCheckCircle,
+    description: 'Platform verification to maintain vehicle quality.',
+    points: [
+      { text: 'Manual admin audits of registration cards (RC) before approval.', icon: FiShield },
+      { text: 'Mandatory active third-party vehicle insurance checks.', icon: FiDollarSign },
+      { text: 'Detailed pre-handover photo captures for every rental.', icon: FiCamera },
+      { text: 'Verification rules block list edits if safety checks fail.', icon: FiAlertTriangle }
+    ]
+  },
+  ownerResponsibilities: {
+    title: 'Owner Responsibilities',
+    icon: FiUser,
+    description: 'Standards for maintaining listings and safety.',
+    points: [
+      { text: 'Maintain brakes, lights, tyres, and helmet safety items.', icon: FiCheckCircle },
+      { text: 'Provide accurate locations, pricing, and timing records.', icon: FiNavigation },
+      { text: 'Capture accurate pre-handover damage and fuel photos.', icon: FiCamera },
+      { text: 'Keep transport registrations and insurance updated.', icon: FiBookOpen }
+    ]
+  },
+  renterResponsibilities: {
+    title: 'Renter Responsibilities',
+    icon: FiNavigation,
+    description: 'Rider expectations during rental slots.',
+    points: [
+      { text: 'Hold valid Indian driving license (two-wheeler class).', icon: FiShield },
+      { text: 'Always wear safety helmets (renter + pillion).', icon: FiCheckCircle },
+      { text: 'Observe traffic laws, speed caps, and avoid stunts.', icon: FiNavigation },
+      { text: 'Report accidents, damages, or challans immediately.', icon: FiAlertTriangle }
+    ]
+  },
+  damagePolicy: {
+    title: 'Damage & Accident Policy',
+    icon: FiAlertTriangle,
+    description: 'Transparent resolution for disputes and repairs.',
+    points: [
+      { text: 'Renters are financially liable for damage during bookings.', icon: FiDollarSign },
+      { text: 'Compare handover vs return photos to settle disputes.', icon: FiCamera },
+      { text: 'Agreement PDFs serve as digital legal evidence logs.', icon: FiBookOpen },
+      { text: 'All traffic challans generated during booking must be paid.', icon: FiAlertTriangle }
+    ]
+  },
+  cancellationPolicy: {
+    title: 'Cancellation & Refund Policy',
+    icon: FiDollarSign,
+    description: 'Clear rules for cancellations and refunds.',
+    points: [
+      { text: 'Owner cancels booking: 100% refund of advance payment.', icon: FiCheckCircle },
+      { text: 'Renter cancels 1+ days early (booked 2+ days early): 15% refund.', icon: FiDollarSign },
+      { text: 'Renter cancels within 24 hours of start: non-refundable.', icon: FiX },
+      { text: 'Refund processing completes in 3–5 working days.', icon: FiCheckCircle }
+    ]
+  },
+  communityGuidelines: {
+    title: 'Community Guidelines',
+    icon: FiBookOpen,
+    description: 'Code of conduct for platform users.',
+    points: [
+      { text: 'Strict ban on document forgery or fake IDs.', icon: FiAlertTriangle },
+      { text: 'No third-party driver transfers without owner approval.', icon: FiUser },
+      { text: 'Zero tolerance for drug transport or illegal use.', icon: FiShield },
+      { text: 'Comply with checklist gates and digital agreement rules.', icon: FiCheckCircle }
+    ]
+  },
+  safetyStandards: {
+    title: 'Safety Standards',
+    icon: FiShield,
+    description: 'Our ongoing commitment to rider protection.',
+    points: [
+      { text: 'Verified badging on profiles indicating identity verification.', icon: FiCheckCircle },
+      { text: 'Mandatory helmet availability check before ride activation.', icon: FiShield },
+      { text: 'Encrypted document links utilizing secure Storage.', icon: FiShield },
+      { text: 'Active platform moderation checks on vehicle status.', icon: FiUser }
     ]
   }
 }

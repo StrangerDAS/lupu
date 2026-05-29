@@ -1,5 +1,5 @@
 /**
- * URENT — Mock API Server
+ * LUPU — Mock API Server
  *
  * A fully functional mock Express server that provides realistic API responses
  * for the frontend to work without a real MongoDB backend.
@@ -22,10 +22,10 @@ app.use(express.urlencoded({ extended: true }))
 
 // ── In-Memory Data Store ───────────────────────────────────
 const users = [
-  { _id: 'u1', name: 'Admin', email: 'admin@urent.in', phone: '9876543210', role: 'admin', isRider: true, isOwner: true, otpVerified: true, createdAt: '2024-01-15' },
-  { _id: 'u2', name: 'Rahul Gogoi', email: 'rahul@urent.in', phone: '9876543211', role: 'owner', isRider: true, isOwner: true, otpVerified: true, createdAt: '2024-02-15' },
-  { _id: 'u3', name: 'Priya Borah', email: 'priya@urent.in', phone: '9876543212', role: 'user', isRider: true, isOwner: false, otpVerified: true, createdAt: '2024-03-01' },
-  { _id: 'u4', name: 'Anjali Das', email: 'anjali@urent.in', phone: '9876543213', role: 'user', isRider: true, isOwner: false, otpVerified: true, createdAt: '2024-04-10' },
+  { _id: 'u1', name: 'Admin', email: 'admin@lupu.in', phone: '9876543210', role: 'admin', isRider: true, isOwner: true, otpVerified: true, createdAt: '2024-01-15' },
+  { _id: 'u2', name: 'Rahul Gogoi', email: 'rahul@lupu.in', phone: '9876543211', role: 'owner', isRider: true, isOwner: true, otpVerified: true, createdAt: '2024-02-15' },
+  { _id: 'u3', name: 'Priya Borah', email: 'priya@lupu.in', phone: '9876543212', role: 'user', isRider: true, isOwner: false, otpVerified: true, createdAt: '2024-03-01' },
+  { _id: 'u4', name: 'Anjali Das', email: 'anjali@lupu.in', phone: '9876543213', role: 'user', isRider: true, isOwner: false, otpVerified: true, createdAt: '2024-04-10' },
 ]
 
 // ── OTP Store (in-memory, expires after 5 min) ────────────
@@ -68,6 +68,7 @@ const vehicles = [
     pricePerHour: 120,
     pricePerDay: 800,
     status: 'approved',
+    isLive: true,
     rating: 4.8,
     totalReviews: 24,
     location: 'AT Road, Dibrugarh',
@@ -85,6 +86,7 @@ const vehicles = [
     pricePerHour: 55,
     pricePerDay: 350,
     status: 'approved',
+    isLive: true,
     rating: 4.6,
     totalReviews: 18,
     location: 'Chowkidinghee, Dibrugarh',
@@ -101,6 +103,7 @@ const vehicles = [
     pricePerHour: 100,
     pricePerDay: 650,
     status: 'approved',
+    isLive: false,
     rating: 4.5,
     totalReviews: 9,
     location: 'Graham Bazar, Dibrugarh',
@@ -117,6 +120,7 @@ const vehicles = [
     pricePerHour: 49,
     pricePerDay: 300,
     status: 'approved',
+    isLive: true,
     rating: 4.7,
     totalReviews: 31,
     location: 'Lahoal, Dibrugarh',
@@ -133,6 +137,7 @@ const vehicles = [
     pricePerHour: 90,
     pricePerDay: 580,
     status: 'approved',
+    isLive: true,
     rating: 4.4,
     totalReviews: 7,
     location: 'Barbari, Dibrugarh',
@@ -149,6 +154,7 @@ const vehicles = [
     pricePerHour: 60,
     pricePerDay: 380,
     status: 'approved',
+    isLive: true,
     rating: 4.9,
     totalReviews: 42,
     location: 'AT Road, Dibrugarh',
@@ -165,6 +171,7 @@ const vehicles = [
     pricePerHour: 150,
     pricePerDay: 950,
     status: 'approved',
+    isLive: false,
     rating: 4.3,
     totalReviews: 5,
     location: 'Chowkidinghee, Dibrugarh',
@@ -181,6 +188,7 @@ const vehicles = [
     pricePerHour: 50,
     pricePerDay: 320,
     status: 'approved',
+    isLive: true,
     rating: 4.6,
     totalReviews: 16,
     location: 'Graham Bazar, Dibrugarh',
@@ -197,6 +205,7 @@ const vehicles = [
     pricePerHour: 40,
     pricePerDay: 250,
     status: 'pending',
+    isLive: false,
     rating: 0,
     totalReviews: 0,
     location: 'Mohanbari, Dibrugarh',
@@ -213,6 +222,7 @@ const vehicles = [
     pricePerHour: 65,
     pricePerDay: 420,
     status: 'pending',
+    isLive: false,
     rating: 0,
     totalReviews: 0,
     location: 'AT Road, Dibrugarh',
@@ -410,6 +420,7 @@ app.post('/api/vehicles', authMiddleware, kycRequired, (req, res) => {
     pricePerHour: Number(pricePerHour) || 50,
     pricePerDay: Number(pricePerDay) || 300,
     status: 'pending',
+    isLive: true,
     rating: 0,
     totalReviews: 0,
     location: location || 'Dibrugarh',
@@ -428,6 +439,20 @@ app.put('/api/vehicles/:id', authMiddleware, (req, res) => {
   if (idx === -1) return res.status(404).json({ message: 'Vehicle not found' })
   vehicles[idx] = { ...vehicles[idx], ...req.body }
   res.json(vehicles[idx])
+})
+
+// ── Toggle Vehicle LIVE/OFFLINE status (owner only) ──────
+app.patch('/api/vehicles/:id/toggle-status', authMiddleware, (req, res) => {
+  const v = vehicles.find((v) => v._id === req.params.id)
+  if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+  // Only the owner can toggle
+  const ownerId = v.ownerId?._id || v.ownerId
+  if (ownerId !== req.user._id && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Only the vehicle owner can change status' })
+  }
+  v.isLive = !v.isLive
+  console.log(`  🔄 Vehicle ${v.name} is now ${v.isLive ? 'LIVE 🟢' : 'OFFLINE 🔴'}`)
+  res.json(v)
 })
 
 app.delete('/api/vehicles/:id', authMiddleware, (req, res) => {
@@ -578,12 +603,12 @@ app.listen(PORT, () => {
   console.log('')
   console.log('  ╔══════════════════════════════════════════════╗')
   console.log('  ║                                              ║')
-  console.log(`  ║   🏍️  URENT API Server → http://localhost:${PORT}  ║`)
+  console.log(`  ║   🏍️  LUPU API Server → http://localhost:${PORT}  ║`)
   console.log('  ║                                              ║')
   console.log('  ║   Test accounts:                             ║')
-  console.log('  ║   admin@urent.in  / admin123  (Admin)        ║')
-  console.log('  ║   rahul@urent.in  / owner123  (Owner)        ║')
-  console.log('  ║   priya@urent.in  / user1234  (User)         ║')
+  console.log('  ║   admin@lupu.in  / admin123  (Admin)        ║')
+  console.log('  ║   rahul@lupu.in  / owner123  (Owner)        ║')
+  console.log('  ║   priya@lupu.in  / user1234  (User)         ║')
   console.log('  ║                                              ║')
   console.log('  ╚══════════════════════════════════════════════╝')
   console.log('')
