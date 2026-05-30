@@ -37,6 +37,6 @@ export const bookingStep1Schema = z.object({
 
 export const profileSchema = z.object({
   name: z.string().min(2, 'Name is required'),
-  email: z.string().email('Invalid email'),
+  email: z.string().email('Invalid email').optional().or(z.literal('')),
   phone: z.string().optional(),
 })

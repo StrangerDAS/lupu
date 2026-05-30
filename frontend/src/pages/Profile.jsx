@@ -2,15 +2,21 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { FiUser, FiMail, FiPhone, FiEdit2, FiSave, FiX, FiCalendar, FiShield, FiCheck } from 'react-icons/fi'
+import { FiUser, FiMail, FiPhone, FiEdit2, FiSave, FiX, FiCalendar, FiShield, FiCheck, FiCheckCircle, FiCamera, FiTrendingUp } from 'react-icons/fi'
 import { RiMotorbikeLine } from 'react-icons/ri'
 import toast from 'react-hot-toast'
 import PageWrapper from '../components/PageWrapper'
-import { userAPI, bookingAPI, roleAPI } from '../api/endpoints'
+
 import useAuthStore from '../store/authStore'
 import { BookingCardSkeleton } from '../components/Skeletons'
 import { profileSchema } from '../utils/schemas'
-import { MOCK_BOOKINGS } from '../utils/mockData'
+
+
+// Direct Firebase/Firestore/Storage integrations
+import { doc, getDoc, updateDoc } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { db, storage } from '../firebase/config'
+import { getOwnerVehicles, subscribeToRenterBookings, subscribeToOwnerBookings, cancelBooking } from '../firebase/firestoreService'
 
 function StatusBadge({ status }) {
   const map = {
@@ -28,55 +34,158 @@ export default function Profile() {
   const [bookings, setBookings] = useState([])
   const [loadingBookings, setLoadingBookings] = useState(true)
   const [activatingOwner, setActivatingOwner] = useState(false)
+  const [vehiclesCount, setVehiclesCount] = useState(0)
+  const [uploading, setUploading] = useState(false)
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm({
     resolver: zodResolver(profileSchema),
-    defaultValues: { name: user?.name, email: user?.email, phone: user?.phone || '' },
+    defaultValues: { name: user?.displayName || user?.name || '', email: user?.email || '', phone: user?.phone || '' },
   })
 
+  // 1. Sync user profile data from Firestore on mount/UID changes
   useEffect(() => {
-    const fetch = async () => {
-      setLoadingBookings(true)
+    const syncProfile = async () => {
+      if (!user?.uid) return
       try {
-        const { data } = await bookingAPI.myBookings()
-        setBookings(data?.bookings || data)
-      } catch {
-        setBookings(MOCK_BOOKINGS)
-      } finally {
-        setLoadingBookings(false)
+        const userRef = doc(db, 'users', user.uid)
+        const snap = await getDoc(userRef)
+        if (snap.exists()) {
+          const freshData = snap.data()
+          updateUser(freshData)
+        }
+      } catch (err) {
+        console.error('Failed to sync profile from Firestore:', err)
       }
     }
-    fetch()
-  }, [])
+    syncProfile()
+  }, [user?.uid])
 
+  // 2. Fetch owner's vehicle count if B user (Owner)
+  useEffect(() => {
+    const fetchOwnerVehicles = async () => {
+      if (!user?.uid || !user?.isOwner) return
+      try {
+        const ownedVehicles = await getOwnerVehicles(user.uid)
+        setVehiclesCount(ownedVehicles.length)
+      } catch (err) {
+        console.error('Failed to fetch owner vehicles:', err)
+      }
+    }
+    fetchOwnerVehicles()
+  }, [user?.uid, user?.isOwner])
+
+  // 3. Subscribe to user bookings via Firestore (no REST calls, no 401s)
+  useEffect(() => {
+    if (!user?.uid) return
+    setLoadingBookings(true)
+
+    const subscribeFn = user?.isOwner ? subscribeToOwnerBookings : subscribeToRenterBookings
+    const unsub = subscribeFn(user.uid, (data) => {
+      setBookings(data)
+      setLoadingBookings(false)
+    })
+
+    return () => unsub()
+  }, [user?.uid, user?.isOwner])
+
+  // 4. Update Profile Info directly in Firestore (no REST backend)
   const onSubmit = async (data) => {
     try {
-      const res = await userAPI.updateProfile(data)
-      setAuth(res.data?.user || { ...user, ...data }, token)
-    } catch {
-      setAuth({ ...user, ...data }, token)
+
+      // Update Firestore database
+      if (user?.uid) {
+        const userRef = doc(db, 'users', user.uid)
+        await updateDoc(userRef, {
+          displayName: data.name,
+          email: data.email,
+          phoneNumber: data.phone || '',
+        })
+      }
+
+      // Update Zustand local store state
+      updateUser({
+        name: data.name,
+        displayName: data.name,
+        email: data.email,
+        phone: data.phone || '',
+        phoneNumber: data.phone || '',
+      })
+      toast.success('Profile updated successfully!')
+      setEditing(false)
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to update profile: ' + err.message)
     }
-    toast.success('Profile updated')
-    setEditing(false)
+  }
+
+  // 5. Handle profile image file upload to Firebase Storage
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload an image file')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Image size must be less than 2MB')
+      return
+    }
+
+    setUploading(true)
+    const toastId = toast.loading('Uploading profile image...')
+    try {
+      const filePath = `profiles/${user.uid}/avatar`
+      const fileRef = ref(storage, filePath)
+      await uploadBytes(fileRef, file)
+      const downloadURL = await getDownloadURL(fileRef)
+
+      // Update Firestore
+      const userRef = doc(db, 'users', user.uid)
+      await updateDoc(userRef, { photoURL: downloadURL })
+
+      // Update Zustand Auth Store locally
+      updateUser({ photoURL: downloadURL })
+      toast.success('Profile image updated successfully!', { id: toastId })
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to upload image: ' + err.message, { id: toastId })
+    } finally {
+      setUploading(false)
+    }
   }
 
   const handleActivateOwner = async () => {
     setActivatingOwner(true)
     try {
-      const { data } = await roleAPI.activateOwner()
-      updateUser(data.user || { isOwner: true, role: 'owner' })
-      toast.success('Owner role activated! 🎉')
-    } catch {
+      // Write directly to Firestore — no REST backend needed
+      if (user?.uid) {
+        const userRef = doc(db, 'users', user.uid)
+        await updateDoc(userRef, {
+          isOwner: true,
+          role: 'owner',
+          roles: ['user', 'owner'],
+        })
+      }
+      // Update local Zustand store
       updateUser({ isOwner: true, role: 'owner' })
-      toast.success('Owner role activated!')
+      toast.success('Owner role activated! 🎉')
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to activate owner role')
+    } finally {
+      setActivatingOwner(false)
     }
-    setActivatingOwner(false)
   }
 
   const handleCancel = async (bookingId) => {
-    try { await bookingAPI.cancel(bookingId) } catch { /* offline */ }
-    setBookings((b) => b.map((x) => x._id === bookingId ? { ...x, status: 'cancelled' } : x))
-    toast.success('Booking cancelled')
+    try {
+      await cancelBooking(bookingId, 'renter')
+      // Firestore subscription will update bookings list automatically
+      toast.success('Booking cancelled')
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to cancel booking')
+    }
   }
 
   return (
@@ -87,12 +196,23 @@ export default function Profile() {
         {/* Profile card */}
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="card p-6 md:p-8 mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center gap-5 mb-6">
-            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand to-brand-light flex items-center justify-center text-3xl font-bold shrink-0 shadow-lg shadow-brand/20">
-              {user?.name?.[0]?.toUpperCase() || '?'}
+            <div className="relative group w-20 h-20 shrink-0">
+              {user?.photoURL ? (
+                <img src={user.photoURL} alt="Profile" className="w-20 h-20 rounded-2xl object-cover shadow-lg border border-white/10" />
+              ) : (
+                <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand to-brand-light flex items-center justify-center text-3xl font-bold text-white shrink-0 shadow-lg shadow-brand/20">
+                  {user?.displayName?.[0]?.toUpperCase() || user?.name?.[0]?.toUpperCase() || '?'}
+                </div>
+              )}
+              <label className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 rounded-2xl cursor-pointer transition-opacity text-white text-[10px] font-medium">
+                <FiCamera className="text-base mb-1" />
+                Change
+                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={uploading} />
+              </label>
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-semibold">{user?.name}</h2>
+                <h2 className="text-xl font-semibold">{user?.displayName || user?.name}</h2>
                 {isKycComplete() && (
                   <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-xs flex items-center gap-1.5 py-0.5">
                     <FiCheckCircle size={10} className="text-green-400" /> Verified
@@ -122,7 +242,7 @@ export default function Profile() {
             </button>
           </div>
 
-          {/* Become Owner */}
+          {/* Become Owner Banner */}
           {!user?.isOwner && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="border-t border-white/5 pt-5 mb-5">
               <div className="card p-5 bg-gradient-to-r from-brand/5 to-purple-500/5 border border-brand/10">
@@ -220,29 +340,57 @@ export default function Profile() {
           )}
         </motion.div>
 
-        {/* User Activity */}
+        {/* User Activity Dashboard */}
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="mb-8">
           <h2 className="font-semibold mb-4 flex items-center gap-2">
-            <FiCheckCircle className="text-brand" /> My Activity
+            <FiCheckCircle className="text-brand" /> My Activity Dashboard ({user?.isOwner ? 'Owner Mode' : 'Renter Mode'})
           </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
-              <p className="text-3xl font-bold text-white mb-1">0</p>
-              <p className="text-xs text-white/50 uppercase tracking-wider">Vehicles</p>
+          
+          {user?.isOwner ? (
+            /* OWNER SPECIFIC METRICS */
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
+                <p className="text-3xl font-bold text-white mb-1">{vehiclesCount}</p>
+                <p className="text-xs text-white/50 uppercase tracking-wider">Listed Vehicles</p>
+              </div>
+              <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
+                <p className="text-3xl font-bold text-white mb-1">{user?.totalTrips || '0'}</p>
+                <p className="text-xs text-white/50 uppercase tracking-wider">Trips Completed</p>
+              </div>
+              <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
+                <p className="text-3xl font-bold text-brand mb-1">⭐ {user?.rating || '5.0'}</p>
+                <p className="text-xs text-brand uppercase tracking-wider">Owner Rating</p>
+              </div>
+              <a href="/dashboard" className="card p-5 text-center border border-brand/20 bg-brand/5 hover:bg-brand/10 hover:border-brand/40 transition-all flex flex-col justify-center items-center">
+                <FiTrendingUp className="text-brand text-2xl mb-1 animate-pulse" />
+                <p className="text-[10px] text-brand font-semibold uppercase tracking-wider">Go to Owner Dashboard →</p>
+              </a>
             </div>
-            <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
-              <p className="text-3xl font-bold text-white mb-1">{bookings.filter(b => b.status === 'completed').length}</p>
-              <p className="text-xs text-white/50 uppercase tracking-wider">Rentals</p>
+          ) : (
+            /* RENTER SPECIFIC METRICS */
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
+                <p className="text-3xl font-bold text-white mb-1">
+                  {bookings.filter(b => b.status === 'completed').length}
+                </p>
+                <p className="text-xs text-white/50 uppercase tracking-wider">Completed Trips</p>
+              </div>
+              <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
+                <p className="text-3xl font-bold text-white mb-1">
+                  {bookings.filter(b => b.status === 'confirmed' || b.status === 'ongoing').length}
+                </p>
+                <p className="text-xs text-white/50 uppercase tracking-wider">Active Bookings</p>
+              </div>
+              <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
+                <p className="text-3xl font-bold text-brand mb-1">{user?.favorites?.length || 0}</p>
+                <p className="text-xs text-brand uppercase tracking-wider">Favorites</p>
+              </div>
+              <a href="/my-bookings" className="card p-5 text-center border border-brand/20 bg-brand/5 hover:bg-brand/10 hover:border-brand/40 transition-all flex flex-col justify-center items-center">
+                <FiCalendar className="text-brand text-2xl mb-1 animate-pulse" />
+                <p className="text-[10px] text-brand font-semibold uppercase tracking-wider">My Rentals Dashboard →</p>
+              </a>
             </div>
-            <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
-              <p className="text-3xl font-bold text-white mb-1">0</p>
-              <p className="text-xs text-white/50 uppercase tracking-wider">Reviews</p>
-            </div>
-            <div className="card p-5 text-center border border-white/5 hover:border-white/10 transition-colors">
-              <p className="text-3xl font-bold text-brand mb-1">{bookings.filter(b => b.status === 'confirmed').length}</p>
-              <p className="text-xs text-brand uppercase tracking-wider">Active</p>
-            </div>
-          </div>
+          )}
         </motion.div>
 
         {/* Booking history */}
@@ -287,3 +435,4 @@ export default function Profile() {
     </PageWrapper>
   )
 }
+
