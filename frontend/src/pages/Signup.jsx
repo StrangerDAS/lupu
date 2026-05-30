@@ -9,7 +9,8 @@ import {
   createUserWithEmailAndPassword, 
   signInWithPopup, 
   RecaptchaVerifier, 
-  signInWithPhoneNumber 
+  signInWithPhoneNumber,
+  sendEmailVerification
 } from 'firebase/auth'
 
 export default function Signup() {
@@ -45,8 +46,10 @@ export default function Signup() {
 
     setLoading(true)
     try {
-      await createUserWithEmailAndPassword(auth, email, password)
-      toast.success("Account created successfully!")
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+      await sendEmailVerification(userCredential.user)
+      toast.success("Verification email sent. Please verify your email.")
+      navigate('/verify')
     } catch (error) {
       toast.error(error.message || "Error creating account")
     }

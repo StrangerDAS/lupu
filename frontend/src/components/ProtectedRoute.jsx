@@ -46,6 +46,12 @@ export default function ProtectedRoute({ requireOwner = false }) {
     return <Navigate to="/auth/login" replace />
   }
 
+  // ── Email Verification Gate ───────────────────────────────────────────────
+  if (user.email && !user.emailVerified && location.pathname !== '/verify') {
+    console.warn(`[ProtectedRoute] ⛔ DENIED (email not verified) → /verify`)
+    return <Navigate to="/verify" replace />
+  }
+
   // ── Owner gate ────────────────────────────────────────────────────────────
   if (requireOwner && !user.isOwner && !isAdmin()) {
     console.warn(`[ProtectedRoute] ⛔ DENIED (requireOwner=true, not owner/admin) → /hub`)

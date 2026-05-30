@@ -346,6 +346,9 @@ export default function App() {
         if (ADMIN_ROLES.includes(role)) {
           console.log('[Auth] 🔀 Redirect → /admin (admin/founder role detected)')
           navigateRef.current('/admin', { replace: true })
+        } else if (userObj.email && !userObj.emailVerified) {
+          console.log('[Auth] 🔀 Redirect → /verify (email not verified)')
+          navigateRef.current('/verify', { replace: true })
         } else {
           console.log('[Auth] 🔀 Redirect → /hub (regular user)')
           navigateRef.current('/hub', { replace: true })
