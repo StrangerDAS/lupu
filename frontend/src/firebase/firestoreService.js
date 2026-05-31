@@ -35,7 +35,7 @@ export async function addVehicle(ownerId, ownerName, data) {
     ownerName: ownerName || 'Owner',
     ownerVerified,
     isLive: true,
-    status: 'approved',
+    status: 'pending_verification',
     category: 'vehicle',
     rating: 0,
     totalReviews: 0,
@@ -43,6 +43,25 @@ export async function addVehicle(ownerId, ownerName, data) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })
+  
+  // Notify Owner
+  await addNotification(ownerId, {
+    title: 'Vehicle Submitted',
+    message: `Your vehicle ${data.name || 'listing'} has been submitted and is under review.`,
+    type: 'vehicle',
+    relatedId: docRef.id,
+    userRole: 'owner'
+  })
+  
+  // Notify Admin
+  await addNotification('admin', {
+    title: 'New Vehicle Awaiting Approval',
+    message: `${ownerName || 'An owner'} submitted a new vehicle ${data.name || ''}.`,
+    type: 'admin',
+    relatedId: docRef.id,
+    userRole: 'admin'
+  })
+  
   return docRef.id
 }
 
@@ -52,18 +71,49 @@ export async function updateVehicle(vehicleId, data) {
   await updateDoc(ref, { ...data, updatedAt: serverTimestamp() })
 }
 
-/** Delete a vehicle */
+/** Soft-delete a vehicle (hides from explore, preserves data) */
 export async function deleteVehicle(vehicleId) {
+  const vRef = doc(db, 'vehicles', vehicleId)
+  await updateDoc(vRef, { deleted: true, isLive: false, updatedAt: serverTimestamp() })
+}
+
+/** Permanently delete a vehicle document */
+export async function permanentDeleteVehicle(vehicleId) {
   await deleteDoc(doc(db, 'vehicles', vehicleId))
 }
+
+/** Upload vehicle images to Firebase Storage and return download URLs */
+export async function uploadVehicleImages(vehicleId, files) {
+  const urls = []
+  for (let i = 0; i < files.length; i++) {
+    const filePath = `vehicles/${vehicleId}/image_${Date.now()}_${i}`
+    const fileRef = ref(storage, filePath)
+    await uploadBytes(fileRef, files[i])
+    const url = await getDownloadURL(fileRef)
+    urls.push(url)
+  }
+  return urls
+}
+
+
 
 /** Toggle vehicle LIVE/OFFLINE */
 export async function toggleVehicleLive(vehicleId) {
   const ref = doc(db, 'vehicles', vehicleId)
   const snap = await getDoc(ref)
   if (!snap.exists()) throw new Error('Vehicle not found')
-  const current = snap.data().isLive !== false
+  const vehicle = snap.data()
+  const current = vehicle.isLive !== false
   await updateDoc(ref, { isLive: !current, updatedAt: serverTimestamp() })
+  
+  await addNotification(vehicle.ownerId, {
+    title: `Vehicle Set ${!current ? 'Live' : 'Offline'}`,
+    message: `Your vehicle ${vehicle.name || ''} is now ${!current ? 'live and visible to renters' : 'offline and hidden from search'}.`,
+    type: 'vehicle',
+    relatedId: vehicleId,
+    userRole: 'owner'
+  })
+  
   return !current
 }
 
@@ -228,9 +278,42 @@ export async function updateBookingStatus(bookingId, status) {
       if (status === 'approved') {
         title = 'Booking Approved! 🎉'
         msg = `Great news! The owner has approved your booking for ${booking.vehicleName}.`
+
+        // Trigger simulated approved email
+        const formattedStart = new Date(booking.startTime).toLocaleString('en-IN')
+        const formattedEnd = new Date(booking.endTime).toLocaleString('en-IN')
+        await sendEmailSimulation(
+          booking.renterEmail || 'renter@lupu.in',
+          'Booking Approved - LUPU',
+          `<h1>Booking Approved 🎉</h1>
+           <p>Dear ${booking.renterName || 'Rider'},</p>
+           <p>Your booking request for <strong>${booking.vehicleName}</strong> has been approved by the owner <strong>${booking.ownerName}</strong>.</p>
+           <p><strong>Rental Details:</strong></p>
+           <ul>
+             <li><strong>Dates:</strong> ${formattedStart} to ${formattedEnd}</li>
+             <li><strong>Total Price:</strong> ₹${booking.totalPrice}</li>
+             <li><strong>Advance Amount Paid (25%):</strong> ₹${booking.pricing?.advance || Math.round(booking.totalPrice * 0.25)}</li>
+             <li><strong>Remaining Amount Due at Pickup (75%):</strong> ₹${booking.pricing?.remaining || Math.round(booking.totalPrice * 0.75)}</li>
+           </ul>
+           <p><strong>Payment & Pickup Instructions:</strong> Please pay the remaining 75% balance of ₹${booking.pricing?.remaining || Math.round(booking.totalPrice * 0.75)} directly to the owner at the time of pickup via cash or UPI. Make sure to bring your college ID/Aadhaar for identity check verification during handover.</p>
+           <p>Safe riding!</p>
+           <p>Team LUPU</p>`
+        )
       } else if (status === 'rejected') {
         title = 'Booking Rejected'
         msg = `Unfortunately, your booking for ${booking.vehicleName} was rejected by the owner.`
+
+        // Trigger simulated rejected email
+        await sendEmailSimulation(
+          booking.renterEmail || 'renter@lupu.in',
+          'Booking Request Rejected - LUPU',
+          `<h1>Booking Request Rejected</h1>
+           <p>Dear ${booking.renterName || 'Rider'},</p>
+           <p>Unfortunately, your booking request for <strong>${booking.vehicleName}</strong> was rejected by the owner <strong>${booking.ownerName}</strong>.</p>
+           <p><strong>Reason:</strong> Document verification mismatch or vehicle scheduling conflict.</p>
+           <p>Your 25% advance payment has been queued for a 100% refund. Please browse other available rides on LUPU.</p>
+           <p>Best regards,<br/>Team LUPU</p>`
+        )
       } else if (status === 'under_review') {
         title = 'More Info Requested'
         msg = `The owner has requested additional details/verification for ${booking.vehicleName}.`
@@ -332,6 +415,7 @@ export async function cancelBooking(bookingId, cancelledBy = 'renter') {
       amount: refundInfo.refundAmount,
       type: 'refund',
       status: 'completed',
+      payerId: booking.renterId,
       description: `Refund for cancellation by ${cancelledBy}. Policy: ${refundInfo.policy}`
     })
   }
@@ -351,6 +435,20 @@ export async function cancelBooking(bookingId, cancelledBy = 'renter') {
       bookingId,
       type: 'status'
     })
+
+    // Send simulated email if owner cancelled
+    if (cancelledBy === 'owner') {
+      await sendEmailSimulation(
+        booking.renterEmail || 'renter@lupu.in',
+        'Booking Request Rejected - LUPU',
+        `<h1>Booking Request Cancelled/Rejected by Owner</h1>
+         <p>Dear ${booking.renterName || 'Rider'},</p>
+         <p>Your booking request for <strong>${booking.vehicleName}</strong> has been cancelled by the owner <strong>${booking.ownerName}</strong>.</p>
+         <p><strong>Reason:</strong> ${refundInfo.policy}</p>
+         <p><strong>Refund Amount:</strong> ₹${refundInfo.refundAmount} (100% refund has been processed)</p>
+         <p>Best regards,<br/>Team LUPU</p>`
+      )
+    }
   } catch (err) {
     console.error('Error sending cancellation notifications:', err)
   }
@@ -360,7 +458,7 @@ export async function cancelBooking(bookingId, cancelledBy = 'renter') {
    PAYMENTS, UPLOADS & NOTIFICATIONS SERVICES
    ═══════════════════════════════════════════════════════════ */
 
-const paymentsCol = collection(db, 'bookingPayments')
+const paymentsCol = collection(db, 'payments')
 const notificationsCol = collection(db, 'notifications')
 
 /** Upload a file blob to Firebase Storage and get download URL */
@@ -387,17 +485,42 @@ export async function getBookingPayments(bookingId) {
 }
 
 /** Add in-app notification */
-export async function addNotification(userId, { title, message, bookingId, type }) {
+/** Add in-app notification (supports new schema & preferences) */
+export async function addNotification(userId, { title, message, bookingId, type, relatedId, userRole }) {
   if (!userId) return
-  await addDoc(notificationsCol, {
+
+  try {
+    // Check user preferences
+    const userSnap = await getDoc(doc(db, 'users', userId))
+    if (userSnap.exists()) {
+      const prefs = userSnap.data().notificationPreferences || {}
+      
+      // If the notification category is explicitly disabled, don't create it
+      // Default type mapping if not provided:
+      const category = type === 'payment' ? 'payment' 
+                     : type === 'vehicle' ? 'vehicle'
+                     : 'booking' // Treat info, status, etc as booking by default unless specified
+
+      if (prefs[category] === false) return
+    }
+  } catch (err) {
+    console.error('Error checking notification preferences', err)
+  }
+
+  const docRef = await addDoc(notificationsCol, {
     userId,
+    userRole: userRole || 'user',
     title,
     message,
-    bookingId: bookingId || '',
-    type: type || 'info', // 'info' | 'status' | 'payment'
-    read: false,
+    type: type || 'info', // e.g., vehicle, booking, admin, payment, info, status
+    relatedId: relatedId || bookingId || '',
+    isRead: false,
+    read: false, // Keeping 'read' for backwards compatibility
     createdAt: serverTimestamp(),
   })
+  
+  // Backfill notificationId
+  await updateDoc(docRef, { notificationId: docRef.id })
 }
 
 /** Subscribe to user's notifications in real time */
@@ -413,15 +536,34 @@ export function subscribeToUserNotifications(userId, callback) {
 
 /** Mark notification as read */
 export async function markNotificationRead(notificationId) {
-  await updateDoc(doc(db, 'notifications', notificationId), { read: true })
+  await updateDoc(doc(db, 'notifications', notificationId), { read: true, isRead: true })
 }
 
 /** Mark all user notifications as read */
 export async function markAllNotificationsRead(userId) {
   const q = query(notificationsCol, where('userId', '==', userId), where('read', '==', false))
   const snap = await getDocs(q)
-  const promises = snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { read: true }))
+  const promises = snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { read: true, isRead: true }))
   await Promise.all(promises)
+}
+
+/** Delete a specific notification */
+export async function deleteNotification(notificationId) {
+  await deleteDoc(doc(db, 'notifications', notificationId))
+}
+
+/** Delete all notifications for a user */
+export async function deleteAllNotifications(userId) {
+  const q = query(notificationsCol, where('userId', '==', userId))
+  const snap = await getDocs(q)
+  const promises = snap.docs.map(d => deleteDoc(doc(db, 'notifications', d.id)))
+  await Promise.all(promises)
+}
+
+/** Update user notification preferences */
+export async function updateNotificationPreferences(userId, preferences) {
+  const userRef = doc(db, 'users', userId)
+  await updateDoc(userRef, { notificationPreferences: preferences, updatedAt: serverTimestamp() })
 }
 
 
@@ -471,6 +613,28 @@ export function subscribeToRenterBookings(renterId, callback) {
     callback(snap.docs.map((d) => ({ _id: d.id, ...d.data() })))
   }, (err) => {
     console.error('Renter bookings subscription error:', err)
+    callback([])
+  })
+}
+
+/** Subscribe to owner's earnings/payments from completed bookings */
+export function subscribeToOwnerPayments(ownerId, callback) {
+  const q = query(bookingsCol, where('ownerId', '==', ownerId), where('bookingStatus', 'in', ['completed', 'fully_paid']), orderBy('createdAt', 'desc'))
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ _id: d.id, ...d.data() })))
+  }, (err) => {
+    console.error('Owner payments subscription error:', err)
+    callback([])
+  })
+}
+
+/** Subscribe to renter's payments from all bookings (real-time) */
+export function subscribeToRenterPayments(renterId, callback) {
+  const q = query(paymentsCol, where('payerId', '==', renterId), orderBy('createdAt', 'desc'))
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map((d) => ({ _id: d.id, ...d.data() })))
+  }, (err) => {
+    console.error('Renter payments subscription error:', err)
     callback([])
   })
 }
@@ -870,7 +1034,9 @@ export async function verifyVehicleStatus(vehicleId, status, adminId, adminName,
     await addNotification(previousState.ownerId, {
       title,
       message,
-      type: 'status'
+      type: 'vehicle',
+      relatedId: vehicleId,
+      userRole: 'owner'
     })
   }
 }
@@ -888,7 +1054,7 @@ export function subscribeToAllBookings(callback) {
 
 /** Subscribe to all payments (real-time) */
 export function subscribeToAllPayments(callback) {
-  const q = query(collection(db, 'bookingPayments'), orderBy('createdAt', 'desc'))
+  const q = query(collection(db, 'payments'), orderBy('createdAt', 'desc'))
   return onSnapshot(q, (snap) => {
     callback(snap.docs.map(d => ({ _id: d.id, ...d.data() })))
   }, (err) => {
@@ -1233,6 +1399,79 @@ export function subscribeToAdmins(callback) {
     callback(snap.docs.map(d => ({ _id: d.id, ...d.data() })))
   }, (err) => {
     console.error('Admins list subscription error:', err)
+    callback([])
+  })
+}
+
+/* ═══════════════════════════════════════════════════════════
+   KYC, EMAILS & REMINDER SIMULATOR SERVICES
+   ═══════════════════════════════════════════════════════════ */
+
+/** Submit KYC documents for a user */
+export async function submitUserKyc(userId, { kycType, kycDetails, files }) {
+  const userRef = doc(db, 'users', userId)
+  const uploadedUrls = {}
+
+  // 1. Upload files to Firebase Storage
+  if (files.selfie) {
+    const fileRef = ref(storage, `kyc/${userId}/selfie_${Date.now()}.jpg`)
+    await uploadBytes(fileRef, files.selfie)
+    uploadedUrls.selfieUrl = await getDownloadURL(fileRef)
+  }
+
+  if (kycType === 'college_id' && files.collegeId) {
+    const fileRef = ref(storage, `kyc/${userId}/college_id_${Date.now()}.jpg`)
+    await uploadBytes(fileRef, files.collegeId)
+    uploadedUrls.collegeIdUrl = await getDownloadURL(fileRef)
+  }
+
+  if (kycType === 'aadhaar') {
+    if (files.aadhaarFront) {
+      const fileRef = ref(storage, `kyc/${userId}/aadhaar_front_${Date.now()}.jpg`)
+      await uploadBytes(fileRef, files.aadhaarFront)
+      uploadedUrls.aadhaarFrontUrl = await getDownloadURL(fileRef)
+    }
+    if (files.aadhaarBack) {
+      const fileRef = ref(storage, `kyc/${userId}/aadhaar_back_${Date.now()}.jpg`)
+      await uploadBytes(fileRef, files.aadhaarBack)
+      uploadedUrls.aadhaarBackUrl = await getDownloadURL(fileRef)
+    }
+  }
+
+  // 2. Build details payload
+  const details = { ...kycDetails, ...uploadedUrls }
+
+  // 3. Update users document in Firestore
+  const updatePayload = {
+    kycStatus: 'Under Review',
+    kycType,
+    kycDetails: details,
+    kycSubmittedAt: serverTimestamp()
+  }
+  await updateDoc(userRef, updatePayload)
+  return updatePayload
+}
+
+/** Update global user KYC status (used by developer simulator) */
+export async function updateUserKycStatus(userId, status) {
+  const userRef = doc(db, 'users', userId)
+  await updateDoc(userRef, {
+    kycStatus: status,
+    updatedAt: serverTimestamp()
+  })
+}
+
+import { sendEmail, sendEmailSimulation } from '../services/emailService'
+export { sendEmail, sendEmailSimulation }
+
+
+/** Subscribe to outgoing simulated emails (real-time) */
+export function subscribeToSimulatedEmails(toEmail, callback) {
+  const q = query(collection(db, 'emails'), where('to', '==', toEmail), orderBy('createdAt', 'desc'))
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map(d => ({ _id: d.id, ...d.data() })))
+  }, (err) => {
+    console.error('Simulated emails subscription error:', err)
     callback([])
   })
 }

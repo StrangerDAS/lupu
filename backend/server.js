@@ -7,13 +7,20 @@
  * Run: node server.js
  * All data is in-memory and resets on restart.
  */
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import jwt from 'jsonwebtoken'
+import Razorpay from 'razorpay'
 
 const app = express()
 const PORT = process.env.PORT || 5001
 const JWT_SECRET = 'uniride-dev-secret-key'
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID',
+  key_secret: process.env.RAZORPAY_KEY_SECRET || 'YOUR_RAZORPAY_KEY_SECRET',
+})
 
 // ── Middleware ──────────────────────────────────────────────
 app.use(cors())
@@ -591,6 +598,46 @@ app.patch('/api/admin/vehicles/:id/reject', authMiddleware, (req, res) => {
   if (!v) return res.status(404).json({ message: 'Vehicle not found' })
   v.status = 'rejected'
   res.json(v)
+})
+
+// ── Razorpay Payment Order Creation ────────────────────────
+app.post('/api/payments/create-order', authMiddleware, async (req, res) => {
+  const { amount, receipt, notes } = req.body
+  if (!amount) {
+    return res.status(400).json({ message: 'Amount is required' })
+  }
+  try {
+    const keyId = process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID'
+    if (!keyId || keyId.startsWith('YOUR_') || keyId === '') {
+      const mockOrder = {
+        id: `order_mock_${Date.now()}`,
+        entity: 'order',
+        amount: Math.round(amount * 100),
+        amount_paid: 0,
+        amount_due: Math.round(amount * 100),
+        currency: 'INR',
+        receipt: receipt || `rcpt_${Date.now()}`,
+        status: 'created',
+        attempts: 0,
+        notes: notes || {},
+        created_at: Math.floor(Date.now() / 1000),
+        isMock: true
+      }
+      return res.status(200).json(mockOrder)
+    }
+
+    const options = {
+      amount: Math.round(amount * 100), // amount in paisa
+      currency: 'INR',
+      receipt: receipt || `rcpt_${Date.now()}`,
+      notes: notes || {}
+    }
+    const order = await razorpay.orders.create(options)
+    res.status(200).json(order)
+  } catch (error) {
+    console.error('Error creating Razorpay order:', error)
+    res.status(500).json({ message: 'Failed to create order', error: error.message })
+  }
 })
 
 // ── Health Check ───────────────────────────────────────────

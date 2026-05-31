@@ -62,3 +62,9 @@ export const roleAPI = {
   activateOwner: () => api.post('/user/activate-owner'),
   activateRider: () => api.post('/user/activate-rider'),
 }
+
+/* ── Payments ───────────────────────────────────────────── */
+export const paymentAPI = {
+  createOrder: (data) => api.post('/payments/create-order', data),
+}
+

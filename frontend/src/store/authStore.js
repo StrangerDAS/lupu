@@ -140,7 +140,7 @@ const useAuthStore = create(
         const { user } = get()
         if (!user) return false
         if (_isAdmin(user)) return true
-        return !!user.emailVerified || !!user.phoneVerified
+        return user.kycStatus === 'Verified' || !!user.emailVerified || !!user.phoneVerified
       },
 
       // isOwner: admins can act as owners in the system

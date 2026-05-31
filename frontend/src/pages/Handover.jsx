@@ -413,9 +413,6 @@ export default function Handover() {
     if (unchecked) {
       return toast.error('Ensure all return checklist items are verified.')
     }
-    if (!paymentSettled) {
-      return toast.error('Verify renter settled final 75% payment dues.')
-    }
 
     setSubmitting(true)
     setSubmittingMsg('Uploading vehicle return condition photos...')
@@ -429,18 +426,6 @@ export default function Handover() {
       const sigBlob = await (await fetch(returnSignature)).blob()
       const sigFile = new File([sigBlob], `return_sig_${bookingId}.png`, { type: 'image/png' })
       const sigUrl = await uploadBookingFile(`handover/signatures/${bookingId}_return_sig.png`, sigFile)
-
-      setSubmittingMsg('Processing remaining payment record...')
-      const finalAmount = booking.pricing?.remaining || Math.round(booking.totalPrice * 0.75)
-      await createPaymentRecord({
-        bookingId,
-        amount: finalAmount,
-        type: 'final_settlement',
-        status: 'completed',
-        renterId: booking.renterId,
-        renterName: booking.renterName,
-        description: `Remaining 75% final payment dues settled on vehicle return.`
-      })
 
       setSubmittingMsg('Archiving agreement & finalizing ride...')
       await completeReturnHandover(bookingId, {
@@ -589,21 +574,12 @@ export default function Handover() {
                   </div>
                 </div>
 
-                {/* Payment verify checkbox */}
-                <div className="card p-5 border border-amber-500/20 bg-amber-500/5 space-y-3">
-                  <h3 className="text-sm font-semibold text-amber-400 flex items-center gap-1.5"><FiDollarSign /> Verify Final Payment Dues</h3>
-                  <p className="text-xs text-amber-300/80 leading-normal">
-                    Collect the remaining 75% dues (<strong>₹{booking?.pricing?.remaining}</strong>) directly from the renter (via UPI, cash, etc.) before concluding.
+                {/* Payment notice */}
+                <div className="card p-5 border border-brand/20 bg-brand/5 space-y-2">
+                  <h3 className="text-sm font-semibold text-brand flex items-center gap-1.5">Online Payment Settlement</h3>
+                  <p className="text-xs text-white/70 leading-normal">
+                    The renter will be prompted to settle the remaining 75% final payment (<strong>₹{booking?.pricing?.remaining || Math.round(booking?.totalPrice * 0.75)}</strong>) online via Razorpay on their dashboard once you submit this checklist.
                   </p>
-                  <label className="flex items-center gap-3 cursor-pointer pt-1">
-                    <input
-                      type="checkbox"
-                      checked={paymentSettled}
-                      onChange={(e) => setPaymentSettled(e.target.checked)}
-                      className="w-4 h-4 accent-brand rounded"
-                    />
-                    <span className="text-xs text-white/90 font-medium">I verify that I have received ₹{booking?.pricing?.remaining} from the renter.</span>
-                  </label>
                 </div>
 
                 {/* Return comments & Signature */}

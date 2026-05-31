@@ -20,11 +20,22 @@ export const signupSchema = z.object({
 export const addVehicleSchema = z.object({
   name: z.string().min(3, 'Vehicle name is required'),
   type: z.enum(['bike', 'scooty']),
+  vehicleNumber: z.string().optional(),
   pricePerHour: z.coerce.number().min(1, 'Price must be at least ₹1'),
   pricePerDay: z.coerce.number().optional(),
   location: z.string().min(3, 'Location is required'),
   description: z.string().optional(),
   year: z.coerce.number().optional(),
+})
+
+export const editVehicleSchema = z.object({
+  name: z.string().min(3, 'Vehicle name is required'),
+  type: z.enum(['bike', 'scooty']),
+  vehicleNumber: z.string().optional(),
+  pricePerHour: z.coerce.number().min(1, 'Price must be at least ₹1'),
+  pricePerDay: z.coerce.number().optional(),
+  location: z.string().min(3, 'Location is required'),
+  description: z.string().optional(),
 })
 
 export const bookingStep1Schema = z.object({

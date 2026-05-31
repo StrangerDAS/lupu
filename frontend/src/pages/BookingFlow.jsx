@@ -68,10 +68,9 @@ export default function BookingFlow() {
   const [currentAddress, setCurrentAddress] = useState('')
   const [permanentAddress, setPermanentAddress] = useState('')
   const [sameAddress, setSameAddress] = useState(false)
+  const [kycOption, setKycOption] = useState('college_id') // 'college_id' | 'aadhaar'
   const [collegeName, setCollegeName] = useState('')
-  const [guardianName, setGuardianName] = useState('')
-  const [guardianPhone, setGuardianPhone] = useState('')
-  const [guardianEmail, setGuardianEmail] = useState('')
+  const [aadhaarNumber, setAadhaarNumber] = useState('')
 
   // Files
   const [files, setFiles] = useState({
@@ -79,14 +78,12 @@ export default function BookingFlow() {
     aadhaarFront: null,
     aadhaarBack: null,
     collegeId: null,
-    guardianAadhaar: null,
   })
   const [previews, setPreviews] = useState({
     selfie: '',
     aadhaarFront: '',
     aadhaarBack: '',
     collegeId: '',
-    guardianAadhaar: '',
   })
 
   // Step 3: Signature & Checkboxes
@@ -223,17 +220,33 @@ export default function BookingFlow() {
     }
 
     if (currentStep === 1) {
-      if (!currentAddress || !permanentAddress || !collegeName) {
-        toast.error('Please fill in your address and college details')
+      if (user?.kycStatus === 'Verified') {
+        return true
+      }
+
+      if (!currentAddress || !permanentAddress) {
+        toast.error('Please fill in your address details')
         return false
       }
-      if (!guardianName || !guardianPhone || !guardianEmail) {
-        toast.error('Please fill in all parent/guardian details')
-        return false
-      }
-      if (!files.selfie || !files.aadhaarFront || !files.aadhaarBack || !files.collegeId || !files.guardianAadhaar) {
-        toast.error('All legal documents are mandatory to upload')
-        return false
+
+      if (kycOption === 'college_id') {
+        if (!collegeName) {
+          toast.error('Please enter your college name')
+          return false
+        }
+        if (!files.selfie || !files.collegeId) {
+          toast.error('Selfie and College Student ID are required')
+          return false
+        }
+      } else {
+        if (!aadhaarNumber || aadhaarNumber.length !== 12) {
+          toast.error('Please enter a valid 12-digit Aadhaar number')
+          return false
+        }
+        if (!files.selfie || !files.aadhaarFront || !files.aadhaarBack) {
+          toast.error('Selfie, Aadhaar Front, and Aadhaar Back are required')
+          return false
+        }
       }
       return true
     }
@@ -350,43 +363,43 @@ export default function BookingFlow() {
       } catch (err) { console.error('Aadhaar Back embed error:', err) }
     }
 
-    // Page 3: College ID, Guardian Details & Guardian Aadhaar
+    // Page 3: Academic / Identity Document
     doc.addPage()
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(16)
-    doc.text('GUARDIAN AND ACADEMIC DOCUMENTS', 20, 20)
+    doc.text('RENTER IDENTITY DOCUMENTS', 20, 20)
 
     const page3Y = 35
-    if (previews.collegeId) {
+    if (kycOption === 'college_id' && previews.collegeId) {
       try {
         doc.setFontSize(10)
         doc.text('College Student ID:', 20, page3Y)
         doc.addImage(previews.collegeId, 'JPEG', 20, page3Y + 5, 75, 45)
       } catch (err) { console.error('College ID embed error:', err) }
+    } else {
+      if (previews.aadhaarFront) {
+        try {
+          doc.setFontSize(10)
+          doc.text('Aadhaar Card (Front):', 20, page3Y)
+          doc.addImage(previews.aadhaarFront, 'JPEG', 20, page3Y + 5, 75, 45)
+        } catch (err) { console.error('Aadhaar Front embed error:', err) }
+      }
+      if (previews.aadhaarBack) {
+        try {
+          doc.setFontSize(10)
+          doc.text('Aadhaar Card (Back):', 110, page3Y)
+          doc.addImage(previews.aadhaarBack, 'JPEG', 110, page3Y + 5, 75, 45)
+        } catch (err) { console.error('Aadhaar Back embed error:', err) }
+      }
     }
 
-    if (previews.guardianAadhaar) {
-      try {
-        doc.setFontSize(10)
-        doc.text('Parent/Guardian Aadhaar:', 110, page3Y)
-        doc.addImage(previews.guardianAadhaar, 'JPEG', 110, page3Y + 5, 75, 45)
-      } catch (err) { console.error('Guardian Aadhaar embed error:', err) }
-    }
-
+    doc.setFont('helvetica', 'bold')
     doc.setFontSize(12)
-    doc.setFont('helvetica', 'bold')
-    doc.text('GUARDIAN CONTACT DETAILS', 20, 100)
-    doc.setFont('helvetica', 'normal')
-    doc.text(`Guardian Name: ${guardianName}`, 20, 107)
-    doc.text(`Guardian Phone Number: ${guardianPhone}`, 20, 114)
-    doc.text(`Guardian Email Address: ${guardianEmail}`, 20, 121)
-
-    doc.setFont('helvetica', 'bold')
-    doc.text('LEGAL DECLARATION & TERMS', 20, 135)
+    doc.text('LEGAL DECLARATION & TERMS', 20, 125)
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
     const declareText = 'The renter hereby declares that all information provided is accurate and authentic. Renter assumes full financial and legal responsibility for the vehicle during the specified rental duration. LUPU acts solely as a connecting platform and assumes no liability for disputes, accidents, or damage. Agreement completed digitally.'
-    doc.text(doc.splitTextToSize(declareText, 170), 20, 142)
+    doc.text(doc.splitTextToSize(declareText, 170), 20, 132)
 
     // Save as blob
     const pdfBlob = doc.output('blob')
@@ -403,12 +416,33 @@ export default function BookingFlow() {
     try {
       setStatusMessage('Uploading secure documents...')
       
-      // Upload images in parallel
-      const selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie)
-      const frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront)
-      const backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack)
-      const collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId)
-      const guardianUrl = await uploadBookingFile(`bookings/guardian-aadhaar/${tempId}_guardian.jpg`, files.guardianAadhaar)
+      let selfieUrl = ''
+      let frontUrl = ''
+      let backUrl = ''
+      let collegeUrl = ''
+
+      if (user?.kycStatus === 'Verified') {
+        selfieUrl = user.kycDetails?.selfieUrl || ''
+        collegeUrl = user.kycDetails?.collegeIdUrl || ''
+        frontUrl = user.kycDetails?.aadhaarFrontUrl || ''
+        backUrl = user.kycDetails?.aadhaarBackUrl || ''
+      } else {
+        if (files.selfie) {
+          selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie)
+        }
+        if (kycOption === 'college_id') {
+          if (files.collegeId) {
+            collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId)
+          }
+        } else {
+          if (files.aadhaarFront) {
+            frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront)
+          }
+          if (files.aadhaarBack) {
+            backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack)
+          }
+        }
+      }
 
       // Upload Signature
       setStatusMessage('Uploading signature...')
@@ -419,13 +453,6 @@ export default function BookingFlow() {
       const signatureUrl = await uploadBookingFile(`bookings/signatures/${tempId}_sig.png`, sigFile)
 
       setStatusMessage('Compiling Verification Agreement PDF...')
-      const localPreviews = {
-        selfie: previews.selfie,
-        aadhaarFront: previews.aadhaarFront,
-        aadhaarBack: previews.aadhaarBack,
-        collegeId: previews.collegeId,
-        guardianAadhaar: previews.guardianAadhaar,
-      }
       const pdfUrl = await compilePDF(tempId)
 
       setStatusMessage('Processing 25% Advance Payment...')
@@ -467,15 +494,12 @@ export default function BookingFlow() {
         verificationDetails: {
           currentAddress,
           permanentAddress,
-          collegeName,
-          guardianName,
-          guardianPhone,
-          guardianEmail,
+          collegeName: kycOption === 'college_id' ? collegeName : '',
+          aadhaarNumber: kycOption === 'aadhaar' ? aadhaarNumber : '',
           selfieUrl,
           aadhaarFrontUrl: frontUrl,
           aadhaarBackUrl: backUrl,
           collegeIdUrl: collegeUrl,
-          guardianAadhaarUrl: guardianUrl,
           signatureUrl,
           verificationPdfUrl: pdfUrl
         },
@@ -655,125 +679,146 @@ export default function BookingFlow() {
               </div>
               <p className="text-xs text-white/40">Provide authentic documents and contact details to get approved. All files are encrypted & uploaded securely.</p>
 
-              <div className="space-y-5">
-                <div className="grid grid-cols-1 gap-4">
-                  <div>
-                    <label className="label"><FiMapPin className="inline mr-1" />Current Residential Address</label>
-                    <textarea
-                      className="input-field min-h-[70px] py-2"
-                      placeholder="Enter your current address details"
-                      value={currentAddress}
-                      onChange={(e) => setCurrentAddress(e.target.value)}
-                    />
+              {user?.kycStatus === 'Verified' ? (
+                <div className="card p-6 border-green-500/20 bg-green-500/5 text-center space-y-3">
+                  <div className="w-12 h-12 bg-green-500/10 rounded-full flex items-center justify-center mx-auto border border-green-500/25">
+                    <FiCheck className="text-green-400 text-xl" />
                   </div>
-                  <label className="flex items-center gap-2 cursor-pointer text-xs text-white/70">
-                    <input
-                      type="checkbox"
-                      checked={sameAddress}
-                      onChange={(e) => setSameAddress(e.target.checked)}
-                      className="accent-brand"
-                    />
-                    Permanent Address is same as Current Address
-                  </label>
-                  {!sameAddress && (
+                  <h3 className="font-semibold text-white">Identity Pre-Verified</h3>
+                  <p className="text-xs text-white/45 max-w-sm mx-auto leading-relaxed">
+                    Your KYC document verification status is <strong>Verified</strong>. Your profile details will be auto-filled for this booking. You can proceed directly to the signature step.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 gap-4">
                     <div>
-                      <label className="label"><FiMapPin className="inline mr-1" />Permanent Address</label>
+                      <label className="label"><FiMapPin className="inline mr-1" />Current Residential Address</label>
                       <textarea
                         className="input-field min-h-[70px] py-2"
-                        placeholder="Enter permanent address as on Aadhaar"
-                        value={permanentAddress}
-                        onChange={(e) => setPermanentAddress(e.target.value)}
+                        placeholder="Enter your current address details"
+                        value={currentAddress}
+                        onChange={(e) => setCurrentAddress(e.target.value)}
                       />
                     </div>
-                  )}
-                  <div>
-                    <label className="label"><FiBookOpen className="inline mr-1" />College/University Name</label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="e.g. IIT Delhi, Christ University"
-                      value={collegeName}
-                      onChange={(e) => setCollegeName(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="divider opacity-20 my-2" />
-                <h3 className="text-sm font-semibold text-white/80">Parent / Guardian Details</h3>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="sm:col-span-2">
-                    <label className="label">Guardian's Full Name</label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="Enter guardian name"
-                      value={guardianName}
-                      onChange={(e) => setGuardianName(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Guardian's Phone</label>
-                    <input
-                      type="tel"
-                      className="input-field"
-                      placeholder="Enter phone number"
-                      value={guardianPhone}
-                      onChange={(e) => setGuardianPhone(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Guardian's Email</label>
-                    <input
-                      type="email"
-                      className="input-field"
-                      placeholder="Enter email address"
-                      value={guardianEmail}
-                      onChange={(e) => setGuardianEmail(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="divider opacity-20 my-2" />
-                <h3 className="text-sm font-semibold text-white/80">Document Uploads</h3>
-
-                <div className="space-y-4">
-                  {[
-                    { key: 'selfie', label: 'Renter Selfie Photo' },
-                    { key: 'aadhaarFront', label: 'Aadhaar Card (Front Side)' },
-                    { key: 'aadhaarBack', label: 'Aadhaar Card (Back Side)' },
-                    { key: 'collegeId', label: 'College Student ID Card' },
-                    { key: 'guardianAadhaar', label: "Parent/Guardian's Aadhaar Card" }
-                  ].map(({ key, label }) => (
-                    <div key={key} className="card p-4 border border-white/5 bg-surface-1 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs text-white/70">
+                      <input
+                        type="checkbox"
+                        checked={sameAddress}
+                        onChange={(e) => setSameAddress(e.target.checked)}
+                        className="accent-brand"
+                      />
+                      Permanent Address is same as Current Address
+                    </label>
+                    {!sameAddress && (
                       <div>
-                        <h4 className="text-xs font-semibold text-white/80">{label}</h4>
-                        <p className="text-[10px] text-white/40 mt-0.5">Maximum size 5MB. JPEG format preferred.</p>
+                        <label className="label"><FiMapPin className="inline mr-1" />Permanent Address</label>
+                        <textarea
+                          className="input-field min-h-[70px] py-2"
+                          placeholder="Enter permanent address as on Aadhaar"
+                          value={permanentAddress}
+                          onChange={(e) => setPermanentAddress(e.target.value)}
+                        />
                       </div>
-                      <div className="flex items-center gap-3">
-                        {previews[key] && (
-                          <img
-                            src={previews[key]}
-                            alt={label}
-                            className="w-12 h-12 rounded-lg object-cover border border-white/10"
-                          />
-                        )}
-                        <label className={`cursor-pointer text-xs font-medium px-4 py-2 rounded-xl transition ${
-                          files[key] ? 'bg-green-500/15 text-green-400 border border-green-500/20' : 'bg-brand/10 text-brand border border-brand/20 hover:bg-brand/20'
-                        }`}>
-                          {files[key] ? 'Replace File' : 'Choose File'}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={(e) => handleFileChange(key, e.target.files[0])}
-                          />
-                        </label>
+                    )}
+
+                    <div className="pt-2">
+                      <label className="label">KYC Document Verification Option</label>
+                      <div className="grid grid-cols-2 gap-3 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => setKycOption('college_id')}
+                          className={`py-3 rounded-xl border text-sm font-semibold transition ${
+                            kycOption === 'college_id'
+                              ? 'border-brand bg-brand/10 text-white'
+                              : 'border-white/10 bg-surface-2 text-white/40 hover:text-white'
+                          }`}
+                        >
+                          College ID Card
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setKycOption('aadhaar')}
+                          className={`py-3 rounded-xl border text-sm font-semibold transition ${
+                            kycOption === 'aadhaar'
+                              ? 'border-brand bg-brand/10 text-white'
+                              : 'border-white/10 bg-surface-2 text-white/40 hover:text-white'
+                          }`}
+                        >
+                          Aadhaar Card
+                        </button>
                       </div>
                     </div>
-                  ))}
+
+                    {kycOption === 'college_id' ? (
+                      <div>
+                        <label className="label"><FiBookOpen className="inline mr-1" />College/University Name</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="e.g. IIT Delhi, Christ University"
+                          value={collegeName}
+                          onChange={(e) => setCollegeName(e.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="label">12-Digit Aadhaar Number</label>
+                        <input
+                          type="text"
+                          maxLength={12}
+                          className="input-field font-mono tracking-wider"
+                          placeholder="e.g. 123456789012"
+                          value={aadhaarNumber}
+                          onChange={(e) => setAadhaarNumber(e.target.value.replace(/\D/g, ''))}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="divider opacity-20 my-2" />
+                  <h3 className="text-sm font-semibold text-white/80">Document Uploads</h3>
+
+                  <div className="space-y-4">
+                    {[
+                      { key: 'selfie', label: 'Renter Selfie Photo', show: true },
+                      { key: 'collegeId', label: 'College Student ID Card', show: kycOption === 'college_id' },
+                      { key: 'aadhaarFront', label: 'Aadhaar Card (Front Side)', show: kycOption === 'aadhaar' },
+                      { key: 'aadhaarBack', label: 'Aadhaar Card (Back Side)', show: kycOption === 'aadhaar' }
+                    ].map(({ key, label, show }) => {
+                      if (!show) return null
+                      return (
+                        <div key={key} className="card p-4 border border-white/5 bg-surface-1 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <div>
+                            <h4 className="text-xs font-semibold text-white/80">{label}</h4>
+                            <p className="text-[10px] text-white/40 mt-0.5">Maximum size 5MB. JPEG/PNG format preferred.</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {previews[key] && (
+                              <img
+                                src={previews[key]}
+                                alt={label}
+                                className="w-12 h-12 rounded-lg object-cover border border-white/10"
+                              />
+                            )}
+                            <label className={`cursor-pointer text-xs font-medium px-4 py-2 rounded-xl transition ${
+                              files[key] ? 'bg-green-500/15 text-green-400 border border-green-500/20' : 'bg-brand/10 text-brand border border-brand/20 hover:bg-brand/20'
+                            }`}>
+                              {files[key] ? 'Replace File' : 'Choose File'}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => handleFileChange(key, e.target.files[0])}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="flex items-center gap-3 pt-4">
                 <button onClick={handlePrev} className="btn-secondary w-1/3 py-3.5">Back</button>

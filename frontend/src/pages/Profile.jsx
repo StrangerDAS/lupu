@@ -16,7 +16,7 @@ import { profileSchema } from '../utils/schemas'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from '../firebase/config'
-import { getOwnerVehicles, subscribeToRenterBookings, subscribeToOwnerBookings, cancelBooking } from '../firebase/firestoreService'
+import { getOwnerVehicles, subscribeToRenterBookings, subscribeToOwnerBookings, cancelBooking, updateNotificationPreferences } from '../firebase/firestoreService'
 
 function StatusBadge({ status }) {
   const map = {
@@ -185,6 +185,24 @@ export default function Profile() {
     } catch (err) {
       console.error(err)
       toast.error('Failed to cancel booking')
+    }
+  }
+
+  const handleTogglePref = async (key) => {
+    const currentPrefs = user?.notificationPreferences || { booking: true, vehicle: true, payment: true, email: true }
+    const newPrefs = { ...currentPrefs, [key]: !currentPrefs[key] }
+    
+    // Optimistic UI update
+    updateUser({ notificationPreferences: newPrefs })
+    
+    try {
+      if (user?.uid) {
+        await updateNotificationPreferences(user.uid, newPrefs)
+        toast.success('Preferences updated', { id: 'pref-toast' })
+      }
+    } catch (err) {
+      toast.error('Failed to update preferences', { id: 'pref-toast' })
+      updateUser({ notificationPreferences: currentPrefs }) // rollback
     }
   }
 
@@ -431,6 +449,40 @@ export default function Profile() {
             </div>
           )}
         </div>
+
+        {/* Notification Settings */}
+        <div className="mt-12">
+          <h2 className="font-semibold mb-5 flex items-center gap-2">
+            <FiBell className="text-brand" /> Notification Settings
+          </h2>
+          <div className="card p-6 space-y-4">
+            <p className="text-xs text-white/50 mb-2">Control what you receive notifications for across LUPU.</p>
+            {[
+              { key: 'booking', label: 'Booking Updates', desc: 'Alerts about your rental requests and status changes.' },
+              { key: 'vehicle', label: 'Vehicle Updates', desc: 'Approvals, rejections, and live status of your vehicles.' },
+              { key: 'payment', label: 'Payment Receipts', desc: 'Confirmation of advances and final payments.' },
+              { key: 'email', label: 'Email Notifications', desc: 'Receive a copy of important alerts via email.' },
+            ].map(({ key, label, desc }) => {
+              const prefs = user?.notificationPreferences || { booking: true, vehicle: true, payment: true, email: true }
+              const isOn = prefs[key] !== false
+              return (
+                <div key={key} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0 last:pb-0">
+                  <div className="pr-4">
+                    <h4 className="text-sm font-semibold text-white/90">{label}</h4>
+                    <p className="text-[11px] text-white/40 mt-0.5">{desc}</p>
+                  </div>
+                  <button
+                    onClick={() => handleTogglePref(key)}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${isOn ? 'bg-brand' : 'bg-surface-3'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${isOn ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
       </div>
     </PageWrapper>
   )

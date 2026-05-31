@@ -89,10 +89,10 @@ service cloud.firestore {
     // ── /payments/{paymentId} ────────────────────────────────────────────────
     match /payments/{paymentId} {
       allow read: if isSignedIn() &&
-        (resource.data.userId == request.auth.uid || isAdminRole());
+        (resource.data.payerId == request.auth.uid || resource.data.userId == request.auth.uid || isAdminRole());
 
       allow create: if isSignedIn() &&
-        request.resource.data.userId == request.auth.uid;
+        (request.resource.data.payerId == request.auth.uid || request.resource.data.userId == request.auth.uid);
 
       allow update: if isAdminRole();
       allow delete: if isFounder();

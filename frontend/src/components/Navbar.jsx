@@ -3,13 +3,14 @@ import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HiMenuAlt3, HiX } from 'react-icons/hi'
 import { RiMotorbikeLine } from 'react-icons/ri'
-import { FiCalendar, FiBell, FiCheckSquare } from 'react-icons/fi'
+import { FiCalendar, FiBell, FiCheckSquare, FiMail } from 'react-icons/fi'
 import useAuthStore from '../store/authStore'
 import {
   subscribeToUserNotifications,
   markNotificationRead,
   markAllNotificationsRead
 } from '../firebase/firestoreService'
+import NotificationCenter from './NotificationCenter'
 
 const navLinks = [
   { label: 'Explore', to: '/explore' },
@@ -111,6 +112,15 @@ export default function Navbar() {
                   My Bookings
                 </NavLink>
 
+                {/* Inbox Button (Testing) */}
+                <Link
+                  to="/inbox"
+                  title="Simulated Email Inbox"
+                  className="btn-ghost p-2 text-white/60 hover:text-white rounded-xl"
+                >
+                  <FiMail size={18} />
+                </Link>
+
                 {/* Notifications Bell */}
                 <div className="relative">
                   <button
@@ -124,54 +134,12 @@ export default function Navbar() {
                       </span>
                     )}
                   </button>
-
-                  <AnimatePresence>
-                    {showNotifDropdown && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 10 }}
-                        className="absolute right-0 mt-3 w-80 glass border border-white/10 rounded-2xl p-4 shadow-xl z-50 max-h-96 overflow-y-auto"
-                      >
-                        <div className="flex items-center justify-between pb-3 border-b border-white/5 mb-3">
-                          <span className="font-semibold text-sm">Notifications</span>
-                          {unreadCount > 0 && (
-                            <button
-                              onClick={() => markAllNotificationsRead(user?._id)}
-                              className="text-xs text-brand hover:underline flex items-center gap-1"
-                            >
-                              <FiCheckSquare size={12} /> Mark all read
-                            </button>
-                          )}
-                        </div>
-                        <div className="space-y-2.5">
-                          {notifications.length === 0 ? (
-                            <p className="text-xs text-white/30 text-center py-4">No notifications yet</p>
-                          ) : (
-                            notifications.map((n) => (
-                              <div
-                                key={n._id}
-                                onClick={async () => {
-                                  if (!n.read) await markNotificationRead(n._id)
-                                  if (n.bookingId) navigate('/my-bookings')
-                                  setShowNotifDropdown(false)
-                                }}
-                                className={`p-3 rounded-xl cursor-pointer transition text-left ${
-                                  n.read ? 'bg-white/5 hover:bg-white/10' : 'bg-brand/10 border border-brand/20 hover:bg-brand/15'
-                                }`}
-                              >
-                                <div className="flex justify-between items-start gap-2">
-                                  <h4 className="font-semibold text-xs text-white/80">{n.title}</h4>
-                                  {!n.read && <span className="w-1.5 h-1.5 bg-brand rounded-full shrink-0 mt-1" />}
-                                </div>
-                                <p className="text-[11px] text-white/50 mt-1 leading-normal">{n.message}</p>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                  <NotificationCenter
+                    isOpen={showNotifDropdown}
+                    onClose={() => setShowNotifDropdown(false)}
+                    notifications={notifications}
+                    userId={user?._id}
+                  />
                 </div>
                 {dashLink && (
                   <Link to={dashLink.to} className="btn-ghost text-sm text-white/70">

@@ -37,6 +37,13 @@ export default function Login() {
         }
       });
     }
+
+    return () => {
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear();
+        window.recaptchaVerifier = null;
+      }
+    };
   }, [authMethod])
 
   const handleEmailLogin = async (e) => {
@@ -67,15 +74,27 @@ export default function Login() {
 
   const handleSendOtp = async (e) => {
     e.preventDefault()
-    if (!phoneNumber || phoneNumber.length < 10) return toast.error("Please enter a valid phone number with country code")
+    if (!phoneNumber || phoneNumber.length !== 10) return toast.error("Please enter a valid 10-digit phone number")
 
     setLoading(true)
     try {
       const appVerifier = window.recaptchaVerifier;
-      const confirmation = await signInWithPhoneNumber(auth, phoneNumber, appVerifier)
+      if (!appVerifier) throw new Error("RecaptchaVerifier is not initialized. Please refresh the page.");
+      
+      // Ensure the invisible reCAPTCHA is fully rendered before requesting the OTP
+      await appVerifier.render();
+
+      const formattedPhone = `+91${phoneNumber}`;
+      
+      console.log("PROJECT", auth.app.options.projectId);
+      console.log("VERIFIER", window.recaptchaVerifier);
+      console.log("RECAPTCHA_CONTAINER", document.getElementById("recaptcha-container"));
+
+      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier)
       setConfirmationResult(confirmation)
       toast.success("OTP sent successfully!")
     } catch (error) {
+      console.error("FULL OTP ERROR", error);
       toast.error(error.message || "Error sending OTP")
       if (window.recaptchaVerifier) {
         window.recaptchaVerifier.render().then(widgetId => {
@@ -182,19 +201,23 @@ export default function Login() {
               <form onSubmit={handleSendOtp} className="space-y-5">
                 <div>
                   <label className="label" htmlFor="phone">Phone Number</label>
-                  <div className="relative">
-                    <FiSmartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                  <div className="relative flex items-center">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-white/70 border-r border-white/10 pr-2 z-10 select-none">
+                      <span role="img" aria-label="India">🇮🇳</span> <span className="font-semibold">+91</span>
+                    </span>
                     <input
                       id="phone"
                       type="tel"
                       required
                       value={phoneNumber}
-                      onChange={(e) => setPhoneNumber(e.target.value)}
-                      placeholder="+91 9876543210"
-                      className="input-field pl-11"
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, '')
+                        if (val.length <= 10) setPhoneNumber(val)
+                      }}
+                      placeholder="7002630628"
+                      className="input-field pl-[84px]"
                     />
                   </div>
-                  <p className="text-xs text-white/40 mt-2">Include country code (e.g. +91)</p>
                 </div>
 
                 <motion.button

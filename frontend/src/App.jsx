@@ -5,6 +5,8 @@ import { AnimatePresence } from 'framer-motion'
 // Layouts
 import MainLayout from './layouts/MainLayout'
 import AuthLayout from './layouts/AuthLayout'
+import CustomerDashboard from './pages/CustomerDashboard'
+import SimulatedInbox from './pages/SimulatedInbox'
 
 // Route guards
 import ProtectedRoute from './components/ProtectedRoute'
@@ -30,7 +32,6 @@ const Verify            = lazy(() => import('./pages/Verify'))
 const VehicleDetail     = lazy(() => import('./pages/VehicleDetail'))
 const BookingFlow       = lazy(() => import('./pages/BookingFlow'))
 const OwnerDashboard    = lazy(() => import('./pages/OwnerDashboard'))
-const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'))
 const AdminPanel        = lazy(() => import('./pages/AdminPanel'))
 const Profile           = lazy(() => import('./pages/Profile'))
 const Login             = lazy(() => import('./pages/Login'))
@@ -171,6 +172,12 @@ export default function App() {
               emailVerified: firebaseUser.emailVerified,
               phoneVerified: !!firebaseUser.phoneNumber,
               phoneNumber:   firebaseUser.phoneNumber || '',
+              notificationPreferences: {
+                booking: true,
+                vehicle: true,
+                payment: true,
+                email: true
+              }
             }
             try {
               await setDoc(userRef, newUserData)
@@ -390,6 +397,16 @@ export default function App() {
             {/* ── Any authenticated user ──────────────────────────── */}
             <Route element={<ProtectedRoute />}>
               <Route path="/hub"                  element={<UserHub />} />
+              <Route path="/customer-dashboard" element={
+                  <ProtectedRoute allowedRoles={['user', 'admin']}>
+                    <CustomerDashboard />
+                  </ProtectedRoute>
+                } />
+                <Route path="/inbox" element={
+                  <ProtectedRoute allowedRoles={['user', 'admin']}>
+                    <SimulatedInbox />
+                  </ProtectedRoute>
+                } />
               <Route path="/verify"               element={<Verify />} />
               <Route path="/owner/setup"          element={<OwnerSetup />} />
               <Route path="/explore"              element={<Explore />} />
