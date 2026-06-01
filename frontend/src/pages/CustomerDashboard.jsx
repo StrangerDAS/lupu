@@ -28,7 +28,8 @@ import {
   submitUserKyc,
   updateUserKycStatus,
   sendEmailSimulation,
-  updateBookingStatus
+  updateBookingStatus,
+  addNotification
 } from '../firebase/firestoreService'
 import { doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase/config'
@@ -364,6 +365,70 @@ export default function CustomerDashboard() {
       })
 
       toast.success('Payment completed successfully!', { id: verifyToastId })
+
+      // Send notifications for payment success
+      try {
+        const renterId = booking.renterId || user._id
+        const renterName = booking.renterName || user.name || 'Renter'
+        const ownerId = booking.ownerId
+        const vehicleName = booking.vehicleName || 'Vehicle'
+
+        if (isAdvance) {
+          // 1. Notify Renter
+          await addNotification(renterId, {
+            title: 'Advance Payment Successful',
+            message: `Your advance payment of ₹${amount} for booking ${vehicleName} was successful!`,
+            bookingId: booking._id || booking.bookingId,
+            type: 'payment'
+          })
+
+          // 2. Notify Owner
+          if (ownerId) {
+            await addNotification(ownerId, {
+              title: 'Advance Payment Received',
+              message: `Renter ${renterName} paid the 25% advance of ₹${amount} for ${vehicleName}.`,
+              bookingId: booking._id || booking.bookingId,
+              type: 'payment'
+            })
+          }
+
+          // 3. Notify Admin
+          await addNotification('admin', {
+            title: 'Payment Received',
+            message: `Payment of ₹${amount} (Advance) received for booking ${booking._id || booking.bookingId}.`,
+            bookingId: booking._id || booking.bookingId,
+            type: 'payment'
+          })
+        } else {
+          // 1. Notify Renter
+          await addNotification(renterId, {
+            title: 'Final Payment Successful',
+            message: `Your final payment of ₹${amount} for booking ${vehicleName} was successful!`,
+            bookingId: booking._id || booking.bookingId,
+            type: 'payment'
+          })
+
+          // 2. Notify Owner
+          if (ownerId) {
+            await addNotification(ownerId, {
+              title: 'Final Payment Received',
+              message: `Renter ${renterName} paid the 75% final balance of ₹${amount} for ${vehicleName}.`,
+              bookingId: booking._id || booking.bookingId,
+              type: 'payment'
+            })
+          }
+
+          // 3. Notify Admin
+          await addNotification('admin', {
+            title: 'Payment Received',
+            message: `Payment of ₹${amount} (Final) received for booking ${booking._id || booking.bookingId}.`,
+            bookingId: booking._id || booking.bookingId,
+            type: 'payment'
+          })
+        }
+      } catch (notifErr) {
+        console.error('Failed to trigger payment notifications:', notifErr)
+      }
     } catch (err) {
       console.error('Error handling payment success:', err)
       toast.error('Payment succeeded but failed to update status in database. Contact support.', { id: verifyToastId })
