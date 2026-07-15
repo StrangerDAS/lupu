@@ -9,7 +9,6 @@ import StarRating from '../components/StarRating'
 import ReviewCard from '../components/ReviewCard'
 import RatingSummary from '../components/RatingSummary'
 import { useVehicle } from '../hooks/useVehicles'
-import { MOCK_VEHICLES } from '../utils/mockData'
 import useAuthStore from '../store/authStore'
 import {
   getVehicleReviews, submitReview, getFavorites, toggleFavorite,
@@ -41,8 +40,8 @@ export default function VehicleDetail() {
   const [eligibleBooking, setEligibleBooking] = useState(null)
   const [checkingEligibility, setCheckingEligibility] = useState(true)
 
-  // Fallback to mock data if API not available
-  const vehicle = fetched || MOCK_VEHICLES.find((v) => v._id === id) || MOCK_VEHICLES[0]
+  // The vehicle data comes purely from the API/Store
+  const vehicle = fetched
 
   // Determine availability: must be approved AND isLive
   const isApproved = vehicle?.status === 'approved'

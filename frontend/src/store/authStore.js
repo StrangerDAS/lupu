@@ -1,7 +1,5 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { signOut } from 'firebase/auth'
-import { auth } from '../firebase/config'
 import {
   isFounder     as _isFounder,
   isSuperAdmin  as _isSuperAdmin,
@@ -13,7 +11,7 @@ import {
 const STORAGE_KEY = 'uniride-auth'
 
 /**
- * useAuthStore — Zustand auth store with Firestore-driven RBAC.
+ * useAuthStore — Zustand auth store with Express/JWT-driven RBAC.
  *
  * ── Design decisions ─────────────────────────────────────────────────────────
  *
@@ -37,8 +35,8 @@ const useAuthStore = create(
   persist(
     (set, get) => ({
       // ── Persisted state ─────────────────────────────────────────────────
-      user:          null,   // Firestore-enriched user object
-      token:         null,   // Firebase ID token (JWT)
+      user:          null,   // User object from Express API
+      token:         null,   // JWT token from Express backend
       authReady:     false,  // Has Firebase resolved auth at least once?
       permissions:   [],     // Explicit permission strings
       accountStatus: null,   // 'active' | 'suspended' | 'banned'
@@ -104,14 +102,6 @@ const useAuthStore = create(
         // Wipe persisted localStorage (prevents restore on next page load)
         localStorage.removeItem(STORAGE_KEY)
         console.log('[AuthStore] 🗑️  localStorage cleared')
-
-        // Firebase signOut (terminates server-side session)
-        try {
-          await signOut(auth)
-          console.log('[AuthStore] ✅ Firebase signOut successful')
-        } catch (err) {
-          console.error('[AuthStore] ❌ Firebase signOut error (continuing):', err)
-        }
 
         // Redirect
         if (navigate) {

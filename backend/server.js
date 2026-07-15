@@ -1,21 +1,28 @@
 /**
- * LUPU — Mock API Server
+ * LUPU — Production API Server
  *
- * A fully functional mock Express server that provides realistic API responses
- * for the frontend to work without a real MongoDB backend.
+ * Phase 1.1: MongoDB-backed Express server.
+ * All data is persisted in MongoDB. Seeded on first boot if collections empty.
  *
  * Run: node server.js
- * All data is in-memory and resets on restart.
  */
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import jwt from 'jsonwebtoken'
+import mongoose from 'mongoose'
 import Razorpay from 'razorpay'
+
+import User from './models/User.js'
+import Vehicle from './models/Vehicle.js'
+import Booking from './models/Booking.js'
+import Accessory from './models/Accessory.js'
+import { seedDatabase } from './seed.js'
 
 const app = express()
 const PORT = process.env.PORT || 5001
-const JWT_SECRET = 'uniride-dev-secret-key'
+const JWT_SECRET = process.env.JWT_SECRET || 'lupu-dev-fallback-secret'
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lupu'
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID',
@@ -27,16 +34,15 @@ app.use(cors())
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
-// ── In-Memory Data Store ───────────────────────────────────
-const users = [
-  { _id: 'u1', name: 'Admin', email: 'admin@lupu.in', phone: '9876543210', role: 'admin', isRider: true, isOwner: true, otpVerified: true, createdAt: '2024-01-15' },
-  { _id: 'u2', name: 'Rahul Gogoi', email: 'rahul@lupu.in', phone: '9876543211', role: 'owner', isRider: true, isOwner: true, otpVerified: true, createdAt: '2024-02-15' },
-  { _id: 'u3', name: 'Priya Borah', email: 'priya@lupu.in', phone: '9876543212', role: 'user', isRider: true, isOwner: false, otpVerified: true, createdAt: '2024-03-01' },
-  { _id: 'u4', name: 'Anjali Das', email: 'anjali@lupu.in', phone: '9876543213', role: 'user', isRider: true, isOwner: false, otpVerified: true, createdAt: '2024-04-10' },
-]
+// ── Request logger ─────────────────────────────────────────
+app.use((req, _res, next) => {
+  console.log(`  → ${req.method} ${req.path}`)
+  next()
+})
 
 // ── OTP Store (in-memory, expires after 5 min) ────────────
-const otpStore = new Map()  // key: userId|type → { code, expiresAt, attempts }
+// Acceptable for Phase 1.1 — Phase 1.2 can move this to Redis
+const otpStore = new Map()
 const OTP_EXPIRY_MS = 5 * 60 * 1000
 const MAX_OTP_ATTEMPTS = 5
 
@@ -67,548 +73,754 @@ function verifyOTP(key, code) {
   return { valid: true }
 }
 
-const vehicles = [
-  {
-    _id: '1',
-    name: 'Royal Enfield Classic 350',
-    type: 'bike',
-    pricePerHour: 120,
-    pricePerDay: 800,
-    status: 'approved',
-    isLive: true,
-    rating: 4.8,
-    totalReviews: 24,
-    location: 'AT Road, Dibrugarh',
-    description:
-      'A well-maintained Royal Enfield Classic 350. Full-service history available. Helmet included. Perfect for long rides and city commuting.',
-    specs: { year: 2022, cc: 350, fuel: 'Petrol', transmission: 'Manual' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Rahul Gogoi', rating: 4.9, totalTrips: 47 },
-    owner: { name: 'Rahul Gogoi', rating: 4.9, totalTrips: 47 },
-  },
-  {
-    _id: '2',
-    name: 'Honda Activa 6G',
-    type: 'scooty',
-    pricePerHour: 55,
-    pricePerDay: 350,
-    status: 'approved',
-    isLive: true,
-    rating: 4.6,
-    totalReviews: 18,
-    location: 'Chowkidinghee, Dibrugarh',
-    description: 'Reliable Honda Activa — ideal for city errands and college commutes.',
-    specs: { year: 2023, cc: 110, fuel: 'Petrol', transmission: 'Automatic' },
-    images: [],
-    ownerId: { _id: 'u3', name: 'Priya Borah', rating: 4.7, totalTrips: 31 },
-    owner: { name: 'Priya Borah', rating: 4.7, totalTrips: 31 },
-  },
-  {
-    _id: '3',
-    name: 'Bajaj Pulsar NS200',
-    type: 'bike',
-    pricePerHour: 100,
-    pricePerDay: 650,
-    status: 'approved',
-    isLive: false,
-    rating: 4.5,
-    totalReviews: 9,
-    location: 'Graham Bazar, Dibrugarh',
-    description: 'Sporty Pulsar NS200 in great condition. Good for highway and city rides.',
-    specs: { year: 2021, cc: 200, fuel: 'Petrol', transmission: 'Manual' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Bikash Saikia', rating: 4.5, totalTrips: 12 },
-    owner: { name: 'Bikash Saikia', rating: 4.5, totalTrips: 12 },
-  },
-  {
-    _id: '4',
-    name: 'TVS Jupiter',
-    type: 'scooty',
-    pricePerHour: 49,
-    pricePerDay: 300,
-    status: 'approved',
-    isLive: true,
-    rating: 4.7,
-    totalReviews: 31,
-    location: 'Lahoal, Dibrugarh',
-    description: 'Comfortable TVS Jupiter with storage basket. Great for daily use.',
-    specs: { year: 2022, cc: 110, fuel: 'Petrol', transmission: 'Automatic' },
-    images: [],
-    ownerId: { _id: 'u4', name: 'Anjali Das', rating: 4.8, totalTrips: 22 },
-    owner: { name: 'Anjali Das', rating: 4.8, totalTrips: 22 },
-  },
-  {
-    _id: '5',
-    name: 'Yamaha FZ-S V3',
-    type: 'bike',
-    pricePerHour: 90,
-    pricePerDay: 580,
-    status: 'approved',
-    isLive: true,
-    rating: 4.4,
-    totalReviews: 7,
-    location: 'Barbari, Dibrugarh',
-    description: 'Yamaha FZ-S V3 with fuel injection. Smooth and fuel-efficient.',
-    specs: { year: 2022, cc: 149, fuel: 'Petrol', transmission: 'Manual' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Dipak Hazarika', rating: 4.3, totalTrips: 9 },
-    owner: { name: 'Dipak Hazarika', rating: 4.3, totalTrips: 9 },
-  },
-  {
-    _id: '6',
-    name: 'Suzuki Access 125',
-    type: 'scooty',
-    pricePerHour: 60,
-    pricePerDay: 380,
-    status: 'approved',
-    isLive: true,
-    rating: 4.9,
-    totalReviews: 42,
-    location: 'AT Road, Dibrugarh',
-    description: 'Premium Suzuki Access 125. Smooth, powerful, and comfortable for any ride.',
-    specs: { year: 2023, cc: 124, fuel: 'Petrol', transmission: 'Automatic' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Mrinali Gogoi', rating: 4.9, totalTrips: 55 },
-    owner: { name: 'Mrinali Gogoi', rating: 4.9, totalTrips: 55 },
-  },
-  {
-    _id: '7',
-    name: 'KTM Duke 200',
-    type: 'bike',
-    pricePerHour: 150,
-    pricePerDay: 950,
-    status: 'approved',
-    isLive: false,
-    rating: 4.3,
-    totalReviews: 5,
-    location: 'Chowkidinghee, Dibrugarh',
-    description: 'Aggressive KTM Duke 200 for thrill seekers. Excellent road performance.',
-    specs: { year: 2021, cc: 200, fuel: 'Petrol', transmission: 'Manual' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Kabir Ahmed', rating: 4.2, totalTrips: 6 },
-    owner: { name: 'Kabir Ahmed', rating: 4.2, totalTrips: 6 },
-  },
-  {
-    _id: '8',
-    name: 'Honda Dio',
-    type: 'scooty',
-    pricePerHour: 50,
-    pricePerDay: 320,
-    status: 'approved',
-    isLive: true,
-    rating: 4.6,
-    totalReviews: 16,
-    location: 'Graham Bazar, Dibrugarh',
-    description: 'Stylish Honda Dio. Lightweight and easy to manoeuvre.',
-    specs: { year: 2023, cc: 110, fuel: 'Petrol', transmission: 'Automatic' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Rupali Saikia', rating: 4.7, totalTrips: 18 },
-    owner: { name: 'Rupali Saikia', rating: 4.7, totalTrips: 18 },
-  },
-  {
-    _id: 'v-pending-1',
-    name: 'Hero Splendor Plus',
-    type: 'bike',
-    pricePerHour: 40,
-    pricePerDay: 250,
-    status: 'pending',
-    isLive: false,
-    rating: 0,
-    totalReviews: 0,
-    location: 'Mohanbari, Dibrugarh',
-    description: 'Budget-friendly Hero Splendor. Perfect for city commuting.',
-    specs: { year: 2023, cc: 100, fuel: 'Petrol', transmission: 'Manual' },
-    images: [],
-    ownerId: { _id: 'u2', name: 'Rahul Gogoi' },
-    owner: { name: 'Rahul Gogoi' },
-  },
-  {
-    _id: 'v-pending-2',
-    name: 'TVS Ntorq 125',
-    type: 'scooty',
-    pricePerHour: 65,
-    pricePerDay: 420,
-    status: 'pending',
-    isLive: false,
-    rating: 0,
-    totalReviews: 0,
-    location: 'AT Road, Dibrugarh',
-    description: 'Sporty TVS Ntorq with Bluetooth connectivity and race-tuned FI engine.',
-    specs: { year: 2024, cc: 124, fuel: 'Petrol', transmission: 'Automatic' },
-    images: [],
-    ownerId: { _id: 'u3', name: 'Priya Borah' },
-    owner: { name: 'Priya Borah' },
-  },
-]
-
-const accessories = [
-  { _id: 'a1', name: 'Full-Face Helmet', category: 'accessory', pricePerDay: 50, description: 'ISI-certified full-face helmet. Visor included.', availability: true, ownerId: { _id: 'u2', name: 'Rahul Gogoi' }, rating: 4.8, totalReviews: 15, location: 'AT Road, Dibrugarh', images: [] },
-  { _id: 'a2', name: 'Riding Gloves', category: 'accessory', pricePerDay: 30, description: 'Touch-screen compatible riding gloves. Good grip.', availability: true, ownerId: { _id: 'u2', name: 'Rahul Gogoi' }, rating: 4.5, totalReviews: 8, location: 'AT Road, Dibrugarh', images: [] },
-  { _id: 'a3', name: 'Rain Jacket (Waterproof)', category: 'accessory', pricePerDay: 60, description: 'Lightweight waterproof rain jacket for monsoon rides.', availability: true, ownerId: { _id: 'u3', name: 'Priya Borah' }, rating: 4.6, totalReviews: 12, location: 'Chowkidinghee, Dibrugarh', images: [] },
-  { _id: 'a4', name: 'Phone Mount (Handlebar)', category: 'accessory', pricePerDay: 20, description: 'Universal handlebar phone mount with anti-vibration.', availability: true, ownerId: { _id: 'u2', name: 'Rahul Gogoi' }, rating: 4.7, totalReviews: 20, location: 'Graham Bazar, Dibrugarh', images: [] },
-  { _id: 'a5', name: 'Knee Guards (Pair)', category: 'accessory', pricePerDay: 40, description: 'Hard-shell knee guards for safe riding.', availability: true, ownerId: { _id: 'u4', name: 'Anjali Das' }, rating: 4.4, totalReviews: 6, location: 'Lahoal, Dibrugarh', images: [] },
-  { _id: 'a6', name: 'Bungee Cord Net', category: 'accessory', pricePerDay: 15, description: 'Elastic cargo net for securing luggage on bikes.', availability: true, ownerId: { _id: 'u2', name: 'Rahul Gogoi' }, rating: 4.3, totalReviews: 9, location: 'AT Road, Dibrugarh', images: [] },
-]
-
-const bookings = [
-  { _id: 'b1', userId: { _id: 'u3', name: 'Priya Borah' }, items: [{ itemId: '2', name: 'Honda Activa 6G', type: 'vehicle', price: 350 }], startTime: '2024-05-10T09:00:00Z', endTime: '2024-05-10T18:00:00Z', status: 'completed', totalAmount: 495, agreementAccepted: true, agreementTimestamp: '2024-05-10T08:30:00Z' },
-  { _id: 'b2', userId: { _id: 'u3', name: 'Priya Borah' }, items: [{ itemId: '1', name: 'Royal Enfield Classic 350', type: 'vehicle', price: 800 }, { itemId: 'a1', name: 'Full-Face Helmet', type: 'accessory', price: 50 }], startTime: '2024-06-01T10:00:00Z', endTime: '2024-06-02T10:00:00Z', status: 'confirmed', totalAmount: 850, agreementAccepted: true, agreementTimestamp: '2024-06-01T09:00:00Z' },
-  { _id: 'b3', userId: { _id: 'u4', name: 'Anjali Das' }, items: [{ itemId: '1', name: 'Royal Enfield Classic 350', type: 'vehicle', price: 800 }], startTime: '2024-06-12T10:00:00Z', endTime: '2024-06-13T10:00:00Z', status: 'completed', totalAmount: 800, agreementAccepted: true, agreementTimestamp: '2024-06-12T09:00:00Z' },
-]
-
-let nextVehicleId = 100
-let nextBookingId = 100
-let nextAccessoryId = 100
-
 // ── Auth Helpers ───────────────────────────────────────────
 function generateToken(user) {
-  return jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '7d' })
+  return jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  })
 }
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const header = req.headers.authorization
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ message: 'Unauthorized' })
   }
   try {
     const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET)
-    req.user = users.find((u) => u._id === decoded.id)
-    if (!req.user) return res.status(401).json({ message: 'User not found' })
+    const user = await User.findById(decoded.id).lean()
+    if (!user) return res.status(401).json({ message: 'User not found' })
+    req.user = user
     next()
   } catch {
-    return res.status(401).json({ message: 'Invalid token' })
+    return res.status(401).json({ message: 'Invalid or expired token' })
   }
 }
 
 function safeUser(u) {
-  const { password, ...rest } = u
+  // eslint-disable-next-line no-unused-vars
+  const { password, __v, ...rest } = u
   return rest
 }
 
-// ── KYC Removed ──
-function kycRequired(req, res, next) {
+// KYC placeholder — not enforced in Phase 1.1
+function kycRequired(_req, _res, next) {
   next()
 }
 
 // ── Auth Routes ────────────────────────────────────────────
 
-app.post('/api/auth/send-otp', (req, res) => {
-  const { identifier } = req.body
-  if (!identifier) return res.status(400).json({ message: 'Email or phone required' })
-  
-  const key = identifier
-  const existing = otpStore.get(key)
-  if (existing && (existing.expiresAt - OTP_EXPIRY_MS + 60000) > Date.now()) {
-    return res.status(429).json({ message: 'OTP already sent. Please wait.' })
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { identifier } = req.body
+    if (!identifier) return res.status(400).json({ message: 'Email or phone required' })
+
+    const existing = otpStore.get(identifier)
+    if (existing && existing.expiresAt - OTP_EXPIRY_MS + 60000 > Date.now()) {
+      return res.status(429).json({ message: 'OTP already sent. Please wait 60 seconds.' })
+    }
+
+    const code = generateOTP()
+    storeOTP(identifier, code)
+    console.log(`  🔐 OTP for ${identifier}: ${code}`)
+    const response = { message: 'OTP sent successfully' }
+    if (process.env.NODE_ENV !== 'production') response._dev_otp = code
+    res.json(response)
+  } catch (err) {
+    console.error('send-otp error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  
-  const code = generateOTP()
-  storeOTP(key, code)
-  console.log(`  🔐 OTP for ${identifier}: ${code}`)
-  res.json({ message: 'OTP sent successfully', _dev_otp: code })
 })
 
-app.post('/api/auth/signup', (req, res) => {
-  const { identifier, otp, name, role = 'user' } = req.body
-  if (!name || !identifier || !otp) {
-    return res.status(400).json({ message: 'All fields are required' })
-  }
-  if (users.find((u) => u.email === identifier || u.phone === identifier)) {
-    return res.status(409).json({ message: 'Account already exists' })
-  }
-  
-  const result = verifyOTP(identifier, otp)
-  if (!result.valid) return res.status(400).json({ message: result.message })
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { identifier, otp, name, role = 'user' } = req.body
+    if (!name || !identifier || !otp) {
+      return res.status(400).json({ message: 'Name, identifier, and OTP are required' })
+    }
 
-  const isEmail = identifier.includes('@')
-  const newUser = {
-    _id: `u${Date.now()}`,
-    name, 
-    email: isEmail ? identifier : undefined,
-    phone: !isEmail ? identifier : undefined,
-    role: ['user', 'owner'].includes(role) ? role : 'user',
-    isRider: true,
-    isOwner: role === 'owner',
-    otpVerified: true,
-    createdAt: new Date().toISOString(),
+    const isEmail = identifier.includes('@')
+    const query = isEmail ? { email: identifier } : { phone: identifier }
+    const exists = await User.findOne(query)
+    if (exists) return res.status(409).json({ message: 'Account already exists. Please log in.' })
+
+    const result = verifyOTP(identifier, otp)
+    if (!result.valid) return res.status(400).json({ message: result.message })
+
+    const newUser = await User.create({
+      name,
+      email: isEmail ? identifier : undefined,
+      phone: !isEmail ? identifier : undefined,
+      role: ['user', 'owner'].includes(role) ? role : 'user',
+      isRider: true,
+      isOwner: role === 'owner',
+      otpVerified: true,
+    })
+
+    const token = generateToken(newUser)
+    res.status(201).json({ user: safeUser(newUser.toObject()), token })
+  } catch (err) {
+    console.error('signup error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Account already exists. Please log in.' })
+    }
+    res.status(500).json({ message: 'Internal server error' })
   }
-  users.push(newUser)
-  const token = generateToken(newUser)
-  res.status(201).json({ user: safeUser(newUser), token })
 })
 
-app.post('/api/auth/login', (req, res) => {
-  const { identifier, otp } = req.body
-  if (!identifier || !otp) return res.status(400).json({ message: 'Identifier and OTP required' })
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { identifier, otp } = req.body
+    if (!identifier || !otp) {
+      return res.status(400).json({ message: 'Identifier and OTP are required' })
+    }
 
-  const user = users.find((u) => u.email === identifier || u.phone === identifier)
-  if (!user) {
-    return res.status(404).json({ message: 'User not found. Please sign up.' })
+    const isEmail = identifier.includes('@')
+    const query = isEmail ? { email: identifier } : { phone: identifier }
+    const user = await User.findOne(query)
+    if (!user) return res.status(404).json({ message: 'User not found. Please sign up.' })
+
+    const result = verifyOTP(identifier, otp)
+    if (!result.valid) return res.status(400).json({ message: result.message })
+
+    await User.findByIdAndUpdate(user._id, { otpVerified: true })
+    const updatedUser = await User.findById(user._id).lean()
+
+    const token = generateToken(updatedUser)
+    res.json({ user: safeUser(updatedUser), token })
+  } catch (err) {
+    console.error('login error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-
-  const result = verifyOTP(identifier, otp)
-  if (!result.valid) return res.status(400).json({ message: result.message })
-
-  user.otpVerified = true
-  const token = generateToken(user)
-  res.json({ user: safeUser(user), token })
 })
 
 app.get('/api/auth/me', authMiddleware, (req, res) => {
   res.json(safeUser(req.user))
 })
 
-// ── Role Activation Routes ────────────────────────────────
-app.post('/api/user/activate-owner', authMiddleware, (req, res) => {
-  req.user.isOwner = true
-  if (req.user.role === 'user') req.user.role = 'owner'
-  res.json({ message: 'Owner role activated!', user: safeUser(req.user) })
+app.post('/api/auth/verify-contact', authMiddleware, async (req, res) => {
+  try {
+    const { identifier, otp } = req.body
+    if (!identifier || !otp) return res.status(400).json({ message: 'Identifier and OTP required' })
+
+    const validOtp = otpStore.get(identifier)
+    if (!validOtp || validOtp !== otp) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' })
+    }
+
+    otpStore.delete(identifier)
+
+    const isEmail = identifier.includes('@')
+    const updates = isEmail ? { emailVerified: true } : { phoneVerified: true, phone: identifier }
+    
+    const updatedUser = await User.findByIdAndUpdate(req.user._id, updates, { new: true, lean: true })
+    res.json({ message: 'Contact verified successfully', user: safeUser(updatedUser) })
+  } catch (err) {
+    console.error('Verify contact error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.post('/api/user/activate-rider', authMiddleware, (req, res) => {
-  req.user.isRider = true
-  res.json({ message: 'Rider role activated!', user: safeUser(req.user) })
+// ── Role Activation Routes ────────────────────────────────
+
+app.post('/api/user/activate-owner', authMiddleware, async (req, res) => {
+  try {
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { isOwner: true, role: req.user.role === 'user' ? 'owner' : req.user.role },
+      { new: true, lean: true }
+    )
+    res.json({ message: 'Owner role activated!', user: safeUser(updated) })
+  } catch (err) {
+    console.error('activate-owner error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.post('/api/user/activate-rider', authMiddleware, async (req, res) => {
+  try {
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { isRider: true },
+      { new: true, lean: true }
+    )
+    res.json({ message: 'Rider role activated!', user: safeUser(updated) })
+  } catch (err) {
+    console.error('activate-rider error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // ── Unified Items API ─────────────────────────────────────
-app.get('/api/items', (req, res) => {
-  const { type } = req.query
-  const vehicleItems = vehicles.filter(v => v.status === 'approved').map(v => ({ ...v, category: 'vehicle' }))
-  const accessoryItems = accessories.filter(a => a.availability).map(a => ({ ...a, category: 'accessory' }))
-  if (type === 'vehicle') return res.json({ items: vehicleItems })
-  if (type === 'accessory') return res.json({ items: accessoryItems })
-  res.json({ items: [...vehicleItems, ...accessoryItems] })
-})
 
-app.get('/api/items/:id', (req, res) => {
-  const v = vehicles.find(v => v._id === req.params.id)
-  if (v) return res.json({ ...v, category: 'vehicle' })
-  const a = accessories.find(a => a._id === req.params.id)
-  if (a) return res.json({ ...a, category: 'accessory' })
-  res.status(404).json({ message: 'Item not found' })
-})
-
-app.post('/api/items', authMiddleware, kycRequired, (req, res) => {
-  if (!req.user.isOwner) return res.status(403).json({ message: 'Activate owner role first.' })
-  const { name, type, pricePerDay, description, location } = req.body
-  if (type === 'accessory') {
-    const item = { _id: `a${nextAccessoryId++}`, name: name || 'Unnamed', category: 'accessory', pricePerDay: Number(pricePerDay) || 30, description: description || '', availability: true, ownerId: { _id: req.user._id, name: req.user.name }, rating: 0, totalReviews: 0, location: location || 'Dibrugarh', images: [] }
-    accessories.push(item)
-    return res.status(201).json(item)
+app.get('/api/items', async (req, res) => {
+  try {
+    const { type } = req.query
+    if (type === 'vehicle') {
+      const vehicles = await Vehicle.find({ status: 'approved' }).lean()
+      return res.json({ items: vehicles.map(v => ({ ...v, category: 'vehicle' })) })
+    }
+    if (type === 'accessory') {
+      const accessories = await Accessory.find({ availability: true }).lean()
+      return res.json({ items: accessories.map(a => ({ ...a, category: 'accessory' })) })
+    }
+    const [vehicles, accessories] = await Promise.all([
+      Vehicle.find({ status: 'approved' }).lean(),
+      Accessory.find({ availability: true }).lean(),
+    ])
+    const items = [
+      ...vehicles.map(v => ({ ...v, category: 'vehicle' })),
+      ...accessories.map(a => ({ ...a, category: 'accessory' })),
+    ]
+    res.json({ items })
+  } catch (err) {
+    console.error('GET /api/items error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  res.status(400).json({ message: 'Use /api/vehicles for vehicle listings.' })
+})
+
+app.get('/api/items/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    // Try Vehicle first, then Accessory
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const v = await Vehicle.findById(id).lean()
+      if (v) return res.json({ ...v, category: 'vehicle' })
+      const a = await Accessory.findById(id).lean()
+      if (a) return res.json({ ...a, category: 'accessory' })
+    }
+    res.status(404).json({ message: 'Item not found' })
+  } catch (err) {
+    console.error('GET /api/items/:id error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.post('/api/items', authMiddleware, kycRequired, async (req, res) => {
+  try {
+    if (!req.user.isOwner) {
+      return res.status(403).json({ message: 'Activate owner role first.' })
+    }
+    const { name, type, pricePerDay, description, location } = req.body
+    if (type === 'accessory') {
+      const item = await Accessory.create({
+        name: name || 'Unnamed',
+        category: 'accessory',
+        pricePerDay: Number(pricePerDay) || 30,
+        description: description || '',
+        availability: true,
+        ownerId: req.user._id,
+        owner: { name: req.user.name },
+        location: location || 'Dibrugarh',
+        images: [],
+      })
+      return res.status(201).json(item.toObject())
+    }
+    res.status(400).json({ message: 'Use /api/vehicles for vehicle listings.' })
+  } catch (err) {
+    console.error('POST /api/items error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // ── Vehicle Routes ─────────────────────────────────────────
-app.get('/api/vehicles', (req, res) => {
-  const approved = vehicles.filter((v) => v.status === 'approved')
-  res.json({ vehicles: approved })
-})
 
-app.get('/api/vehicles/my', authMiddleware, (req, res) => {
-  const owned = vehicles.filter(
-    (v) => v.ownerId?._id === req.user._id || v.ownerId === req.user._id
-  )
-  res.json({ vehicles: owned })
-})
-
-app.get('/api/vehicles/:id', (req, res) => {
-  const v = vehicles.find((v) => v._id === req.params.id)
-  if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-  res.json(v)
-})
-
-app.post('/api/vehicles', authMiddleware, kycRequired, (req, res) => {
-  const { name, type, pricePerHour, pricePerDay, location, description, year } = req.body
-  const newVehicle = {
-    _id: `v${nextVehicleId++}`,
-    name: name || 'Unnamed Vehicle',
-    type: type || 'bike',
-    pricePerHour: Number(pricePerHour) || 50,
-    pricePerDay: Number(pricePerDay) || 300,
-    status: 'pending',
-    isLive: true,
-    rating: 0,
-    totalReviews: 0,
-    location: location || 'Dibrugarh',
-    description: description || '',
-    specs: { year: Number(year) || 2024, fuel: 'Petrol', transmission: type === 'scooty' ? 'Automatic' : 'Manual' },
-    images: [],
-    ownerId: { _id: req.user._id, name: req.user.name },
-    owner: { name: req.user.name, rating: 4.5, totalTrips: 0 },
+app.get('/api/vehicles', async (req, res) => {
+  try {
+    const vehicles = await Vehicle.find({ status: 'approved' }).lean()
+    res.json({ vehicles })
+  } catch (err) {
+    console.error('GET /api/vehicles error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  vehicles.push(newVehicle)
-  res.status(201).json(newVehicle)
 })
 
-app.put('/api/vehicles/:id', authMiddleware, (req, res) => {
-  const idx = vehicles.findIndex((v) => v._id === req.params.id)
-  if (idx === -1) return res.status(404).json({ message: 'Vehicle not found' })
-  vehicles[idx] = { ...vehicles[idx], ...req.body }
-  res.json(vehicles[idx])
-})
-
-// ── Toggle Vehicle LIVE/OFFLINE status (owner only) ──────
-app.patch('/api/vehicles/:id/toggle-status', authMiddleware, (req, res) => {
-  const v = vehicles.find((v) => v._id === req.params.id)
-  if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-  // Only the owner can toggle
-  const ownerId = v.ownerId?._id || v.ownerId
-  if (ownerId !== req.user._id && req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Only the vehicle owner can change status' })
+app.get('/api/vehicles/my', authMiddleware, async (req, res) => {
+  try {
+    const vehicles = await Vehicle.find({ ownerId: req.user._id }).lean()
+    res.json({ vehicles })
+  } catch (err) {
+    console.error('GET /api/vehicles/my error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  v.isLive = !v.isLive
-  console.log(`  🔄 Vehicle ${v.name} is now ${v.isLive ? 'LIVE 🟢' : 'OFFLINE 🔴'}`)
-  res.json(v)
 })
 
-app.delete('/api/vehicles/:id', authMiddleware, (req, res) => {
-  const idx = vehicles.findIndex((v) => v._id === req.params.id)
-  if (idx === -1) return res.status(404).json({ message: 'Vehicle not found' })
-  vehicles.splice(idx, 1)
-  res.json({ message: 'Vehicle deleted' })
+app.get('/api/vehicles/:id', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const v = await Vehicle.findById(req.params.id).lean()
+    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+    res.json(v)
+  } catch (err) {
+    console.error('GET /api/vehicles/:id error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.post('/api/vehicles', authMiddleware, kycRequired, async (req, res) => {
+  try {
+    if (!req.user.isOwner) {
+      return res.status(403).json({ message: 'Activate owner role first.' })
+    }
+    const { name, type, pricePerHour, pricePerDay, location, description, year } = req.body
+    if (!name || !type || !pricePerHour || !location) {
+      return res.status(400).json({ message: 'name, type, pricePerHour, and location are required' })
+    }
+    const newVehicle = await Vehicle.create({
+      name,
+      type: type || 'bike',
+      pricePerHour: Number(pricePerHour) || 50,
+      pricePerDay: Number(pricePerDay) || 300,
+      status: 'pending',
+      isLive: true,
+      location: location || 'Dibrugarh',
+      description: description || '',
+      specs: {
+        year: Number(year) || new Date().getFullYear(),
+        fuel: 'Petrol',
+        transmission: type === 'scooty' ? 'Automatic' : 'Manual',
+      },
+      images: [],
+      ownerId: req.user._id,
+      owner: { name: req.user.name, rating: 0, totalTrips: 0 },
+    })
+    res.status(201).json(newVehicle.toObject())
+  } catch (err) {
+    console.error('POST /api/vehicles error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.put('/api/vehicles/:id', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const vehicle = await Vehicle.findById(req.params.id)
+    if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
+
+    const ownerId = vehicle.ownerId?.toString()
+    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Forbidden: not your vehicle' })
+    }
+
+    // Prevent status from being changed via this route (use admin routes instead)
+    const { status, ownerId: _ownerId, ...updateFields } = req.body
+    const updated = await Vehicle.findByIdAndUpdate(
+      req.params.id,
+      { $set: updateFields },
+      { new: true, runValidators: true, lean: true }
+    )
+    res.json(updated)
+  } catch (err) {
+    console.error('PUT /api/vehicles/:id error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.patch('/api/vehicles/:id/toggle-status', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const vehicle = await Vehicle.findById(req.params.id)
+    if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
+
+    const ownerId = vehicle.ownerId?.toString()
+    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only the vehicle owner can change status' })
+    }
+
+    vehicle.isLive = !vehicle.isLive
+    await vehicle.save()
+    console.log(`  🔄 Vehicle ${vehicle.name} is now ${vehicle.isLive ? 'LIVE 🟢' : 'OFFLINE 🔴'}`)
+    res.json(vehicle.toObject())
+  } catch (err) {
+    console.error('PATCH toggle-status error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.delete('/api/vehicles/:id', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const vehicle = await Vehicle.findById(req.params.id)
+    if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
+
+    const ownerId = vehicle.ownerId?.toString()
+    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Forbidden: not your vehicle' })
+    }
+
+    await Vehicle.findByIdAndDelete(req.params.id)
+    res.json({ message: 'Vehicle deleted' })
+  } catch (err) {
+    console.error('DELETE /api/vehicles/:id error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // ── Booking Routes ─────────────────────────────────────────
-app.post('/api/bookings', authMiddleware, kycRequired, (req, res) => {
-  const { items: bookingItems, startTime, endTime, agreementAccepted, vehicleId } = req.body
-  // Enforce rental agreement
-  if (!agreementAccepted) {
-    return res.status(400).json({ message: 'You must accept the rental agreement to proceed.' })
-  }
-  const ms = new Date(endTime) - new Date(startTime)
-  const days = Math.max(1, Math.ceil(ms / (1000 * 60 * 60 * 24)))
-  const hours = Math.ceil(ms / (1000 * 60 * 60))
-  // Support both legacy single-vehicle and new multi-item
-  let resolvedItems = []
-  if (bookingItems && Array.isArray(bookingItems) && bookingItems.length > 0) {
-    for (const bi of bookingItems) {
-      const v = vehicles.find(x => x._id === bi.itemId)
-      const a = accessories.find(x => x._id === bi.itemId)
-      const item = v || a
-      if (!item) continue
-      const price = v ? (hours * (v.pricePerHour || 0)) : (days * (a.pricePerDay || 0))
-      resolvedItems.push({ itemId: item._id, name: item.name || v?.name, type: v ? 'vehicle' : 'accessory', price })
+
+app.post('/api/bookings', authMiddleware, kycRequired, async (req, res) => {
+  try {
+    const { items: bookingItems, startTime, endTime, agreementAccepted, vehicleId } = req.body
+
+    if (!agreementAccepted) {
+      return res.status(400).json({ message: 'You must accept the rental agreement to proceed.' })
     }
-  } else if (vehicleId) {
-    const v = vehicles.find(x => x._id === vehicleId)
-    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-    resolvedItems.push({ itemId: v._id, name: v.name, type: 'vehicle', price: hours * v.pricePerHour })
+    if (!startTime || !endTime) {
+      return res.status(400).json({ message: 'startTime and endTime are required.' })
+    }
+
+    const ms = new Date(endTime) - new Date(startTime)
+    if (ms <= 0) {
+      return res.status(400).json({ message: 'endTime must be after startTime.' })
+    }
+    const days = Math.max(1, Math.ceil(ms / (1000 * 60 * 60 * 24)))
+    const hours = Math.ceil(ms / (1000 * 60 * 60))
+
+    let resolvedItems = []
+
+    if (bookingItems && Array.isArray(bookingItems) && bookingItems.length > 0) {
+      for (const bi of bookingItems) {
+        // Try Vehicle first, then Accessory
+        let item = null
+        let itemType = null
+        let price = 0
+
+        if (mongoose.Types.ObjectId.isValid(bi.itemId)) {
+          const v = await Vehicle.findById(bi.itemId).lean()
+          if (v) {
+            item = v
+            itemType = 'vehicle'
+            price = hours * (v.pricePerHour || 0)
+          } else {
+            const a = await Accessory.findById(bi.itemId).lean()
+            if (a) {
+              item = a
+              itemType = 'accessory'
+              price = days * (a.pricePerDay || 0)
+            }
+          }
+        }
+
+        if (!item) continue
+        resolvedItems.push({
+          itemId: item._id.toString(),
+          name: item.name,
+          type: itemType,
+          price,
+        })
+      }
+    } else if (vehicleId) {
+      // Legacy single-vehicle support
+      if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
+        return res.status(404).json({ message: 'Vehicle not found' })
+      }
+      const v = await Vehicle.findById(vehicleId).lean()
+      if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+      resolvedItems.push({
+        itemId: v._id.toString(),
+        name: v.name,
+        type: 'vehicle',
+        price: hours * v.pricePerHour,
+      })
+    }
+
+    if (resolvedItems.length === 0) {
+      return res.status(400).json({ message: 'No valid items selected.' })
+    }
+
+    const totalAmount = resolvedItems.reduce((s, i) => s + i.price, 0)
+    const booking = await Booking.create({
+      userId: req.user._id,
+      items: resolvedItems,
+      startTime: new Date(startTime),
+      endTime: new Date(endTime),
+      status: 'confirmed',
+      totalAmount,
+      agreementAccepted: true,
+      agreementTimestamp: new Date(),
+    })
+
+    // Populate userId for response shape compatibility
+    const populated = await Booking.findById(booking._id).populate('userId', 'name').lean()
+    res.status(201).json(populated)
+  } catch (err) {
+    console.error('POST /api/bookings error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  if (resolvedItems.length === 0) return res.status(400).json({ message: 'No valid items selected.' })
-  const totalAmount = resolvedItems.reduce((s, i) => s + i.price, 0)
-  const booking = {
-    _id: `b${nextBookingId++}`,
-    userId: { _id: req.user._id, name: req.user.name },
-    items: resolvedItems,
-    startTime, endTime,
-    status: 'confirmed',
-    totalAmount,
-    agreementAccepted: true,
-    agreementTimestamp: new Date().toISOString(),
+})
+
+app.get('/api/bookings/my', authMiddleware, async (req, res) => {
+  try {
+    const bookings = await Booking.find({ userId: req.user._id })
+      .populate('userId', 'name')
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ bookings })
+  } catch (err) {
+    console.error('GET /api/bookings/my error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  bookings.push(booking)
-  res.status(201).json(booking)
 })
 
-app.get('/api/bookings/my', authMiddleware, (req, res) => {
-  const userBookings = bookings.filter((b) => b.userId?._id === req.user._id)
-  res.json({ bookings: userBookings })
-})
+app.get('/api/bookings', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role === 'admin') {
+      const bookings = await Booking.find()
+        .populate('userId', 'name')
+        .sort({ createdAt: -1 })
+        .lean()
+      return res.json({ bookings })
+    }
 
-app.get('/api/bookings', authMiddleware, (req, res) => {
-  if (req.user.role === 'admin') {
-    return res.json({ bookings })
+    // For owners — bookings that contain their vehicles
+    const ownerVehicles = await Vehicle.find({ ownerId: req.user._id }, '_id').lean()
+    const ownerVehicleIds = ownerVehicles.map(v => v._id.toString())
+    const bookings = await Booking.find({
+      'items.itemId': { $in: ownerVehicleIds },
+    })
+      .populate('userId', 'name')
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ bookings })
+  } catch (err) {
+    console.error('GET /api/bookings error:', err)
+    res.status(500).json({ message: 'Internal server error' })
   }
-  // For owners, return bookings on their vehicles
-  const ownerVehicleIds = vehicles
-    .filter((v) => v.ownerId?._id === req.user._id)
-    .map((v) => v._id)
-  const ownerBookings = bookings.filter((b) => ownerVehicleIds.includes(b.vehicleId?._id))
-  res.json({ bookings: ownerBookings })
 })
 
-app.get('/api/bookings/:id', authMiddleware, (req, res) => {
-  const b = bookings.find((b) => b._id === req.params.id)
-  if (!b) return res.status(404).json({ message: 'Booking not found' })
-  res.json(b)
+app.get('/api/bookings/:id', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+    const b = await Booking.findById(req.params.id).populate('userId', 'name').lean()
+    if (!b) return res.status(404).json({ message: 'Booking not found' })
+    res.json(b)
+  } catch (err) {
+    console.error('GET /api/bookings/:id error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.patch('/api/bookings/:id/cancel', authMiddleware, (req, res) => {
-  const b = bookings.find((b) => b._id === req.params.id)
-  if (!b) return res.status(404).json({ message: 'Booking not found' })
-  b.status = 'cancelled'
-  res.json(b)
+app.patch('/api/bookings/:id/cancel', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+    const b = await Booking.findById(req.params.id)
+    if (!b) return res.status(404).json({ message: 'Booking not found' })
+
+    if (b.userId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Forbidden: not your booking' })
+    }
+    if (b.status === 'cancelled') {
+      return res.status(400).json({ message: 'Booking is already cancelled' })
+    }
+
+    b.status = 'cancelled'
+    await b.save()
+    res.json(b.toObject())
+  } catch (err) {
+    console.error('PATCH /api/bookings/:id/cancel error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // ── User Routes ────────────────────────────────────────────
+
 app.get('/api/users/profile', authMiddleware, (req, res) => {
   res.json(safeUser(req.user))
 })
 
-app.put('/api/users/profile', authMiddleware, (req, res) => {
-  const idx = users.findIndex((u) => u._id === req.user._id)
-  const { name, email, phone } = req.body
-  if (name) users[idx].name = name
-  if (email) users[idx].email = email
-  if (phone) users[idx].phone = phone
-  res.json({ user: safeUser(users[idx]) })
+app.put('/api/users/profile', authMiddleware, async (req, res) => {
+  try {
+    const { name, email, phone, avatar, college, address, notificationPreferences } = req.body
+    const updates = {}
+    if (name !== undefined) updates.name = name
+    if (email !== undefined) updates.email = email
+    if (phone !== undefined) updates.phone = phone
+    if (avatar !== undefined) updates.avatar = avatar
+    if (college !== undefined) updates.college = college
+    if (address !== undefined) updates.address = address
+    if (notificationPreferences !== undefined) updates.notificationPreferences = notificationPreferences
+
+    const updated = await User.findByIdAndUpdate(req.user._id, updates, {
+      new: true,
+      runValidators: true,
+      lean: true,
+    })
+    res.json({ user: safeUser(updated) })
+  } catch (err) {
+    console.error('PUT /api/users/profile error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Email or phone already in use.' })
+    }
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.get('/api/users', authMiddleware, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
-  res.json({ users: users.map(safeUser) })
+app.post('/api/users/kyc', authMiddleware, async (req, res) => {
+  try {
+    const { collegeIdUrl, governmentIdUrl } = req.body
+    if (!collegeIdUrl && !governmentIdUrl) {
+      return res.status(400).json({ message: 'At least one ID is required' })
+    }
+    const updates = {
+      kycStatus: 'pending',
+      kycRejectionReason: null
+    }
+    if (collegeIdUrl) updates.collegeIdUrl = collegeIdUrl
+    if (governmentIdUrl) updates.governmentIdUrl = governmentIdUrl
+    
+    const updated = await User.findByIdAndUpdate(req.user._id, updates, { new: true, lean: true })
+    res.json({ message: 'KYC submitted successfully', user: safeUser(updated) })
+  } catch (err) {
+    console.error('KYC submit error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.patch('/api/users/:id/role', authMiddleware, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
-  const user = users.find((u) => u._id === req.params.id)
-  if (!user) return res.status(404).json({ message: 'User not found' })
-  user.role = req.body.role
-  res.json(safeUser(user))
+app.get('/api/users', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    const users = await User.find().lean()
+    res.json({ users: users.map(safeUser) })
+  } catch (err) {
+    console.error('GET /api/users error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.delete('/api/users/:id', authMiddleware, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
-  const idx = users.findIndex((u) => u._id === req.params.id)
-  if (idx === -1) return res.status(404).json({ message: 'User not found' })
-  users.splice(idx, 1)
-  res.json({ message: 'User deleted' })
+app.patch('/api/users/:id/role', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { role: req.body.role },
+      { new: true, runValidators: true, lean: true }
+    )
+    if (!updated) return res.status(404).json({ message: 'User not found' })
+    res.json(safeUser(updated))
+  } catch (err) {
+    console.error('PATCH /api/users/:id/role error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.delete('/api/users/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+    const deleted = await User.findByIdAndDelete(req.params.id)
+    if (!deleted) return res.status(404).json({ message: 'User not found' })
+    res.json({ message: 'User deleted' })
+  } catch (err) {
+    console.error('DELETE /api/users/:id error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.patch('/api/admin/users/:id/kyc', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    const { status, reason } = req.body
+    if (!['verified', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' })
+    }
+    const updates = { kycStatus: status }
+    if (status === 'rejected') updates.kycRejectionReason = reason || 'Your documents were rejected.'
+    else updates.kycRejectionReason = null
+    
+    const updated = await User.findByIdAndUpdate(req.params.id, updates, { new: true, lean: true })
+    if (!updated) return res.status(404).json({ message: 'User not found' })
+    res.json({ message: `KYC ${status}`, user: safeUser(updated) })
+  } catch (err) {
+    console.error('Admin KYC update error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // ── Admin Routes ───────────────────────────────────────────
-app.get('/api/admin/stats', authMiddleware, (req, res) => {
-  res.json({
-    users: users.length,
-    vehicles: vehicles.filter((v) => v.status === 'approved').length,
-    bookings: bookings.length,
-    pendingListings: vehicles.filter((v) => v.status === 'pending').length,
-  })
+
+app.get('/api/admin/stats', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    const [totalUsers, totalVehicles, totalBookings, pendingListings] = await Promise.all([
+      User.countDocuments(),
+      Vehicle.countDocuments({ status: 'approved' }),
+      Booking.countDocuments(),
+      Vehicle.countDocuments({ status: 'pending' }),
+    ])
+    res.json({ users: totalUsers, vehicles: totalVehicles, bookings: totalBookings, pendingListings })
+  } catch (err) {
+    console.error('GET /api/admin/stats error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.patch('/api/admin/vehicles/:id/approve', authMiddleware, (req, res) => {
-  const v = vehicles.find((v) => v._id === req.params.id)
-  if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-  v.status = 'approved'
-  res.json(v)
+app.patch('/api/admin/vehicles/:id/approve', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const v = await Vehicle.findByIdAndUpdate(
+      req.params.id,
+      { status: 'approved' },
+      { new: true, lean: true }
+    )
+    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+    res.json(v)
+  } catch (err) {
+    console.error('PATCH approve error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
-app.patch('/api/admin/vehicles/:id/reject', authMiddleware, (req, res) => {
-  const v = vehicles.find((v) => v._id === req.params.id)
-  if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-  v.status = 'rejected'
-  res.json(v)
+app.patch('/api/admin/vehicles/:id/reject', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const v = await Vehicle.findByIdAndUpdate(
+      req.params.id,
+      { status: 'rejected' },
+      { new: true, lean: true }
+    )
+    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+    res.json(v)
+  } catch (err) {
+    console.error('PATCH reject error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // ── Razorpay Payment Order Creation ────────────────────────
+
 app.post('/api/payments/create-order', authMiddleware, async (req, res) => {
   const { amount, receipt, notes } = req.body
   if (!amount) {
     return res.status(400).json({ message: 'Amount is required' })
   }
   try {
-    const keyId = process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID'
+    const keyId = process.env.RAZORPAY_KEY_ID || ''
     if (!keyId || keyId.startsWith('YOUR_') || keyId === '') {
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(500).json({ message: 'Razorpay key not configured for production' })
+      }
       const mockOrder = {
         id: `order_mock_${Date.now()}`,
         entity: 'order',
@@ -621,42 +833,85 @@ app.post('/api/payments/create-order', authMiddleware, async (req, res) => {
         attempts: 0,
         notes: notes || {},
         created_at: Math.floor(Date.now() / 1000),
-        isMock: true
+        isMock: true,
       }
       return res.status(200).json(mockOrder)
     }
-
     const options = {
-      amount: Math.round(amount * 100), // amount in paisa
+      amount: Math.round(amount * 100),
       currency: 'INR',
       receipt: receipt || `rcpt_${Date.now()}`,
-      notes: notes || {}
+      notes: notes || {},
     }
     const order = await razorpay.orders.create(options)
     res.status(200).json(order)
   } catch (error) {
-    console.error('Error creating Razorpay order:', error)
+    console.error('Razorpay order error:', error)
     res.status(500).json({ message: 'Failed to create order', error: error.message })
   }
 })
 
 // ── Health Check ───────────────────────────────────────────
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+
+app.get('/api/health', (_req, res) => {
+  const mongoStatus = mongoose.connection.readyState
+  const statusMap = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' }
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    mongodb: statusMap[mongoStatus] || 'unknown',
+  })
 })
 
-// ── Start ──────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log('')
-  console.log('  ╔══════════════════════════════════════════════╗')
-  console.log('  ║                                              ║')
-  console.log(`  ║   🏍️  LUPU API Server → http://localhost:${PORT}  ║`)
-  console.log('  ║                                              ║')
-  console.log('  ║   Test accounts:                             ║')
-  console.log('  ║   admin@lupu.in  / admin123  (Admin)        ║')
-  console.log('  ║   rahul@lupu.in  / owner123  (Owner)        ║')
-  console.log('  ║   priya@lupu.in  / user1234  (User)         ║')
-  console.log('  ║                                              ║')
-  console.log('  ╚══════════════════════════════════════════════╝')
-  console.log('')
+// ── 404 handler ────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ message: `Route not found: ${req.method} ${req.path}` })
 })
+
+// ── Global error handler ───────────────────────────────────
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled error:', err)
+  res.status(500).json({ message: 'Internal server error' })
+})
+
+
+
+// ── Start ──────────────────────────────────────────────────
+async function start() {
+  try {
+    console.log('')
+    console.log('  🔌 Connecting to MongoDB...')
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    })
+    console.log(`  ✅ MongoDB connected: ${MONGODB_URI.replace(/\/\/.*@/, '//***@')}`)
+
+    await seedDatabase()
+
+    app.listen(PORT, () => {
+      console.log('')
+      console.log('  ╔══════════════════════════════════════════════════╗')
+      console.log('  ║                                                  ║')
+      console.log(`  ║   🏍️  LUPU API  →  http://localhost:${PORT}          ║`)
+      console.log('  ║   📦  Storage   →  MongoDB (persistent)          ║')
+      console.log('  ║   🔑  Auth      →  OTP (in-memory, 5 min TTL)   ║')
+      console.log('  ║                                                  ║')
+      console.log('  ╚══════════════════════════════════════════════════╝')
+      console.log('')
+    })
+  } catch (err) {
+    console.error('  ❌ Failed to connect to MongoDB:', err.message)
+    console.error('  💡 Check that MongoDB is running or update MONGODB_URI in .env')
+    process.exit(1)
+  }
+}
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  await mongoose.connection.close()
+  console.log('\n  👋 MongoDB disconnected. Server stopped.')
+  process.exit(0)
+})
+
+start()

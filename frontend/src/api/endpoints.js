@@ -6,6 +6,7 @@ export const authAPI = {
   signup: (data) => api.post('/auth/signup', data),
   me: () => api.get('/auth/me'),
   sendOtp: (data) => api.post('/auth/send-otp', data),
+  verifyContact: (data) => api.post('/auth/verify-contact', data),
 }
 
 /* ── Vehicles ───────────────────────────────────────────── */
@@ -39,6 +40,9 @@ export const userAPI = {
   getAll: () => api.get('/users'),            // admin
   updateRole: (id, role) => api.patch(`/users/${id}/role`, { role }),
   deleteUser: (id) => api.delete(`/users/${id}`),
+  submitKyc: (data) => api.post('/users/kyc', data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
 }
 
 /* ── Admin ──────────────────────────────────────────────── */

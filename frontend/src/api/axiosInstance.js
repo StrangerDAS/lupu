@@ -1,6 +1,4 @@
 import axios from 'axios'
-import { signOut } from 'firebase/auth'
-import { auth } from '../firebase/config'
 import useAuthStore from '../store/authStore'
 
 // Base axios instance (only used for the legacy mock REST API, not Firestore)
@@ -18,18 +16,13 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle 401 — token expired or invalid → full Firebase + Zustand logout
+// Handle 401 — token expired or invalid → full Zustand logout
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     if (error.response?.status === 401) {
       if (import.meta.env.DEV) {
         console.warn('[Axios] ⚠️ 401 received — forcing full logout (token expired)')
-      }
-      try {
-        await signOut(auth) // terminate Firebase session
-      } catch (err) {
-        console.error('[Axios] ❌ Firebase signOut failed during 401 handling:', err)
       }
       // Clear Zustand + localStorage
       useAuthStore.getState().logout()

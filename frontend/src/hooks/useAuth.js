@@ -3,9 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authAPI } from '../api/endpoints'
-import { auth } from '../firebase/config'
-import { signOut } from 'firebase/auth'
-
 /**
  * useAuth — convenience wrapper around the auth store + API calls.
  *
@@ -32,9 +29,8 @@ export function useAuth() {
     return u
   }, [setAuth])
 
-  const logout = useCallback(async () => {
+  const logout = useCallback(() => {
     try {
-      await signOut(auth)
       storeLogout()
       toast.success('Logged out')
       navigate('/')

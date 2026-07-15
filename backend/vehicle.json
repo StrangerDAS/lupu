@@ -1,0 +1,29 @@
+{
+  "_id": "6a578ce5f7dd9a97440d66b4",
+  "name": "Royal Enfield Classic 350",
+  "type": "bike",
+  "pricePerHour": 120,
+  "pricePerDay": 800,
+  "description": "A well-maintained Royal Enfield Classic 350. Full-service history available. Helmet included. Perfect for long rides and city commuting.",
+  "location": "AT Road, Dibrugarh",
+  "images": [],
+  "specs": {
+    "year": 2022,
+    "cc": 350,
+    "fuel": "Petrol",
+    "transmission": "Manual"
+  },
+  "status": "approved",
+  "isLive": true,
+  "rating": 4.8,
+  "totalReviews": 24,
+  "ownerId": "6a578ce4f7dd9a97440d66a9",
+  "owner": {
+    "name": "Owner User",
+    "rating": 4.9,
+    "totalTrips": 47
+  },
+  "__v": 0,
+  "createdAt": "2026-07-15T13:36:37.018Z",
+  "updatedAt": "2026-07-15T13:36:37.018Z"
+}

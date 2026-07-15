@@ -1,108 +1,39 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiMail, FiLoader, FiLock, FiSmartphone, FiCheckCircle } from 'react-icons/fi'
+import { FiMail, FiLoader, FiSmartphone, FiCheckCircle, FiUser } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
-import { auth, googleProvider } from '../firebase/config'
-import { 
-  createUserWithEmailAndPassword, 
-  signInWithPopup, 
-  RecaptchaVerifier, 
-  signInWithPhoneNumber,
-  sendEmailVerification
-} from 'firebase/auth'
+import { authAPI } from '../api/endpoints'
 
 export default function Signup() {
   const navigate = useNavigate()
+  const { setAuth } = useAuthStore()
   
   const [authMethod, setAuthMethod] = useState('email') // 'email' | 'phone'
   const [loading, setLoading] = useState(false)
   
-  // Email states
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  
-  // Phone states
-  const [phoneNumber, setPhoneNumber] = useState('')
+  const [name, setName] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [otp, setOtp] = useState('')
-  const [confirmationResult, setConfirmationResult] = useState(null)
-
-  useEffect(() => {
-    if (authMethod === 'phone' && !window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        'size': 'invisible',
-        'callback': () => {
-          // reCAPTCHA solved
-        }
-      });
-    }
-
-    return () => {
-      if (window.recaptchaVerifier) {
-        window.recaptchaVerifier.clear();
-        window.recaptchaVerifier = null;
-      }
-    };
-  }, [authMethod])
-
-  const handleEmailSignup = async (e) => {
-    e.preventDefault()
-    if (!email.includes('@')) return toast.error("Please enter a valid email")
-    if (password.length < 6) return toast.error("Password must be at least 6 characters")
-
-    setLoading(true)
-    try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password)
-      await sendEmailVerification(userCredential.user)
-      toast.success("Verification email sent. Please verify your email.")
-      navigate('/verify')
-    } catch (error) {
-      toast.error(error.message || "Error creating account")
-    }
-    setLoading(false)
-  }
-
-  const handleGoogleSignup = async () => {
-    setLoading(true)
-    try {
-      await signInWithPopup(auth, googleProvider)
-      toast.success("Successfully signed up with Google!")
-    } catch (error) {
-      toast.error(error.message || "Error with Google sign-up")
-    }
-    setLoading(false)
-  }
+  const [otpSent, setOtpSent] = useState(false)
 
   const handleSendOtp = async (e) => {
     e.preventDefault()
-    if (!phoneNumber || phoneNumber.length !== 10) return toast.error("Please enter a valid 10-digit phone number")
+    if (!name.trim()) return toast.error("Please enter your name")
+    if (authMethod === 'email' && !identifier.includes('@')) return toast.error("Please enter a valid email")
+    if (authMethod === 'phone' && identifier.length !== 10) return toast.error("Please enter a valid 10-digit phone number")
 
     setLoading(true)
     try {
-      const appVerifier = window.recaptchaVerifier;
-      if (!appVerifier) throw new Error("RecaptchaVerifier is not initialized. Please refresh the page.");
-      
-      // Ensure the invisible reCAPTCHA is fully rendered before requesting the OTP
-      await appVerifier.render();
-
-      const formattedPhone = `+91${phoneNumber}`;
-      
-      console.log("PROJECT", auth.app.options.projectId);
-      console.log("VERIFIER", window.recaptchaVerifier);
-      console.log("RECAPTCHA_CONTAINER", document.getElementById("recaptcha-container"));
-
-      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier)
-      setConfirmationResult(confirmation)
+      const res = await authAPI.sendOtp({ identifier })
+      if (res.data._dev_otp) {
+        console.log('DEV OTP:', res.data._dev_otp) // For easy testing
+      }
+      setOtpSent(true)
       toast.success("OTP sent successfully!")
     } catch (error) {
-      console.error("FULL OTP ERROR", error);
-      toast.error(error.message || "Error sending OTP")
-      if (window.recaptchaVerifier) {
-        window.recaptchaVerifier.render().then(widgetId => {
-          window.grecaptcha.reset(widgetId);
-        });
-      }
+      toast.error(error.response?.data?.message || "Error sending OTP")
     }
     setLoading(false)
   }
@@ -113,10 +44,12 @@ export default function Signup() {
 
     setLoading(true)
     try {
-      await confirmationResult.confirm(otp)
-      toast.success("Phone verified and account created!")
+      const { data } = await authAPI.signup({ identifier, otp, name, role: 'user' })
+      setAuth(data.user, data.token)
+      toast.success("Account created successfully!")
+      navigate('/verify')
     } catch (error) {
-      toast.error("Invalid OTP")
+      toast.error(error.response?.data?.message || "Invalid OTP")
     }
     setLoading(false)
   }
@@ -135,146 +68,125 @@ export default function Signup() {
       <div className="card p-8 shadow-2xl">
         
         {/* Auth Method Toggle */}
-        <div className="flex rounded-lg bg-white/5 p-1 mb-6">
-          <button
-            onClick={() => setAuthMethod('email')}
-            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${authMethod === 'email' ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}
-          >
-            Email
-          </button>
-          <button
-            onClick={() => { setAuthMethod('phone'); setConfirmationResult(null); }}
-            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${authMethod === 'phone' ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}
-          >
-            Phone
-          </button>
-        </div>
-
-        {authMethod === 'email' ? (
-          <form onSubmit={handleEmailSignup} className="space-y-5">
-            <div>
-              <label className="label" htmlFor="email">Email address</label>
-              <div className="relative">
-                <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="input-field pl-11"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="label" htmlFor="password">Password</label>
-              <div className="relative">
-                <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a password"
-                  className="input-field pl-11"
-                  minLength={6}
-                />
-              </div>
-            </div>
-
-            <motion.button
-              type="submit"
-              disabled={loading}
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.98 }}
-              className="btn-primary w-full py-3.5 text-base disabled:opacity-60 flex justify-center items-center gap-2"
+        {!otpSent && (
+          <div className="flex rounded-lg bg-white/5 p-1 mb-6">
+            <button
+              onClick={() => { setAuthMethod('email'); setIdentifier(''); }}
+              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${authMethod === 'email' ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}
             >
-              {loading && <FiLoader className="animate-spin" />}
-              {loading ? 'Creating account…' : 'Sign up'}
-            </motion.button>
-          </form>
-        ) : (
-          <div className="space-y-5">
-            <div id="recaptcha-container"></div>
-            
-            {!confirmationResult ? (
-              <form onSubmit={handleSendOtp} className="space-y-5">
-                <div>
-                  <label className="label" htmlFor="phone">Phone Number</label>
-                  <div className="relative flex items-center">
+              Email
+            </button>
+            <button
+              onClick={() => { setAuthMethod('phone'); setIdentifier(''); }}
+              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${authMethod === 'phone' ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}
+            >
+              Phone
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-5">
+          {!otpSent ? (
+            <form onSubmit={handleSendOtp} className="space-y-5">
+              <div>
+                <label className="label" htmlFor="name">Full Name</label>
+                <div className="relative">
+                  <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                  <input
+                    id="name"
+                    type="text"
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="John Doe"
+                    className="input-field pl-11"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="label" htmlFor="identifier">
+                  {authMethod === 'email' ? 'Email address' : 'Phone Number'}
+                </label>
+                <div className="relative flex items-center">
+                  {authMethod === 'email' ? (
+                    <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                  ) : (
                     <span className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-white/70 border-r border-white/10 pr-2 z-10 select-none">
                       <span role="img" aria-label="India">🇮🇳</span> <span className="font-semibold">+91</span>
                     </span>
-                    <input
-                      id="phone"
-                      type="tel"
-                      required
-                      value={phoneNumber}
-                      onChange={(e) => {
+                  )}
+                  
+                  <input
+                    id="identifier"
+                    type={authMethod === 'email' ? "email" : "tel"}
+                    required
+                    value={identifier}
+                    onChange={(e) => {
+                      if (authMethod === 'phone') {
                         const val = e.target.value.replace(/\D/g, '')
-                        if (val.length <= 10) setPhoneNumber(val)
-                      }}
-                      placeholder="7002630628"
-                      className="input-field pl-[84px]"
-                    />
-                  </div>
+                        if (val.length <= 10) setIdentifier(val)
+                      } else {
+                        setIdentifier(e.target.value)
+                      }
+                    }}
+                    placeholder={authMethod === 'email' ? "you@example.com" : "7002630628"}
+                    className={`input-field ${authMethod === 'email' ? 'pl-11' : 'pl-[84px]'}`}
+                  />
                 </div>
+              </div>
 
-                <motion.button
-                  type="submit"
-                  disabled={loading}
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="btn-primary w-full py-3.5 text-base disabled:opacity-60 flex justify-center items-center gap-2"
-                >
-                  {loading && <FiLoader className="animate-spin" />}
-                  {loading ? 'Sending OTP…' : 'Send OTP'}
-                </motion.button>
-              </form>
-            ) : (
-              <form onSubmit={handleVerifyOtp} className="space-y-5">
-                <div>
-                  <label className="label" htmlFor="otp">Enter 6-digit OTP</label>
-                  <div className="relative">
-                    <FiCheckCircle className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-                    <input
-                      id="otp"
-                      type="text"
-                      required
-                      value={otp}
-                      onChange={(e) => setOtp(e.target.value)}
-                      placeholder="123456"
-                      className="input-field pl-11 tracking-widest"
-                      maxLength={6}
-                    />
-                  </div>
+              <motion.button
+                type="submit"
+                disabled={loading}
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.98 }}
+                className="btn-primary w-full py-3.5 text-base disabled:opacity-60 flex justify-center items-center gap-2"
+              >
+                {loading && <FiLoader className="animate-spin" />}
+                {loading ? 'Sending OTP…' : 'Send OTP'}
+              </motion.button>
+            </form>
+          ) : (
+            <form onSubmit={handleVerifyOtp} className="space-y-5">
+              <div>
+                <label className="label" htmlFor="otp">Enter 6-digit OTP sent to {identifier}</label>
+                <div className="relative">
+                  <FiCheckCircle className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
+                  <input
+                    id="otp"
+                    type="text"
+                    required
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value)}
+                    placeholder="123456"
+                    className="input-field pl-11 tracking-widest"
+                    maxLength={6}
+                  />
                 </div>
+              </div>
 
-                <motion.button
-                  type="submit"
-                  disabled={loading}
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.98 }}
-                  className="btn-primary w-full py-3.5 text-base disabled:opacity-60 flex justify-center items-center gap-2"
-                >
-                  {loading && <FiLoader className="animate-spin" />}
-                  {loading ? 'Verifying…' : 'Verify & Sign Up'}
-                </motion.button>
-                
-                <button
-                  type="button"
-                  onClick={() => setConfirmationResult(null)}
-                  className="w-full text-sm text-brand mt-2"
-                >
-                  Change Phone Number
-                </button>
-              </form>
-            )}
-          </div>
-        )}
+              <motion.button
+                type="submit"
+                disabled={loading}
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.98 }}
+                className="btn-primary w-full py-3.5 text-base disabled:opacity-60 flex justify-center items-center gap-2"
+              >
+                {loading && <FiLoader className="animate-spin" />}
+                {loading ? 'Verifying…' : 'Verify & Sign Up'}
+              </motion.button>
+              
+              <button
+                type="button"
+                onClick={() => setOtpSent(false)}
+                className="w-full text-sm text-brand mt-2"
+              >
+                Change {authMethod === 'email' ? 'Email' : 'Phone Number'}
+              </button>
+            </form>
+          )}
+        </div>
 
         <div className="mt-6">
           <div className="relative">
@@ -288,7 +200,7 @@ export default function Signup() {
 
           <div className="mt-6">
             <button
-              onClick={handleGoogleSignup}
+              onClick={() => toast('Google Sign-in disabled for Phase 2.', { icon: 'ℹ️' })}
               disabled={loading}
               className="w-full flex justify-center items-center gap-3 py-3 px-4 border border-white/10 rounded-xl hover:bg-white/5 transition-colors disabled:opacity-60 font-medium"
             >

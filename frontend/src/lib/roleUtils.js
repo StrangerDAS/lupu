@@ -43,7 +43,7 @@ export const atLeast = (user, minRole) =>
 /**
  * hasPermission — extensible permission gate.
  * Currently backed by role weight but can be expanded to
- * per-user `permissions[]` array stored in Firestore.
+ * per-user `permissions[]` array stored in MongoDB.
  */
 export const hasPermission = (user, permission) => {
   if (!user) return false

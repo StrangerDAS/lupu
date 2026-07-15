@@ -1,16 +1,14 @@
 import { create } from 'zustand'
-import { MOCK_VEHICLES } from '../utils/mockData'
-import { subscribeToAllVehicles } from '../firebase/firestoreService'
+import { vehicleAPI } from '../api/endpoints'
 
 /**
  * Vehicle store — holds vehicle list + active filters.
- * Uses Firestore real-time subscription with mock data fallback.
+ * Fetches data directly from the Express API (MongoDB).
  */
 const useVehicleStore = create((set, get) => ({
   vehicles: [],
   loading: false,
   error: null,
-  _unsubscribe: null,
 
   // Active filter state
   filters: {
@@ -33,44 +31,15 @@ const useVehicleStore = create((set, get) => ({
 
   setError: (error) => set({ error }),
 
-  /** Subscribe to Firestore vehicles (real-time). Falls back to mock data. */
-  subscribeVehicles: () => {
-    set({ loading: true, error: null })
-
-    // Clean up previous subscription
-    const prev = get()._unsubscribe
-    if (prev) prev()
-
-    const unsubscribe = subscribeToAllVehicles((vehicles) => {
-      if (vehicles.length > 0) {
-        set({ vehicles, loading: false })
-      } else {
-        // Fallback to mock data if Firestore is empty
-        set({ vehicles: MOCK_VEHICLES, loading: false })
-      }
-    })
-
-    set({ _unsubscribe: unsubscribe })
-    return unsubscribe
-  },
-
-  /** Legacy: Load vehicles from API (falls back to mock) */
-  fetchVehicles: async (apiCall) => {
+  /** Fetch vehicles from the Express API */
+  loadVehicles: async () => {
     set({ loading: true, error: null })
     try {
-      const data = await apiCall()
-      set({ vehicles: data, loading: false })
-    } catch {
-      set({ vehicles: MOCK_VEHICLES, loading: false })
-    }
-  },
-
-  /** Cleanup subscription */
-  unsubscribeVehicles: () => {
-    const unsub = get()._unsubscribe
-    if (unsub) {
-      unsub()
-      set({ _unsubscribe: null })
+      const response = await vehicleAPI.getAll()
+      set({ vehicles: response.data?.vehicles || [], loading: false })
+    } catch (err) {
+      console.error('Error fetching vehicles:', err)
+      set({ error: 'Could not load vehicles', loading: false, vehicles: [] })
     }
   },
 

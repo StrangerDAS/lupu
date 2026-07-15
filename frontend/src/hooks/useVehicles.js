@@ -1,22 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import useVehicleStore from '../store/vehicleStore'
-import { getVehicleById } from '../firebase/firestoreService'
-import { MOCK_VEHICLES } from '../utils/mockData'
+import { vehicleAPI } from '../api/endpoints'
 
 /**
- * useVehicles — subscribes to Firestore vehicles and exposes filter state.
- * Falls back to mock data if Firestore returns empty.
+ * useVehicles — loads vehicles from API and exposes filter state.
  */
 export function useVehicles() {
   const store = useVehicleStore()
-  const { subscribeVehicles, unsubscribeVehicles, getFiltered, filters, setFilter, clearFilters, loading } = store
+  const { loadVehicles, getFiltered, filters, setFilter, clearFilters, loading } = store
 
   useEffect(() => {
-    const unsub = subscribeVehicles()
-    return () => {
-      if (unsub) unsub()
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    loadVehicles()
+  }, [loadVehicles])
 
   return {
     vehicles: getFiltered(),
@@ -28,8 +23,8 @@ export function useVehicles() {
 }
 
 /**
- * useVehicle — fetches a single vehicle by ID from Firestore.
- * Falls back to store cache, then mock data.
+ * useVehicle — fetches a single vehicle by ID from the Express API.
+ * Falls back to store cache if available.
  */
 export function useVehicle(id) {
   const [vehicle, setVehicle] = useState(null)
@@ -39,29 +34,27 @@ export function useVehicle(id) {
   // Try to find from store first (avoid redundant fetch)
   const cached = useVehicleStore((s) => s.vehicles.find((v) => v._id === id))
 
-  const fetch = useCallback(async () => {
+  const fetchVehicle = useCallback(async () => {
+    if (!id) return
     if (cached) { setVehicle(cached); setLoading(false); return }
     setLoading(true)
     try {
-      const data = await getVehicleById(id)
-      if (data) {
-        setVehicle(data)
+      const response = await vehicleAPI.getById(id)
+      if (response.data) {
+        setVehicle(response.data)
       } else {
-        // Fallback to mock data
-        const mock = MOCK_VEHICLES.find((v) => v._id === id)
-        setVehicle(mock || MOCK_VEHICLES[0])
+        setVehicle(null)
       }
     } catch (err) {
       console.error('Error fetching vehicle:', err)
-      const mock = MOCK_VEHICLES.find((v) => v._id === id)
-      setVehicle(mock || MOCK_VEHICLES[0])
+      setVehicle(null)
       setError('Could not load vehicle')
     } finally {
       setLoading(false)
     }
   }, [id, cached])
 
-  useEffect(() => { fetch() }, [fetch])
+  useEffect(() => { fetchVehicle() }, [fetchVehicle])
 
   return { vehicle, loading, error }
 }

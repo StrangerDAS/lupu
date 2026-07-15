@@ -11,7 +11,6 @@ import { getVisibleModules, isFounder as checkFounder, isSuperAdmin as checkSupe
 
 // Firebase Services
 import { 
-  subscribeToAllUsers, 
   subscribeToAllVehicles, 
   subscribeToAllBookings, 
   subscribeToAllPayments, 
@@ -70,7 +69,6 @@ export default function AdminPanel() {
   useEffect(() => {
     setLoading(true)
     const unsubscribes = [
-      subscribeToAllUsers(setUsers),
       subscribeToAllVehicles(setVehicles),
       subscribeToAllBookings(setBookings),
       subscribeToAllPayments(setPayments),
@@ -126,12 +124,12 @@ export default function AdminPanel() {
   const renderActiveView = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <DashboardView users={users} vehicles={vehicles} bookings={bookings} disputes={disputes} tickets={tickets} reports={reports} adminActions={adminActions} />
+        return <DashboardView users={[]} vehicles={vehicles} bookings={bookings} disputes={disputes} tickets={tickets} reports={reports} adminActions={adminActions} />
       case 'founder':
         if (!checkFounder(user)) return <UnauthorizedMessage />
-        return <FounderDashboard users={users} vehicles={vehicles} bookings={bookings} payments={payments} />
+        return <FounderDashboard users={[]} vehicles={vehicles} bookings={bookings} payments={payments} />
       case 'users':
-        return <UsersView users={users} />
+        return <UsersView />
       case 'vehicles':
         return <VehiclesView vehicles={vehicles} />
       case 'bookings':

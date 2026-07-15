@@ -1,6 +1,10 @@
 import mongoose from 'mongoose'
-import bcrypt from 'bcryptjs'
 
+/**
+ * User schema — OTP-based authentication.
+ * No password field. Supports login via email OR phone.
+ * Roles: user | owner | admin
+ */
 const userSchema = new mongoose.Schema(
   {
     name: {
@@ -11,56 +15,62 @@ const userSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: [true, 'Email is required'],
       unique: true,
+      sparse: true,       // allows multiple docs with no email
       lowercase: true,
       trim: true,
     },
     phone: {
       type: String,
-      required: [true, 'Phone is required'],
+      unique: true,
+      sparse: true,       // allows multiple docs with no phone
       trim: true,
-    },
-    password: {
-      type: String,
-      required: [true, 'Password is required'],
-      minlength: 8,
-      select: false, // never return password by default
     },
     role: {
       type: String,
       enum: ['user', 'owner', 'admin'],
       default: 'user',
     },
-    avatar: String,
-    documents: {
-      licenseUrl: String,
-      idProofUrl: String,
-      verified: { type: Boolean, default: false },
+    isRider: {
+      type: Boolean,
+      default: true,
     },
-    // KYC verification fields
-    phoneVerified: { type: Boolean, default: false },
-    aadhaarVerified: { type: Boolean, default: false },
-    aadhaarMasked: { type: String, default: null },
+    isOwner: {
+      type: Boolean,
+      default: false,
+    },
+    otpVerified: {
+      type: Boolean,
+      default: false,
+    },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    phoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    avatar: String,
+    college: { type: String, trim: true, default: null },
+    address: { type: String, trim: true, default: null },
+    notificationPreferences: {
+      booking:  { type: Boolean, default: true },
+      vehicle:  { type: Boolean, default: true },
+      payment:  { type: Boolean, default: true },
+      email:    { type: Boolean, default: true },
+    },
+    // KYC fields
+    collegeIdUrl: { type: String, default: null },
+    governmentIdUrl: { type: String, default: null },
     kycStatus: {
       type: String,
-      enum: ['pending', 'verified', 'rejected'],
-      default: 'pending',
+      enum: ['unsubmitted', 'pending', 'verified', 'rejected'],
+      default: 'unsubmitted',
     },
+    kycRejectionReason: { type: String, default: null },
   },
   { timestamps: true }
 )
-
-// Hash password before saving
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next()
-  this.password = await bcrypt.hash(this.password, 12)
-  next()
-})
-
-// Compare password method
-userSchema.methods.comparePassword = async function (candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password)
-}
 
 export default mongoose.model('User', userSchema)

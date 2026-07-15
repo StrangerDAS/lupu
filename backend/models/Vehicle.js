@@ -1,5 +1,9 @@
 import mongoose from 'mongoose'
 
+/**
+ * Vehicle schema — matches live server.js behavior exactly.
+ * Includes isLive toggle and denormalized owner sub-object for fast reads.
+ */
 const vehicleSchema = new mongoose.Schema(
   {
     name: {
@@ -42,6 +46,10 @@ const vehicleSchema = new mongoose.Schema(
       enum: ['pending', 'approved', 'rejected'],
       default: 'pending',
     },
+    isLive: {
+      type: Boolean,
+      default: true,
+    },
     rating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     ownerId: {
@@ -49,12 +57,19 @@ const vehicleSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    // Denormalized for fast reads — updated when owner profile changes
+    owner: {
+      name: String,
+      rating: { type: Number, default: 0 },
+      totalTrips: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 )
 
-// Index for efficient querying
-vehicleSchema.index({ type: 1, status: 1, pricePerHour: 1 })
+// Indexes for common queries
+vehicleSchema.index({ type: 1, status: 1, isLive: 1 })
 vehicleSchema.index({ ownerId: 1 })
+vehicleSchema.index({ status: 1 })
 
 export default mongoose.model('Vehicle', vehicleSchema)
