@@ -9,18 +9,16 @@ import {
 } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
 import toast from 'react-hot-toast'
+import { getImageUrl } from '../utils/urlUtils'
 import PageWrapper from '../components/PageWrapper'
 import useAuthStore from '../store/authStore'
 import { BookingCardSkeleton, StatCardSkeleton } from '../components/Skeletons'
 import ReviewModal from '../components/ReviewModal'
 import {
-  subscribeToRenterBookings,
-  cancelBooking,
   subscribeToFavorites,
   toggleFavorite,
   getVehicleById,
   calculateRefund,
-  subscribeToRenterPayments,
   subscribeToUserNotifications,
   markNotificationRead,
   markAllNotificationsRead,
@@ -33,7 +31,8 @@ import {
 } from '../firebase/firestoreService'
 import { doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import { paymentAPI } from '../api/endpoints'
+import { paymentAPI, bookingAPI, safetyAPI } from '../api/endpoints'
+import DisputeModal from '../components/DisputeModal'
 
 /* ═══════════════════════════════════════════════════════════
    NAVIGATION ITEMS
@@ -146,6 +145,7 @@ export default function CustomerDashboard() {
   const [inspectBooking, setInspectBooking] = useState(null)
   const [cancelModalBooking, setCancelModalBooking] = useState(null)
   const [reviewBooking, setReviewBooking] = useState(null)
+  const [disputeBookingId, setDisputeBookingId] = useState(null)
   const [contactOwnerBooking, setContactOwnerBooking] = useState(null)
   const [simulatedPaymentOrder, setSimulatedPaymentOrder] = useState(null)
 
@@ -160,7 +160,7 @@ export default function CustomerDashboard() {
   // Developer mode simulation widget
   const [showSimulator, setShowSimulator] = useState(false)
 
-  /* ── Firestore Subscriptions ─────────────────────────── */
+  /* ── REST API Fetch & Short-polling ──────────────────── */
 
   useEffect(() => {
     if (!user?._id) {
@@ -176,21 +176,54 @@ export default function CustomerDashboard() {
       if (bookingsReady && notificationsReady) setLoading(false)
     }
 
-    // Subscribe Bookings
-    const unsubBookings = subscribeToRenterBookings(user._id, (data) => {
-      setBookings(data)
-      bookingsReady = true
-      checkReady()
-    })
+    const adaptBooking = (b) => {
+      const statusMap = {
+        requested: 'under_review',
+        accepted: 'accepted',
+        confirmed: 'advance_paid',
+        ready_for_pickup: 'ready_for_pickup',
+        ongoing: 'ongoing',
+        completed: 'completed',
+        cancelled: 'cancelled',
+        rejected: 'rejected'
+      }
+      return {
+        ...b,
+        bookingStatus: statusMap[b.status] || b.status
+      }
+    }
+
+    const fetchBookings = async () => {
+      try {
+        const { data } = await bookingAPI.myBookings()
+        setBookings((data.bookings || []).map(adaptBooking))
+      } catch (err) {
+        console.error('Error loading renter bookings:', err)
+      } finally {
+        bookingsReady = true
+        checkReady()
+      }
+    }
+
+    const fetchPayments = async () => {
+      try {
+        const { data } = await paymentAPI.getHistory()
+        setPayments(data.history || [])
+      } catch (err) {
+        console.error('Error fetching payments history:', err)
+      }
+    }
+
+    fetchBookings()
+    fetchPayments()
+    const intervalBookings = setInterval(() => {
+      fetchBookings()
+      fetchPayments()
+    }, 5000)
 
     // Subscribe Favorites
     const unsubFavs = subscribeToFavorites(user._id, (ids) => {
       setFavoriteIds(ids)
-    })
-
-    // Subscribe Payments
-    const unsubPayments = subscribeToRenterPayments(user._id, (data) => {
-      setPayments(data)
     })
 
     // Subscribe Notifications
@@ -200,19 +233,12 @@ export default function CustomerDashboard() {
       checkReady()
     })
 
-    // Subscribe Simulated Emails
-    const unsubEmails = subscribeToSimulatedEmails(user.email || 'renter@lupu.in', (data) => {
-      setSimulatedEmails(data)
-    })
-
     return () => {
-      unsubBookings()
+      clearInterval(intervalBookings)
       unsubFavs()
-      unsubPayments()
       unsubNotifs()
-      unsubEmails()
     }
-  }, [user?._id, user?.email])
+  }, [user?._id])
 
   // Resolve Favorite Vehicles detailed records
   useEffect(() => {
@@ -341,27 +367,13 @@ export default function CustomerDashboard() {
     const isAdvance = type === 'advance'
     const verifyToastId = toast.loading('Confirming transaction...')
     try {
-      const paymentRecord = {
-        paymentId: response.razorpay_payment_id,
+      // Call the MongoDB verification backend endpoint
+      await paymentAPI.verify({
         bookingId: booking._id || booking.bookingId,
-        payerId: user._id,
-        amount,
         type,
-        status: 'success',
         razorpayOrderId: response.razorpay_order_id,
         razorpayPaymentId: response.razorpay_payment_id,
-        description: isAdvance 
-          ? '25% Advance Booking Payment settled online' 
-          : 'Remaining 75% final payment dues settled online',
-        createdAt: serverTimestamp()
-      }
-
-      await setDoc(doc(db, 'payments', response.razorpay_payment_id), paymentRecord)
-
-      const nextStatus = isAdvance ? 'advance_paid' : 'fully_paid'
-      await updateDoc(doc(db, 'bookings', booking._id || booking.bookingId), {
-        bookingStatus: nextStatus,
-        updatedAt: serverTimestamp()
+        razorpaySignature: response.razorpay_signature
       })
 
       toast.success('Payment completed successfully!', { id: verifyToastId })
@@ -443,14 +455,10 @@ export default function CustomerDashboard() {
 
     const toastId = toast.loading('Initializing secure gateway...')
     try {
-      const orderRes = await paymentAPI.createOrder({
-        amount,
-        receipt: `rcpt_${booking._id || booking.bookingId}_${type}`,
-        notes: {
-          bookingId: booking._id || booking.bookingId,
-          type
-        }
-      })
+      const orderRes = await paymentAPI.createOrder(
+        booking._id || booking.bookingId,
+        type
+      )
       const order = orderRes.data
 
       toast.dismiss(toastId)
@@ -530,8 +538,8 @@ export default function CustomerDashboard() {
     setCancellingId(bookingId)
     setCancelModalBooking(null)
     try {
-      await cancelBooking(bookingId, 'renter')
-      toast.success('Request cancelled successfully')
+      await bookingAPI.updateStatus(bookingId, 'cancelled')
+      toast.success('Booking cancelled successfully')
     } catch (err) {
       console.error(err)
       toast.error('Failed to cancel request')
@@ -928,6 +936,12 @@ export default function CustomerDashboard() {
                                  Pay Remaining 75% (₹{b.pricing?.remaining || Math.round(b.totalPrice * 0.75)})
                                </button>
                              )}
+                             <button
+                               onClick={() => setDisputeBookingId(b._id || b.bookingId)}
+                               className="btn-secondary text-xs py-2 px-4 text-red-400/80 border-white/5 hover:bg-red-500/10 hover:text-red-400 transition"
+                             >
+                               Dispute
+                             </button>
                            </div>
                         </div>
                       )
@@ -1163,7 +1177,19 @@ export default function CustomerDashboard() {
                                     {p.type === 'refund' ? '-' : ''}₹{p.amount}
                                   </td>
                                   <td className="p-3 text-right">
-                                    <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-[10px] capitalize">{p.status}</span>
+                                    <div className="flex items-center justify-end gap-2">
+                                      <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-[10px] capitalize">{p.status}</span>
+                                      {p.status === 'success' && (
+                                        <a
+                                          href={`${import.meta.env.VITE_API_URL || '/api'}/payments/${p._id || p.transactionId}/invoice`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-brand hover:underline font-semibold text-[10px]"
+                                        >
+                                          Invoice
+                                        </a>
+                                      )}
+                                    </div>
                                   </td>
                                 </tr>
                               ))}
@@ -1220,7 +1246,7 @@ export default function CustomerDashboard() {
                             <Link to={`/vehicles/${v._id}`} className="block space-y-3">
                               <div className="w-full aspect-video rounded-xl bg-surface-2 overflow-hidden relative">
                                 {v.images?.[0] ? (
-                                  <img src={v.images[0]} alt={v.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                                  <img src={getImageUrl(v.images[0])} alt={v.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center">
                                     <Icon className="text-white/10 text-4xl" />
@@ -1698,6 +1724,13 @@ export default function CustomerDashboard() {
         booking={reviewBooking}
         currentUser={user}
         role="renter"
+      />
+
+      {/* Dispute Modal */}
+      <DisputeModal
+        isOpen={!!disputeBookingId}
+        onClose={() => setDisputeBookingId(null)}
+        bookingId={disputeBookingId}
       />
 
     </PageWrapper>

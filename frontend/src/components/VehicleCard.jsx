@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { FiClock, FiMapPin, FiStar, FiCheckCircle } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
+import { getImageUrl } from '../utils/urlUtils'
 
 /**
  * Vehicle card shown in explore grid and related listings.
@@ -41,7 +42,7 @@ export default function VehicleCard({ vehicle, index = 0 }) {
           <div className="relative h-48 bg-surface-2 overflow-hidden">
             {images?.[0] ? (
               <img
-                src={images[0]}
+                src={getImageUrl(images[0])}
                 alt={name}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
               />

@@ -35,3 +35,9 @@ Thumbs.db
 # Vercel
 .vercel
 **/.vercel
+
+# Backend — local uploads (use S3/Cloudinary in production)
+backend/uploads/
+
+# Backend — runtime files
+backend/server.pid

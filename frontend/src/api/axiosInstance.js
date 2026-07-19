@@ -1,7 +1,7 @@
 import axios from 'axios'
 import useAuthStore from '../store/authStore'
 
-// Base axios instance (only used for the legacy mock REST API, not Firestore)
+// Base axios instance configured to connect to the Express/MongoDB backend REST API
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 10000,

@@ -17,13 +17,13 @@ import { addVehicleSchema } from '../utils/schemas'
 import useAuthStore from '../store/authStore'
 import { StatCardSkeleton, BookingCardSkeleton } from '../components/Skeletons'
 import {
-  subscribeToOwnerVehicles, subscribeToOwnerBookings, subscribeToOwnerPayments,
-  addVehicle, updateVehicle, deleteVehicle, toggleVehicleLive, uploadVehicleImages,
-  updateBookingStatus, cancelBooking, addNotification,
   subscribeToUserNotifications, markNotificationRead, markAllNotificationsRead
 } from '../firebase/firestoreService'
+import { vehicleAPI, bookingAPI } from '../api/endpoints'
 import ReviewModal from '../components/ReviewModal'
 import EditVehicleModal from '../components/EditVehicleModal'
+import DisputeModal from '../components/DisputeModal'
+import { getImageUrl } from '../utils/urlUtils'
 
 /* ═══════════════════════════════════════════════════════════
    NAVIGATION ITEMS
@@ -49,15 +49,15 @@ function StatusBadge({ status }) {
     approved:             'bg-blue-500/10 text-blue-400 border border-blue-500/20',
     accepted:             'bg-blue-500/10 text-blue-400 border border-blue-500/20',
     ongoing:              'bg-brand/10 text-brand border border-brand/20',
-    completed:            'bg-green-500/10 text-green-400 border border-green-500/20',
+    completed:            'bg-green-500/10 text-green-400 border border-green-400/20',
     rejected:             'bg-red-500/10 text-red-400 border border-red-500/20',
     cancelled:            'bg-surface-3 text-white/30 border border-white/5',
-    live:                 'bg-green-500/10 text-green-400 border border-green-500/20',
+    live:                 'bg-green-500/10 text-green-400 border border-green-400/20',
     offline:              'bg-red-500/10 text-red-400 border border-red-500/20',
     booked:               'bg-brand/10 text-brand border border-brand/20',
     deleted:              'bg-surface-3 text-white/20 border border-white/5',
     advance_paid:         'bg-blue-500/10 text-blue-400 border border-blue-500/20',
-    fully_paid:           'bg-green-500/10 text-green-400 border border-green-500/20',
+    fully_paid:           'bg-green-500/10 text-green-400 border border-green-400/20',
   }
   const labels = {
     pending_verification: 'Pending Verify',
@@ -81,7 +81,6 @@ function StatusBadge({ status }) {
     </span>
   )
 }
-
 function LiveToggle({ vehicle, onToggle }) {
   const [toggling, setToggling] = useState(false)
   const isLive = vehicle.isLive !== false
@@ -89,11 +88,11 @@ function LiveToggle({ vehicle, onToggle }) {
   const handleToggle = async () => {
     setToggling(true)
     try {
-      await toggleVehicleLive(vehicle._id)
-      onToggle?.(vehicle._id)
+      await vehicleAPI.toggleStatus(vehicle._id || vehicle.id)
+      onToggle?.()
       toast.success(isLive ? 'Vehicle is now OFFLINE' : 'Vehicle is now LIVE')
-    } catch {
-      toast.error('Failed to toggle status')
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to toggle status')
     } finally {
       setToggling(false)
     }
@@ -104,11 +103,11 @@ function LiveToggle({ vehicle, onToggle }) {
       <span className={`status-dot ${isLive ? 'status-dot--live' : 'status-dot--offline'}`} />
       <button
         onClick={handleToggle}
-        disabled={toggling || vehicle.status !== 'approved'}
+        disabled={toggling || (vehicle.verificationStatus || vehicle.status) !== 'approved'}
         className={`toggle-switch ${isLive ? 'toggle-switch--on' : 'toggle-switch--off'} ${
-          vehicle.status !== 'approved' ? 'opacity-30 cursor-not-allowed' : ''
+          (vehicle.verificationStatus || vehicle.status) !== 'approved' ? 'opacity-30 cursor-not-allowed' : ''
         }`}
-        title={vehicle.status !== 'approved' ? 'Only approved vehicles can go live' : (isLive ? 'Set Offline' : 'Set Live')}
+        title={(vehicle.verificationStatus || vehicle.status) !== 'approved' ? 'Only approved vehicles can go live' : (isLive ? 'Set Offline' : 'Set Live')}
       >
         <div className="toggle-switch__knob" />
       </button>
@@ -143,54 +142,87 @@ function StatCard({ label, value, icon: Icon, color, bg, delay = 0 }) {
 /* ═══════════════════════════════════════════════════════════
    ADD VEHICLE MODAL
    ═══════════════════════════════════════════════════════════ */
-
 function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
   const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(addVehicleSchema),
-    defaultValues: { type: 'bike' },
+    defaultValues: { type: 'bike', helmetAvailable: false },
   })
   const [submitting, setSubmitting] = useState(false)
-  const [images, setImages] = useState([])
+  const [rcFile, setRcFile] = useState(null)
+  const [insFile, setInsFile] = useState(null)
+  const [pucFile, setPucFile] = useState(null)
+  const [photoFiles, setPhotoFiles] = useState([])
 
   const onSubmit = async (data) => {
+    if (!rcFile) {
+      toast.error('Registration Certificate (RC) document file is required')
+      return
+    }
+    if (!insFile) {
+      toast.error('Insurance document file is required')
+      return
+    }
+    if (!pucFile) {
+      toast.error('Pollution Certificate (PUC) document file is required')
+      return
+    }
+    if (photoFiles.length < 3) {
+      toast.error('At least 3 vehicle photos are required')
+      return
+    }
+
     setSubmitting(true)
-    const toastId = toast.loading('Listing vehicle...')
+    const toastId = toast.loading('Listing vehicle for verification...')
     try {
-      // First create the vehicle doc to get an ID
-      const vehicleId = await addVehicle(userId, userName, {
-        ...data,
-        images: [],
+      const formData = new FormData()
+      formData.append('name', data.name)
+      formData.append('brand', data.brand)
+      formData.append('model', data.model)
+      formData.append('type', data.type)
+      formData.append('registrationNumber', data.registrationNumber)
+      formData.append('pricePerHour', data.pricePerHour)
+      formData.append('pricePerDay', data.pricePerDay || 0)
+      formData.append('securityDeposit', data.securityDeposit || 0)
+      formData.append('location', data.location)
+      formData.append('description', data.description)
+      formData.append('year', data.year || new Date().getFullYear())
+      formData.append('fuel', data.fuel || 'Petrol')
+      formData.append('transmission', data.transmission || (data.type === 'scooty' ? 'Automatic' : 'Manual'))
+      formData.append('helmetAvailable', data.helmetAvailable ? 'true' : 'false')
+      formData.append('verificationStatus', 'submitted')
+
+      formData.append('RC', rcFile)
+      formData.append('Insurance', insFile)
+      formData.append('PUC', pucFile)
+
+      photoFiles.forEach(file => {
+        formData.append('photos', file)
       })
 
-      // Then upload images if any
-      if (images.length > 0) {
-        try {
-          const imageUrls = await uploadVehicleImages(vehicleId, images)
-          // Update the vehicle with real image URLs
-          await updateVehicle(vehicleId, { images: imageUrls })
-        } catch (imgErr) {
-          console.error('Image upload failed:', imgErr)
-          toast.error('Vehicle listed but images failed to upload', { id: toastId })
-        }
-      }
-
-      toast.success('Vehicle listed successfully!', { id: toastId })
+      await vehicleAPI.create(formData)
+      toast.success(
+        <div>
+          <p className="font-bold">Vehicle Submitted Successfully</p>
+          <p className="text-xs opacity-90">Status: Pending Verification</p>
+        </div>,
+        { id: toastId, duration: 5000 }
+      )
       onSuccess()
       onClose()
-    } catch {
-      toast.error('Failed to list vehicle. Please try again.', { id: toastId })
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to list vehicle. Please try again.', { id: toastId })
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm text-xs">
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 z-10"
+        className="relative card w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 z-10 bg-[#111111] border border-white/10"
       >
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold">List a Vehicle</h2>
@@ -198,73 +230,133 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div>
-            <label className="label" htmlFor="veh-name">Vehicle name</label>
-            <input id="veh-name" className="input-field" placeholder="e.g. Honda Activa 6G" {...register('name')} />
-            {errors.name && <p className="text-red-400 text-xs mt-1">{errors.name.message}</p>}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Vehicle Name</label>
+              <input className="input-field text-xs" placeholder="e.g. Classic Cruiser" {...register('name')} />
+              {errors.name && <p className="text-red-400 text-[10px] mt-1">{errors.name.message}</p>}
+            </div>
+            <div>
+              <label className="label">Brand</label>
+              <input className="input-field text-xs" placeholder="e.g. Royal Enfield" {...register('brand')} />
+              {errors.brand && <p className="text-red-400 text-[10px] mt-1">{errors.brand.message}</p>}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label" htmlFor="veh-type">Type</label>
-              <select id="veh-type" className="input-field" {...register('type')}>
+              <label className="label">Model</label>
+              <input className="input-field text-xs" placeholder="e.g. Classic 350" {...register('model')} />
+              {errors.model && <p className="text-red-400 text-[10px] mt-1">{errors.model.message}</p>}
+            </div>
+            <div>
+              <label className="label">Registration Number</label>
+              <input className="input-field text-xs" placeholder="AS-06-K-1234" {...register('registrationNumber')} />
+              {errors.registrationNumber && <p className="text-red-400 text-[10px] mt-1">{errors.registrationNumber.message}</p>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Category</label>
+              <select className="input-field text-xs" {...register('type')}>
                 <option value="bike">Bike</option>
                 <option value="scooty">Scooty</option>
               </select>
             </div>
             <div>
-              <label className="label" htmlFor="veh-vnum">Vehicle Number</label>
-              <input id="veh-vnum" className="input-field" placeholder="AS-06-XX-1234" {...register('vehicleNumber')} />
+              <label className="label">Year</label>
+              <input type="number" className="input-field text-xs" placeholder="2022" {...register('year')} />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label" htmlFor="veh-pph">Price/hour (₹)</label>
-              <input id="veh-pph" type="number" className="input-field" placeholder="80" {...register('pricePerHour')} />
-              {errors.pricePerHour && <p className="text-red-400 text-xs mt-1">{errors.pricePerHour.message}</p>}
+              <label className="label">Price/Hour (₹)</label>
+              <input type="number" className="input-field text-xs" placeholder="80" {...register('pricePerHour')} />
+              {errors.pricePerHour && <p className="text-red-400 text-[10px] mt-1">{errors.pricePerHour.message}</p>}
             </div>
             <div>
-              <label className="label" htmlFor="veh-ppd">Price/day (₹)</label>
-              <input id="veh-ppd" type="number" className="input-field" placeholder="500" {...register('pricePerDay')} />
+              <label className="label">Price/Day (₹)</label>
+              <input type="number" className="input-field text-xs" placeholder="500" {...register('pricePerDay')} />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label" htmlFor="veh-year">Year</label>
-              <input id="veh-year" type="number" className="input-field" placeholder="2022" {...register('year')} />
+              <label className="label">Security Deposit (₹)</label>
+              <input type="number" className="input-field text-xs" placeholder="1000" {...register('securityDeposit')} />
             </div>
             <div>
-              <label className="label" htmlFor="veh-location">Pickup location</label>
-              <input id="veh-location" className="input-field" placeholder="AT Road, Dibrugarh" {...register('location')} />
-              {errors.location && <p className="text-red-400 text-xs mt-1">{errors.location.message}</p>}
+              <label className="label">Pickup Location</label>
+              <input className="input-field text-xs" placeholder="AT Road, Dibrugarh" {...register('location')} />
+              {errors.location && <p className="text-red-400 text-[10px] mt-1">{errors.location.message}</p>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Fuel Type</label>
+              <input className="input-field text-xs" placeholder="Petrol" {...register('fuel')} />
+            </div>
+            <div>
+              <label className="label">Transmission</label>
+              <select className="input-field text-xs" {...register('transmission')}>
+                <option value="Manual">Manual</option>
+                <option value="Automatic">Automatic</option>
+              </select>
             </div>
           </div>
 
           <div>
-            <label className="label" htmlFor="veh-desc">Description</label>
-            <textarea id="veh-desc" rows={3} className="input-field resize-none" placeholder="Describe your vehicle…" {...register('description')} />
+            <label className="label">Description</label>
+            <textarea rows={3} className="input-field resize-none text-xs p-2" placeholder="Condition, specifications, helmet policy..." {...register('description')} />
+            {errors.description && <p className="text-red-400 text-[10px] mt-1">{errors.description.message}</p>}
           </div>
 
+          <div className="flex items-center gap-2 p-2 bg-white/5 border border-white/5 rounded-xl">
+            <input type="checkbox" id="helmet" className="w-4 h-4 rounded accent-brand" {...register('helmetAvailable')} />
+            <label htmlFor="helmet" className="text-white/80 font-medium">Helmet Available with ride</label>
+          </div>
+
+          {/* Upload compliance files */}
+          <div className="space-y-2.5 bg-white/5 p-3 rounded-xl border border-white/5">
+            <h4 className="font-semibold text-white/70">Upload Verification Documents (PDF / Image)</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[10px] text-white/40 block mb-1">Registration (RC) *</label>
+                <input type="file" accept="image/*,.pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setRcFile(e.target.files[0])} />
+              </div>
+              <div>
+                <label className="text-[10px] text-white/40 block mb-1">Insurance Policy *</label>
+                <input type="file" accept="image/*,.pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setInsFile(e.target.files[0])} />
+              </div>
+              <div>
+                <label className="text-[10px] text-white/40 block mb-1">Pollution (PUC) *</label>
+                <input type="file" accept="image/*,.pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setPucFile(e.target.files[0])} />
+              </div>
+            </div>
+          </div>
+
+          {/* Upload Photos */}
           <div>
-            <label className="label">Photos</label>
+            <label className="label">Photos (Minimum 3) *</label>
             <label
               htmlFor="veh-images"
-              className="flex flex-col items-center gap-2 border-2 border-dashed border-white/10 rounded-xl p-6 cursor-pointer hover:border-white/20 bg-surface-2 transition text-center"
+              className="flex flex-col items-center gap-1.5 border-2 border-dashed border-white/10 rounded-xl p-4 cursor-pointer hover:border-white/20 bg-surface-2 transition text-center"
             >
-              <FiUpload className="text-white/30 text-2xl" />
-              <span className="text-sm text-white/40">
-                {images.length > 0 ? `${images.length} file(s) selected` : 'Upload vehicle photos'}
+              <FiUpload className="text-white/30 text-lg" />
+              <span className="text-xs text-white/40">
+                {photoFiles.length > 0 ? `${photoFiles.length} file(s) selected` : 'Select vehicle photos'}
               </span>
-              <input id="veh-images" type="file" accept="image/*" multiple className="hidden" onChange={(e) => setImages(Array.from(e.target.files))} />
+              <input id="veh-images" type="file" accept="image/*" multiple required className="hidden" onChange={(e) => setPhotoFiles(Array.from(e.target.files))} />
             </label>
           </div>
 
           <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-            <button type="submit" disabled={submitting} className="btn-primary flex-1">
-              {submitting ? 'Submitting…' : 'Submit for Review'}
+            <button type="button" onClick={onClose} className="btn-secondary flex-1 py-2.5">Cancel</button>
+            <button type="submit" disabled={submitting} className="btn-primary flex-1 py-2.5 font-semibold">
+              {submitting ? 'Submitting…' : 'Submit for Verification'}
             </button>
           </div>
         </form>
@@ -331,6 +423,7 @@ export default function OwnerDashboard() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [bookingFilter, setBookingFilter] = useState('all')
   const [reviewBooking, setReviewBooking] = useState(null)
+  const [disputeBookingId, setDisputeBookingId] = useState(null)
   const [vehicleFilter, setVehicleFilter] = useState(null) // filter bookings by vehicle
 
   // Document Inspection modal state
@@ -338,7 +431,15 @@ export default function OwnerDashboard() {
   const [requestInfoText, setRequestInfoText] = useState('')
   const [showingRequestInput, setShowingRequestInput] = useState(false)
 
-  /* ── Firestore subscriptions ─────────────────────────── */
+  // Fetch owner's vehicles from Express API
+  const loadOwnerVehicles = async () => {
+    try {
+      const res = await vehicleAPI.myVehicles()
+      setVehicles(res.data.vehicles || [])
+    } catch (err) {
+      console.error('Failed to load owner vehicles:', err)
+    }
+  }
 
   useEffect(() => {
     if (!user?._id) {
@@ -346,42 +447,56 @@ export default function OwnerDashboard() {
       return
     }
 
-    let vehiclesLoaded = false
     let bookingsLoaded = false
 
-    const checkReady = () => {
-      if (vehiclesLoaded && bookingsLoaded) setLoading(false)
+    loadOwnerVehicles().then(() => {
+      if (bookingsLoaded) setLoading(false)
+    })
+
+    const adaptBooking = (b) => {
+      const statusMap = {
+        requested: 'under_review',
+        accepted: 'accepted',
+        confirmed: 'advance_paid',
+        ready_for_pickup: 'ready_for_pickup',
+        ongoing: 'ongoing',
+        completed: 'completed',
+        cancelled: 'cancelled',
+        rejected: 'rejected'
+      }
+      return {
+        ...b,
+        bookingStatus: statusMap[b.status] || b.status
+      }
     }
 
-    const unsubVehicles = subscribeToOwnerVehicles(user._id, (data) => {
-      setVehicles(data.filter(v => !v.deleted))
-      vehiclesLoaded = true
-      checkReady()
-    })
+    const fetchBookings = async () => {
+      try {
+        const { data } = await bookingAPI.getAll()
+        const ownerBookings = (data.bookings || []).filter(b => b.ownerId === user._id)
+        const adapted = ownerBookings.map(adaptBooking)
+        setBookings(adapted)
+        setCompletedBookings(adapted.filter(b => ['completed', 'fully_paid'].includes(b.bookingStatus)))
+      } catch (err) {
+        console.error('Error fetching owner bookings:', err)
+      } finally {
+        bookingsLoaded = true
+        setLoading(false)
+      }
+    }
 
-    const unsubBookings = subscribeToOwnerBookings(user._id, (data) => {
-      setBookings(data)
-      bookingsLoaded = true
-      checkReady()
-    })
-
-    const unsubCompleted = subscribeToOwnerPayments(user._id, (data) => {
-      setCompletedBookings(data)
-    })
+    fetchBookings()
+    const intervalBookings = setInterval(fetchBookings, 5000)
 
     const unsubNotifs = subscribeToUserNotifications(user._id, (data) => {
       setNotifications(data)
     })
 
     return () => {
-      unsubVehicles()
-      unsubBookings()
-      unsubCompleted()
+      clearInterval(intervalBookings)
       unsubNotifs()
     }
   }, [user?._id])
-
-  /* ── Derived stats ───────────────────────────────────── */
 
   const liveCount = vehicles.filter(v => v.isLive !== false && v.status === 'approved').length
   const pendingVerifyCount = vehicles.filter(v => v.status === 'pending_verification' || v.status === 'under_review').length
@@ -418,9 +533,10 @@ export default function OwnerDashboard() {
 
   const handleDelete = async (vid) => {
     try {
-      await deleteVehicle(vid)
+      await vehicleAPI.delete(vid)
       setDeleteTarget(null)
       toast.success('Vehicle removed')
+      loadOwnerVehicles()
     } catch {
       toast.error('Failed to remove vehicle')
     }
@@ -428,10 +544,10 @@ export default function OwnerDashboard() {
 
   const handleBookingAction = async (bookingId, action) => {
     try {
-      await updateBookingStatus(bookingId, action)
-      toast.success(`Booking ${action} successfully`)
+      await bookingAPI.updateStatus(bookingId, action)
+      toast.success(`Booking status updated to ${action}`)
     } catch (err) {
-      toast.error(err.message || `Failed to ${action} booking`)
+      toast.error(err.message || `Failed to update status`)
     }
   }
 
@@ -440,7 +556,7 @@ export default function OwnerDashboard() {
     const bid = inspectBooking._id || inspectBooking.bookingId
     setInspectBooking(null)
     try {
-      await updateBookingStatus(bid, 'approved')
+      await bookingAPI.updateStatus(bid, 'accepted')
       toast.success('Booking verification approved and accepted! 🎉')
     } catch {
       toast.error('Failed to approve booking')
@@ -453,8 +569,8 @@ export default function OwnerDashboard() {
     if (!confirm('Are you sure you want to reject this booking? This will issue a 100% refund of the renter advance payment.')) return
     setInspectBooking(null)
     try {
-      await cancelBooking(bid, 'owner')
-      toast.success('Booking verification rejected. Refund has been initiated.')
+      await bookingAPI.updateStatus(bid, 'rejected')
+      toast.success('Booking verification rejected.')
     } catch {
       toast.error('Failed to reject booking')
     }
@@ -469,13 +585,7 @@ export default function OwnerDashboard() {
     setRequestInfoText('')
     setShowingRequestInput(false)
     try {
-      await updateBookingStatus(bid, 'under_review')
-      await addNotification(renterId, {
-        title: 'Action Required: Update Verification Docs ⚠️',
-        message: `Owner of ${inspectBooking.vehicleName} requested details: "${msg}"`,
-        bookingId: bid,
-        type: 'status'
-      })
+      await bookingAPI.updateStatus(bid, 'requested')
       toast.success('Information request sent to renter.')
     } catch {
       toast.error('Failed to request additional info')
@@ -542,9 +652,20 @@ export default function OwnerDashboard() {
     <PageWrapper>
       <div className="container-main py-6 md:py-10">
         {/* Page header */}
-        <div className="mb-6 md:mb-8">
-          <h1 className="text-2xl md:text-3xl font-bold">Owner Dashboard</h1>
-          <p className="text-white/40 text-sm mt-1">Welcome back, {user?.name || user?.displayName || 'Owner'}</p>
+        <div className="mb-6 md:mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold">Owner Dashboard</h1>
+            <p className="text-white/40 text-sm mt-1">Welcome back, {user?.name || user?.displayName || 'Owner'}</p>
+          </div>
+          {isKycComplete() ? (
+            <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center justify-center gap-2 text-sm sm:w-auto w-full py-3 sm:py-2.5 shadow-lg shadow-brand/20">
+              <FiPlus className="text-lg" /> List Your Vehicle
+            </button>
+          ) : (
+            <Link to="/verify" className="btn-primary flex items-center justify-center gap-2 text-sm sm:w-auto w-full py-3 sm:py-2.5 shadow-lg shadow-brand/20">
+              <FiAlertCircle className="text-lg" /> Verify to List Vehicle
+            </Link>
+          )}
         </div>
 
         {/* Verification banner */}
@@ -711,16 +832,19 @@ export default function OwnerDashboard() {
                     {loading ? (
                       [...Array(2)].map((_, i) => <BookingCardSkeleton key={i} />)
                     ) : vehicles.length === 0 ? (
-                      <div className="text-center py-16">
-                        <RiMotorbikeLine className="text-white/10 text-7xl mx-auto mb-3" />
-                        <p className="text-white/40">No vehicles listed yet.</p>
+                      <div className="card p-10 flex flex-col items-center justify-center text-center border-brand/20 bg-brand/5">
+                        <div className="w-16 h-16 bg-brand/10 rounded-2xl flex items-center justify-center mb-4 border border-brand/20 shadow-inner">
+                          <span className="text-3xl">🚗</span>
+                        </div>
+                        <h3 className="text-xl font-bold text-white mb-2">You haven't listed any vehicles yet.</h3>
+                        <p className="text-white/60 mb-6 max-w-sm">Start earning by renting out your bike or car.</p>
                         {isKycComplete() ? (
-                          <button onClick={() => setShowAddModal(true)} className="btn-primary mt-4 inline-flex items-center gap-2">
-                            <FiPlus /> List your first vehicle
+                          <button onClick={() => setShowAddModal(true)} className="btn-primary text-base px-6 py-3.5 font-bold shadow-lg shadow-brand/20 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2">
+                            <FiPlus size={20} /> List Your First Vehicle
                           </button>
                         ) : (
-                          <Link to="/verify" className="btn-primary mt-4 inline-flex items-center gap-2">
-                            <FiAlertCircle /> Verify to List Vehicle
+                          <Link to="/verify" className="btn-primary text-base px-6 py-3.5 font-bold shadow-lg shadow-brand/20 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2">
+                            <FiAlertCircle size={20} /> Verify to List Vehicle
                           </Link>
                         )}
                       </div>
@@ -744,8 +868,8 @@ export default function OwnerDashboard() {
                             <div className="flex flex-col sm:flex-row">
                               {/* Vehicle Photo */}
                               <div className="sm:w-48 h-40 sm:h-auto bg-surface-2 relative shrink-0">
-                                {v.images?.[0] && v.images[0].startsWith('http') ? (
-                                  <img src={v.images[0]} alt={v.name} className="w-full h-full object-cover" />
+                                {v.images?.[0] ? (
+                                  <img src={getImageUrl(v.images[0])} alt={v.name} className="w-full h-full object-cover" />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center">
                                     <Icon className="text-white/10 text-6xl" />
@@ -763,11 +887,11 @@ export default function OwnerDashboard() {
                                     <h3 className="font-bold text-base">{v.name}</h3>
                                     <div className="flex items-center gap-3 mt-1 text-white/40 text-xs flex-wrap">
                                       <span className="capitalize flex items-center gap-1"><Icon size={12} /> {v.type}</span>
-                                      {v.vehicleNumber && <span className="font-mono bg-surface-2 px-1.5 py-0.5 rounded">{v.vehicleNumber}</span>}
+                                      {(v.registrationNumber || v.vehicleNumber) && <span className="font-mono bg-surface-2 px-1.5 py-0.5 rounded">{v.registrationNumber || v.vehicleNumber}</span>}
                                       {v.location && <span className="flex items-center gap-1"><FiMapPin size={10} /> {v.location}</span>}
                                     </div>
                                   </div>
-                                  <LiveToggle vehicle={v} onToggle={() => {}} />
+                                  <LiveToggle vehicle={v} onToggle={loadOwnerVehicles} />
                                 </div>
 
                                 {/* Pricing + Date */}
@@ -901,8 +1025,8 @@ export default function OwnerDashboard() {
                             <div className="flex flex-col sm:flex-row sm:items-start gap-4">
                               {/* Vehicle thumbnail */}
                               <div className="w-16 h-16 bg-surface-2 rounded-xl flex items-center justify-center shrink-0 overflow-hidden">
-                                {veh?.images?.[0] && veh.images[0].startsWith('http') ? (
-                                  <img src={veh.images[0]} alt="" className="w-full h-full object-cover" />
+                                {veh?.images?.[0] ? (
+                                  <img src={getImageUrl(veh.images[0])} alt="" className="w-full h-full object-cover" />
                                 ) : b.vehicleType === 'scooty' ? (
                                   <RiEBikeLine className="text-brand text-xl" />
                                 ) : (
@@ -1010,6 +1134,12 @@ export default function OwnerDashboard() {
                                         <FiFileText /> Handover PDF
                                       </a>
                                     )}
+                                    <button
+                                      onClick={() => setDisputeBookingId(b._id || b.bookingId)}
+                                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-red-400/80 border border-white/5 hover:bg-red-500/10 hover:text-red-400 text-sm font-medium transition"
+                                    >
+                                      Dispute
+                                    </button>
                                   </div>
                                 )}
                               </div>
@@ -1283,8 +1413,8 @@ export default function OwnerDashboard() {
                     return (
                       <div key={key} className="bg-surface-2 rounded-xl p-2.5 border border-white/5 flex flex-col items-center gap-2">
                         <span className="text-[10px] text-white/50 truncate w-full text-center">{label}</span>
-                        <a href={url} target="_blank" rel="noreferrer" className="block relative group overflow-hidden rounded-lg aspect-video w-full bg-surface-3">
-                          <img src={url} alt={label} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                        <a href={getImageUrl(url)} target="_blank" rel="noreferrer" className="block relative group overflow-hidden rounded-lg aspect-video w-full bg-surface-3">
+                          <img src={getImageUrl(url)} alt={label} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
                           <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
                             <span className="text-[10px] bg-brand text-white px-2 py-1 rounded-md font-bold">Zoom</span>
                           </div>
@@ -1335,7 +1465,7 @@ export default function OwnerDashboard() {
         {showAddModal && (
           <AddVehicleModal
             onClose={() => setShowAddModal(false)}
-            onSuccess={() => {}}
+            onSuccess={loadOwnerVehicles}
             userId={user?._id}
             userName={user?.name}
           />
@@ -1348,7 +1478,7 @@ export default function OwnerDashboard() {
           <EditVehicleModal
             vehicle={editVehicle}
             onClose={() => setEditVehicle(null)}
-            onSuccess={() => {}}
+            onSuccess={loadOwnerVehicles}
           />
         )}
       </AnimatePresence>
@@ -1364,13 +1494,20 @@ export default function OwnerDashboard() {
         )}
       </AnimatePresence>
 
-      {/* Rate customer modal */}
+      {/* Review Modal */}
       <ReviewModal
         isOpen={!!reviewBooking}
         onClose={() => setReviewBooking(null)}
         booking={reviewBooking}
         currentUser={user}
         role="owner"
+      />
+
+      {/* Dispute Modal */}
+      <DisputeModal
+        isOpen={!!disputeBookingId}
+        onClose={() => setDisputeBookingId(null)}
+        bookingId={disputeBookingId}
       />
     </PageWrapper>
   )

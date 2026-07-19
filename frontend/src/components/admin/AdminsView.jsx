@@ -125,23 +125,23 @@ export default function AdminsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {adminsList.map(a => (
-                  <tr key={a._id} className="hover:bg-white/5 transition-colors">
-                    <td className="p-4 font-semibold text-white/90">{a.name}</td>
-                    <td className="p-4 text-white/60">{a.email}</td>
+                {adminsList?.map(a => (
+                  <tr key={a?._id} className="hover:bg-white/5 transition-colors">
+                    <td className="p-4 font-semibold text-white/90">{a?.name}</td>
+                    <td className="p-4 text-white/60">{a?.email}</td>
                     <td className="p-4 capitalize">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        a.role === 'founder' ? 'bg-brand/20 text-brand border border-brand/30' :
-                        a.role === 'super_admin' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                        a?.role === 'founder' ? 'bg-brand/20 text-brand border border-brand/30' :
+                        a?.role === 'super_admin' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
                         'bg-blue-500/10 text-blue-400'
                       }`}>
-                        {a.role}
+                        {a?.role}
                       </span>
                     </td>
                     <td className="p-4 text-right">
-                      {a.email !== user.email && (
+                      {a?.email !== user?.email && (
                         <button
-                          onClick={() => handleDelete(a._id)}
+                          onClick={() => handleDelete(a?._id)}
                           className="p-1.5 bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg transition"
                           title="Revoke Admin Access"
                         >

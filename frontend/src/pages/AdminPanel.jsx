@@ -9,21 +9,14 @@ import {
 import { RiMotorbikeLine } from 'react-icons/ri'
 import { getVisibleModules, isFounder as checkFounder, isSuperAdmin as checkSuperAdmin } from '../lib/roleUtils'
 
-// Firebase Services
-import { 
-  subscribeToAllVehicles, 
-  subscribeToAllBookings, 
-  subscribeToAllPayments, 
-  subscribeToDisputes, 
-  subscribeToSupportTickets, 
-  subscribeToReports, 
-  subscribeToAuditLogs, 
-  subscribeToAllReviews 
-} from '../firebase/firestoreService'
+// Firebase Services (Legacy)
+// Mock data removed in Sprint 2
 
 // Auth Store
 import useAuthStore from '../store/authStore'
 import PageWrapper from '../components/PageWrapper'
+import ErrorBoundary from '../components/ErrorBoundary'
+import { adminAPI, userAPI, bookingAPI, paymentAPI } from '../api/endpoints'
 
 // Administrative Subviews
 import DashboardView from '../components/admin/DashboardView'
@@ -32,8 +25,7 @@ import UsersView from '../components/admin/UsersView'
 import VehiclesView from '../components/admin/VehiclesView'
 import BookingsView from '../components/admin/BookingsView'
 import PaymentsView from '../components/admin/PaymentsView'
-import DisputesView from '../components/admin/DisputesView'
-import ReportsView from '../components/admin/ReportsView'
+import SafetyView from '../components/admin/SafetyView'
 import SupportView from '../components/admin/SupportView'
 import ReviewsView from '../components/admin/ReviewsView'
 import NotificationsView from '../components/admin/NotificationsView'
@@ -65,26 +57,54 @@ export default function AdminPanel() {
   // Determine active subview
   const activeTab = subview || 'dashboard'
 
+  const loadVehicles = async () => {
+    try {
+      const res = await adminAPI.getAllVehicles()
+      setVehicles(res.data.vehicles || [])
+    } catch (err) {
+      console.error('Failed to load vehicles:', err)
+    }
+  }
+
+  // Fetch users from Express API
+  const loadUsers = async () => {
+    try {
+      const res = await userAPI.getAll()
+      setUsers(res.data.users || [])
+    } catch (err) {
+      console.error('Failed to load users:', err)
+    }
+  }
+
+  const loadBookings = async () => {
+    try {
+      const res = await bookingAPI.getAll()
+      setBookings(res.data?.bookings || [])
+    } catch (err) {
+      console.error('Failed to load bookings:', err)
+    }
+  }
+
+  const loadPayments = async () => {
+    try {
+      const res = await paymentAPI.getHistory()
+      setPayments(res.data?.payments || res.data || [])
+    } catch (err) {
+      console.error('Failed to load payments:', err)
+    }
+  }
+
   // Subscriptions hooks
   useEffect(() => {
     setLoading(true)
-    const unsubscribes = [
-      subscribeToAllVehicles(setVehicles),
-      subscribeToAllBookings(setBookings),
-      subscribeToAllPayments(setPayments),
-      subscribeToDisputes(setDisputes),
-      subscribeToSupportTickets(setTickets),
-      subscribeToReports(setReports),
-      subscribeToAuditLogs(setAdminActions),
-      subscribeToAllReviews((list) => {
-        setReviews(list)
-        setLoading(false)
-      })
-    ]
-
-    return () => {
-      unsubscribes.forEach(unsub => unsub())
-    }
+    Promise.all([
+      loadVehicles(),
+      loadUsers(),
+      loadBookings(),
+      loadPayments()
+    ]).finally(() => {
+      setLoading(false)
+    })
   }, [])
 
   // Icon map — keyed by roleUtils module id
@@ -95,8 +115,7 @@ export default function AdminPanel() {
     vehicles:      RiMotorbikeLine,
     bookings:      FiCalendar,
     payments:      FiDollarSign,
-    disputes:      FiAlertCircle,
-    reports:       FiAlertCircle,
+    safety:        FiShield,
     support:       FiMessageSquare,
     reviews:       FiStar,
     'audit-logs':  FiFileText,
@@ -108,8 +127,6 @@ export default function AdminPanel() {
 
   // Badge counts for urgent items
   const MODULE_BADGES = {
-    disputes:  disputes.filter(d => d.status === 'open').length || null,
-    reports:   reports.filter(r => r.status === 'open').length  || null,
     support:   tickets.filter(t => t.status === 'open').length  || null,
   }
 
@@ -124,22 +141,20 @@ export default function AdminPanel() {
   const renderActiveView = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <DashboardView users={[]} vehicles={vehicles} bookings={bookings} disputes={disputes} tickets={tickets} reports={reports} adminActions={adminActions} />
+        return <DashboardView users={users} vehicles={vehicles} bookings={bookings} disputes={disputes} tickets={tickets} reports={reports} adminActions={adminActions} />
       case 'founder':
         if (!checkFounder(user)) return <UnauthorizedMessage />
         return <FounderDashboard users={[]} vehicles={vehicles} bookings={bookings} payments={payments} />
       case 'users':
         return <UsersView />
       case 'vehicles':
-        return <VehiclesView vehicles={vehicles} />
+        return <VehiclesView vehicles={vehicles} onRefresh={loadVehicles} />
       case 'bookings':
         return <BookingsView bookings={bookings} />
       case 'payments':
         return <PaymentsView payments={payments} />
-      case 'disputes':
-        return <DisputesView disputes={disputes} />
-      case 'reports':
-        return <ReportsView reports={reports} />
+      case 'safety':
+        return <SafetyView />
       case 'support':
         return <SupportView tickets={tickets} />
       case 'reviews':
@@ -249,7 +264,7 @@ export default function AdminPanel() {
           {loading ? (
             <div className="flex flex-col items-center justify-center min-h-[50vh] text-xs text-white/30 gap-2">
               <div className="w-6 h-6 border-2 border-brand border-t-transparent rounded-full animate-spin" />
-              <span>Subscribing to real-time operations engine...</span>
+              <span>Loading data...</span>
             </div>
           ) : (
             <AnimatePresence mode="wait">
@@ -260,7 +275,9 @@ export default function AdminPanel() {
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.15 }}
               >
-                {renderActiveView()}
+                <ErrorBoundary>
+                  {renderActiveView()}
+                </ErrorBoundary>
               </motion.div>
             </AnimatePresence>
           )}

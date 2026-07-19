@@ -3,13 +3,9 @@ import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HiMenuAlt3, HiX } from 'react-icons/hi'
 import { RiMotorbikeLine } from 'react-icons/ri'
-import { FiCalendar, FiBell, FiCheckSquare, FiMail } from 'react-icons/fi'
+import { FiCalendar, FiBell, FiCheckSquare } from 'react-icons/fi'
 import useAuthStore from '../store/authStore'
-import {
-  subscribeToUserNotifications,
-  markNotificationRead,
-  markAllNotificationsRead
-} from '../firebase/firestoreService'
+import { notificationAPI } from '../api/endpoints'
 import NotificationCenter from './NotificationCenter'
 
 const navLinks = [
@@ -29,10 +25,17 @@ export default function Navbar() {
 
   useEffect(() => {
     if (user?._id) {
-      const unsub = subscribeToUserNotifications(user._id, (data) => {
-        setNotifications(data)
-      })
-      return () => unsub()
+      const fetchNotifications = async () => {
+        try {
+          const { data } = await notificationAPI.getAll()
+          setNotifications(data.notifications || [])
+        } catch (err) {
+          console.error('Failed to load notifications in Navbar:', err)
+        }
+      }
+      fetchNotifications()
+      const interval = setInterval(fetchNotifications, 5000)
+      return () => clearInterval(interval)
     } else {
       setNotifications([])
     }
@@ -112,16 +115,7 @@ export default function Navbar() {
                   My Bookings
                 </NavLink>
 
-                {/* Inbox Button (Testing) */}
-                <Link
-                  to="/inbox"
-                  title="Simulated Email Inbox"
-                  className="btn-ghost p-2 text-white/60 hover:text-white rounded-xl"
-                >
-                  <FiMail size={18} />
-                </Link>
-
-                {/* Notifications Bell */}
+{/* Notifications Bell */}
                 <div className="relative">
                   <button
                     onClick={() => setShowNotifDropdown(!showNotifDropdown)}

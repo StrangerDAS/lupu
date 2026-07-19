@@ -1,19 +1,19 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FiStar, FiMapPin, FiClock, FiShield, FiArrowLeft, FiCalendar, FiHeart } from 'react-icons/fi'
+import { FiStar, FiMapPin, FiClock, FiShield, FiArrowLeft, FiCalendar, FiHeart, FiAlertTriangle, FiCheckCircle } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
 import toast from 'react-hot-toast'
 import PageWrapper from '../components/PageWrapper'
 import StarRating from '../components/StarRating'
 import ReviewCard from '../components/ReviewCard'
 import RatingSummary from '../components/RatingSummary'
+import ReportModal from '../components/ReportModal'
 import { useVehicle } from '../hooks/useVehicles'
 import useAuthStore from '../store/authStore'
-import {
-  getVehicleReviews, submitReview, getFavorites, toggleFavorite,
-  getEligibleBookingForReview
-} from '../firebase/firestoreService'
+import { getFavorites, toggleFavorite } from '../firebase/firestoreService'
+import { reviewAPI, bookingAPI } from '../api/endpoints'
+import { getImageUrl } from '../utils/urlUtils'
 
 /* ═══════════════════════════════════════════════════════════
    MAIN COMPONENT
@@ -29,6 +29,10 @@ export default function VehicleDetail() {
   /* ── Favorites state ───────────────────────────────────── */
   const [isFavorited, setIsFavorited] = useState(false)
   const [favLoading, setFavLoading] = useState(false)
+
+  /* ── Report state ──────────────────────────────────────── */
+  const [showVehicleReportModal, setShowVehicleReportModal] = useState(false)
+  const [showUserReportModal, setShowUserReportModal] = useState(false)
 
   /* ── Reviews state ─────────────────────────────────────── */
   const [reviews, setReviews] = useState([])
@@ -56,33 +60,44 @@ export default function VehicleDetail() {
       .catch(() => {})
   }, [user?._id, id])
 
-  /* ── Load reviews on mount ─────────────────────────────── */
   useEffect(() => {
     if (!id) return
     setReviewsLoading(true)
-    getVehicleReviews(id)
-      .then((data) => setReviews(data || []))
+    reviewAPI.getVehicleReviews(id)
+      .then((res) => setReviews(res.data?.reviews || []))
       .catch(() => setReviews([]))
       .finally(() => setReviewsLoading(false))
   }, [id])
 
-  /* ── Check review eligibility ────────────────────────── */
   useEffect(() => {
     if (!isAuthenticated() || !user?._id || !id) {
       setCheckingEligibility(false)
       return
     }
     setCheckingEligibility(true)
-    getEligibleBookingForReview(user._id, id)
-      .then((booking) => {
-        setEligibleBooking(booking)
-      })
-      .catch((err) => {
+
+    const check = async () => {
+      try {
+        const { data: bookingsData } = await bookingAPI.myBookings()
+        const completedBookings = (bookingsData.bookings || []).filter(
+          (b) => b.vehicleId === id && b.status === 'completed'
+        )
+        let foundBooking = null
+        for (const b of completedBookings) {
+          const { data: eligibilityData } = await reviewAPI.getEligibility(b._id)
+          if (!eligibilityData.check?.vehicle) {
+            foundBooking = b
+            break
+          }
+        }
+        setEligibleBooking(foundBooking)
+      } catch (err) {
         console.error('Error checking review eligibility:', err)
-      })
-      .finally(() => {
+      } finally {
         setCheckingEligibility(false)
-      })
+      }
+    }
+    check()
   }, [user?._id, id, reviews])
 
   /* ── Handlers ──────────────────────────────────────────── */
@@ -123,26 +138,21 @@ export default function VehicleDetail() {
     }
     setSubmittingReview(true)
     try {
-      await submitReview({
+      await reviewAPI.submit({
         bookingId: eligibleBooking._id,
-        reviewerId: user._id,
-        reviewerName: user.name || 'User',
-        reviewedUserId: vehicle.ownerId || '',
-        vehicleId: vehicle._id,
-        vehicleName: vehicle.name,
         rating: reviewRating,
         comment: reviewComment,
         reviewType: 'vehicle'
       })
       toast.success('Review submitted!')
       // Refresh reviews
-      const updated = await getVehicleReviews(vehicle._id)
-      setReviews(updated || [])
+      const updated = await reviewAPI.getVehicleReviews(vehicle._id)
+      setReviews(updated.data?.reviews || [])
       setShowReviewForm(false)
       setReviewRating(0)
       setReviewComment('')
     } catch (err) {
-      toast.error(err.message || 'Failed to submit review')
+      toast.error(err.response?.data?.message || err.message || 'Failed to submit review')
     } finally {
       setSubmittingReview(false)
     }
@@ -190,7 +200,7 @@ export default function VehicleDetail() {
             <div className="card h-72 md:h-96 flex items-center justify-center bg-surface-2 overflow-hidden relative">
               {vehicle.images?.[activeImg] ? (
                 <img
-                  src={vehicle.images[activeImg]}
+                  src={getImageUrl(vehicle.images[activeImg])}
                   alt={vehicle.name}
                   className="w-full h-full object-cover"
                 />
@@ -242,7 +252,7 @@ export default function VehicleDetail() {
                       activeImg === i ? 'border-brand' : 'border-white/10'
                     }`}
                   >
-                    <img src={img} alt="" className="w-full h-full object-cover" />
+                    <img src={getImageUrl(img)} alt="" className="w-full h-full object-cover" />
                   </button>
                 ))}
               </div>
@@ -440,24 +450,43 @@ export default function VehicleDetail() {
                 <li className="flex items-center gap-2"><FiCalendar size={13} className="text-brand" /> Instant booking</li>
                 <li className="flex items-center gap-2"><FiClock size={13} className="text-blue-400" /> Flexible hours</li>
               </ul>
+              {/* Report Button */}
+              {isAuthenticated() && (
+                <button
+                  onClick={() => setShowVehicleReportModal(true)}
+                  className="w-full mt-3 py-2 text-xs text-white/40 hover:text-white/80 transition flex items-center justify-center gap-1"
+                >
+                  <FiAlertTriangle size={12} /> Report this vehicle
+                </button>
+              )}
             </div>
 
             {/* Owner */}
             {(vehicle.owner || vehicle.ownerName) && (
-              <div className="card p-5 flex items-center gap-4">
-                <div className="w-12 h-12 rounded-full bg-surface-3 flex items-center justify-center text-xl font-bold text-brand shrink-0">
-                  {(vehicle.owner?.name?.[0] || vehicle.ownerName?.[0] || '?').toUpperCase()}
+              <div className="card p-5">
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="w-12 h-12 rounded-full bg-surface-3 flex items-center justify-center text-xl font-bold text-brand shrink-0">
+                    {(vehicle.owner?.name?.[0] || vehicle.ownerName?.[0] || '?').toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{vehicle.owner?.name || vehicle.ownerName}</div>
+                    <div className="text-white/40 text-xs mt-0.5">Vehicle Owner</div>
+                  </div>
+                  {vehicle.ownerVerified ? (
+                    <span className="badge bg-green-500/10 text-green-400 text-xs shrink-0 flex items-center gap-1">
+                      <FiCheckCircle size={12} /> Verified
+                    </span>
+                  ) : (
+                    <span className="badge bg-white/5 text-white/40 text-xs shrink-0">Not Verified</span>
+                  )}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm truncate">{vehicle.owner?.name || vehicle.ownerName}</div>
-                  <div className="text-white/40 text-xs mt-0.5">Vehicle Owner</div>
-                </div>
-                {vehicle.ownerVerified ? (
-                  <span className="badge bg-green-500/10 text-green-400 text-xs shrink-0 flex items-center gap-1">
-                    <FiCheckCircle size={12} /> Verified
-                  </span>
-                ) : (
-                  <span className="badge bg-white/5 text-white/40 text-xs shrink-0">Not Verified</span>
+                {isAuthenticated() && vehicle.ownerId !== user?._id && (
+                  <button
+                    onClick={() => setShowUserReportModal(true)}
+                    className="w-full py-2 text-xs text-red-400/70 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition flex items-center justify-center gap-1"
+                  >
+                    <FiAlertTriangle size={12} /> Report User
+                  </button>
                 )}
               </div>
             )}
@@ -495,6 +524,21 @@ export default function VehicleDetail() {
           </div>
         </div>
       </div>
+      {/* Report Modals */}
+      <ReportModal
+        isOpen={showVehicleReportModal}
+        onClose={() => setShowVehicleReportModal(false)}
+        targetType="vehicle"
+        targetId={vehicle._id}
+        targetName={vehicle.name}
+      />
+      <ReportModal
+        isOpen={showUserReportModal}
+        onClose={() => setShowUserReportModal(false)}
+        targetType="user"
+        targetId={vehicle.ownerId || vehicle.owner?._id}
+        targetName={vehicle.ownerName || vehicle.owner?.name}
+      />
     </PageWrapper>
   )
 }

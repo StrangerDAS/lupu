@@ -8,16 +8,12 @@ import { authAPI, userAPI } from '../api/endpoints'
 
 export default function Verify() {
   const { user, setAuth, token } = useAuthStore()
-  const [phoneNumber, setPhoneNumber] = useState('')
   const [emailToVerify, setEmailToVerify] = useState(user?.email || '')
   
-  const [otpPhone, setOtpPhone] = useState('')
   const [otpEmail, setOtpEmail] = useState('')
   
-  const [phoneOtpSent, setPhoneOtpSent] = useState(false)
   const [emailOtpSent, setEmailOtpSent] = useState(false)
   
-  const [loadingPhone, setLoadingPhone] = useState(false)
   const [loadingEmail, setLoadingEmail] = useState(false)
 
   const handleReload = async () => {
@@ -67,42 +63,6 @@ export default function Verify() {
     setLoadingEmail(false)
   }
 
-  // --- Phone Verification ---
-  const handleSendPhoneOTP = async (e) => {
-    e.preventDefault()
-    if (!phoneNumber || phoneNumber.length !== 10) {
-      toast.error('Please enter a valid 10-digit phone number')
-      return
-    }
-    setLoadingPhone(true)
-    try {
-      const res = await authAPI.sendOtp({ identifier: phoneNumber })
-      if (res.data._dev_otp) console.log('DEV PHONE OTP:', res.data._dev_otp)
-      setPhoneOtpSent(true)
-      toast.success('OTP sent successfully!')
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to send OTP')
-    }
-    setLoadingPhone(false)
-  }
-
-  const handleVerifyPhoneOTP = async (e) => {
-    e.preventDefault()
-    if (!otpPhone || otpPhone.length !== 6) {
-      toast.error('Please enter a 6-digit OTP')
-      return
-    }
-    setLoadingPhone(true)
-    try {
-      const { data } = await authAPI.verifyContact({ identifier: phoneNumber, otp: otpPhone })
-      toast.success('Phone verified and linked successfully!')
-      setAuth(data.user, token)
-      setPhoneOtpSent(false)
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Invalid OTP')
-    }
-    setLoadingPhone(false)
-  }
 
   return (
     <PageWrapper>
@@ -114,7 +74,7 @@ export default function Verify() {
               <FiShield className="text-brand" />
               Verification Center
             </h1>
-            <p className="text-white/50 text-sm mt-1">Verify your email or phone to unlock booking and listing rides.</p>
+            <p className="text-white/50 text-sm mt-1">Verify your email to unlock booking and listing rides.</p>
           </div>
           <button
             onClick={handleReload}
@@ -181,69 +141,7 @@ export default function Verify() {
             )}
           </div>
 
-          {/* Phone Verification Card */}
-          <div className="card p-6 border-white/5">
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0">
-                  <FiPhone className="text-blue-400 text-lg" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-white">Mobile Number Verification</h3>
-                  <p className="text-white/40 text-xs mt-0.5">{user?.phone || 'No phone number registered'}</p>
-                </div>
-              </div>
-              {user?.phoneVerified ? (
-                <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-xs flex items-center gap-1.5 w-fit">
-                  <FiCheckCircle size={12} /> Verified
-                </span>
-              ) : null}
-            </div>
 
-            {!user?.phoneVerified && (
-              <div className="border-t border-white/5 pt-4">
-                {!phoneOtpSent ? (
-                  <form onSubmit={handleSendPhoneOTP} className="flex gap-2 max-w-md">
-                    <div className="relative flex items-center flex-1">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-white/70 border-r border-white/10 pr-2 z-10 select-none text-sm">
-                        <span role="img" aria-label="India">🇮🇳</span> <span className="font-semibold">+91</span>
-                      </span>
-                      <input
-                        type="tel"
-                        placeholder="7002630628"
-                        value={phoneNumber}
-                        onChange={(e) => {
-                          const val = e.target.value.replace(/\D/g, '')
-                          if (val.length <= 10) setPhoneNumber(val)
-                        }}
-                        className="input-field py-2 text-sm pl-[80px] w-full"
-                      />
-                    </div>
-                    <button type="submit" disabled={loadingPhone} className="btn-primary text-xs px-4 py-2 shrink-0">
-                      {loadingPhone ? 'Sending…' : 'Send OTP'}
-                    </button>
-                  </form>
-                ) : (
-                  <form onSubmit={handleVerifyPhoneOTP} className="flex gap-2 max-w-md">
-                    <input
-                      type="text"
-                      placeholder="Enter 6-digit OTP"
-                      value={otpPhone}
-                      onChange={(e) => setOtpPhone(e.target.value)}
-                      className="input-field py-2 text-sm flex-1 tracking-widest text-center"
-                      maxLength={6}
-                    />
-                    <button type="submit" disabled={loadingPhone} className="btn-primary text-xs px-4 py-2 shrink-0">
-                      {loadingPhone ? 'Verifying…' : 'Verify OTP'}
-                    </button>
-                    <button type="button" onClick={() => setPhoneOtpSent(false)} className="text-xs text-brand ml-2">
-                      Cancel
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
-          </div>
 
           {/* KYC Document Upload Card */}
           <div className="card p-6 border-white/5">

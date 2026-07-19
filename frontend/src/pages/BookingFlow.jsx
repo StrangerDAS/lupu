@@ -13,11 +13,12 @@ import PageWrapper from '../components/PageWrapper'
 import { useVehicle } from '../hooks/useVehicles'
 import useAuthStore from '../store/authStore'
 import {
-  createBooking,
   uploadBookingFile,
   createPaymentRecord,
   addNotification
 } from '../firebase/firestoreService'
+import { bookingAPI } from '../api/endpoints'
+import BookingAgreementModal from '../components/BookingAgreementModal'
 
 const STEPS = ['Select Time', 'Verify Identity', 'Sign Agreement', 'Advance Payment']
 
@@ -62,7 +63,12 @@ export default function BookingFlow() {
   const [startTime, setStartTime] = useState(nowLocal())
   const [endTime, setEndTime] = useState('')
   const [duration, setDuration] = useState(0)
-  const [totalPrice, setTotalPrice] = useState(0)
+  const [rentalAmount, setRentalAmount] = useState(0)
+
+  const bookingFee = 0 // Removed for Beta
+  const totalAmount = rentalAmount
+  const advanceAmount = Math.round(rentalAmount * 0.3)
+  const remainingAmount = rentalAmount - advanceAmount
 
   // Step 2: Verification Details
   const [currentAddress, setCurrentAddress] = useState('')
@@ -97,18 +103,30 @@ export default function BookingFlow() {
   const [currentStep, setCurrentStep] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
+  const [showAgreementModal, setShowAgreementModal] = useState(false)
 
-  // Sync pricing on time change
+  // Pricing (No fees for Beta)ime change
   useEffect(() => {
     if (startTime && endTime && vehicle?.pricePerHour) {
       const dur = calcDuration(startTime, endTime)
       setDuration(dur)
-      setTotalPrice(dur * vehicle.pricePerHour)
+      setRentalAmount(dur * vehicle.pricePerHour)
     } else {
       setDuration(0)
-      setTotalPrice(0)
+      setRentalAmount(0)
     }
   }, [startTime, endTime, vehicle])
+
+  const [blockedDates, setBlockedDates] = useState([])
+  useEffect(() => {
+    if (id) {
+      bookingAPI.getCalendar(id)
+        .then(res => {
+          setBlockedDates(res.data.bookings || [])
+        })
+        .catch(err => console.error('Failed to load blocked dates', err))
+    }
+  }, [id])
 
   // Sync permanent address if same address checked
   useEffect(() => {
@@ -216,11 +234,33 @@ export default function BookingFlow() {
         toast.error('Rental duration must be at least 1 hour')
         return false
       }
+
+      // Overlap checks
+      const isOverlap = blockedDates.some(b => {
+        const bStart = new Date(b.startTime)
+        const bEnd = new Date(b.endTime)
+        const selStart = new Date(startTime)
+        const selEnd = new Date(endTime)
+        return selStart < bEnd && selEnd > bStart
+      })
+      if (isOverlap) {
+        toast.error('The selected dates overlap with an existing booking.')
+        return false
+      }
+
+      // KYC check
+      const kycStatus = (user?.kycStatus || '').toLowerCase()
+      if (kycStatus !== 'verified') {
+        toast.error('Only KYC-verified riders can request bookings. Please complete verification on your profile page.')
+        return false
+      }
+
       return true
     }
 
     if (currentStep === 1) {
-      if (user?.kycStatus === 'Verified') {
+      const kycStatus = (user?.kycStatus || '').toLowerCase()
+      if (kycStatus === 'verified') {
         return true
       }
 
@@ -316,10 +356,10 @@ export default function BookingFlow() {
     doc.text(`Start Time: ${new Date(startTime).toLocaleString('en-IN')}`, 20, 142)
     doc.text(`End Time: ${new Date(endTime).toLocaleString('en-IN')}`, 20, 149)
     doc.text(`Duration: ${duration} hours`, 20, 156)
-    doc.text(`Hourly Rate: INR ${vehicle?.pricePerHour}/hr`, 20, 163)
-    doc.text(`Total Agreed Price: INR ${totalPrice}`, 20, 170)
-    doc.text(`25% Advance Paid (Online): INR ${Math.round(totalPrice * 0.25)}`, 20, 177)
-    doc.text(`75% Balance Due at Pickup: INR ${Math.round(totalPrice * 0.75)}`, 20, 184)
+    doc.text(`Vehicle Rental: INR ${rentalAmount}`, 20, 163)
+    doc.text(`Total Rental: INR ${totalAmount}`, 20, 170)
+    doc.text(`Pay Now (30% Online): INR ${advanceAmount}`, 20, 177)
+    doc.text(`Pay at Pickup (70%): INR ${remainingAmount}`, 20, 184)
 
     // Page 2: Uploaded Verification Docs
     doc.addPage()
@@ -455,9 +495,13 @@ export default function BookingFlow() {
       setStatusMessage('Compiling Verification Agreement PDF...')
       const pdfUrl = await compilePDF(tempId)
 
-      setStatusMessage('Processing 25% Advance Payment...')
-      const advanceAmount = Math.round(totalPrice * 0.25)
-      const remainingAmount = totalPrice - advanceAmount
+      setStatusMessage('Processing Payment...')
+      // Create Order on Backend
+      const orderRes = await bookingAPI.createPaymentOrder({
+        bookingId: tempId,
+        amount: advanceAmount,
+        type: 'advance'
+      })
 
       // Save payment transaction record
       const paymentRefId = await createPaymentRecord({
@@ -467,30 +511,18 @@ export default function BookingFlow() {
         status: 'completed',
         renterId: user?._id || 'anonymous',
         renterName: user?.name || 'Renter',
-        description: `25% Advance payment for booking ${tempId}`
+        description: `30% Advance payment for booking ${tempId}`
       })
 
       setStatusMessage('Submitting booking to owner review...')
-      // Submit Booking details
-      await createBooking({
-        bookingId: tempId,
-        renterId: user?._id || 'anonymous',
-        renterName: user?.name || 'Renter',
-        renterEmail: user?.email || '',
-        ownerId: vehicle?.ownerId || '',
-        ownerName: vehicle?.ownerName || 'Owner',
+      // Submit Booking details via Express MongoDB REST API
+      await bookingAPI.create({
         vehicleId: id,
-        vehicleName: vehicle?.name || 'Vehicle',
-        vehicleType: vehicle?.type || 'bike',
         startTime,
         endTime,
-        duration,
-        totalPrice,
-        pricing: {
-          total: totalPrice,
-          advance: advanceAmount,
-          remaining: remainingAmount
-        },
+        agreementAccepted: true,
+        agreementVersion: 'Beta v1.0',
+        agreementAcceptedAt: new Date().toISOString(),
         verificationDetails: {
           currentAddress,
           permanentAddress,
@@ -502,9 +534,7 @@ export default function BookingFlow() {
           collegeIdUrl: collegeUrl,
           signatureUrl,
           verificationPdfUrl: pdfUrl
-        },
-        bookingStatus: 'under_review', // Submitted for review
-        agreementAccepted: true
+        }
       })
 
       // Send owner notification
@@ -636,23 +666,41 @@ export default function BookingFlow() {
                 </div>
               </div>
 
+              {blockedDates.length > 0 && (
+                <div className="mt-4 p-4 card bg-surface-2/50 border border-white/5">
+                  <h4 className="text-sm font-semibold text-white/70 mb-2">Reserved Time Slots:</h4>
+                  <ul className="text-xs text-white/40 space-y-1.5">
+                    {blockedDates.map((b, idx) => (
+                      <li key={idx} className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                        {new Date(b.startTime).toLocaleString('en-IN')} to {new Date(b.endTime).toLocaleString('en-IN')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {duration > 0 && (
-                <div className="card p-5 bg-brand/5 border border-brand/20 divide-y divide-white/5 space-y-3">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-white/50">Calculated Duration</span>
-                    <span className="font-medium">{duration} hours</span>
+                <div className="card p-5 bg-brand/5 border border-brand/20">
+                  <div className="flex justify-between items-center text-white text-sm mb-2">
+                    <span className="text-white/60">Rental Duration</span>
+                    <span className="font-semibold">{duration} Hours</span>
                   </div>
-                  <div className="flex justify-between items-center text-sm pt-3">
-                    <span className="text-white/50">Total Price</span>
-                    <span className="font-semibold">₹{totalPrice}</span>
+                  <div className="flex justify-between items-center text-white text-sm mb-4">
+                    <span className="text-white/60">Vehicle Rental</span>
+                    <span className="font-semibold">₹{rentalAmount}</span>
                   </div>
-                  <div className="flex justify-between items-center text-sm pt-3">
-                    <span className="text-white/50">25% Refundable Advance Payment</span>
-                    <span className="text-brand font-bold">₹{Math.round(totalPrice * 0.25)}</span>
+                  <div className="flex justify-between items-center text-white text-sm border-t border-white/10 pt-4 mb-4">
+                    <span className="text-white/80 font-bold">Total Rental</span>
+                    <span className="font-bold text-lg">₹{totalAmount}</span>
                   </div>
-                  <div className="flex justify-between items-center text-sm pt-3">
-                    <span className="text-white/50">Remaining 75% Pay at pickup</span>
-                    <span className="font-medium text-white/80">₹{Math.round(totalPrice * 0.75)}</span>
+                  <div className="flex justify-between items-center text-white text-sm border-t border-white/10 pt-4 mb-2">
+                    <span className="text-brand font-semibold">Pay Now (30%)</span>
+                    <span className="text-brand font-bold text-xl">₹{advanceAmount}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-white text-xs">
+                    <span className="text-white/40">Pay at Pickup (70%)</span>
+                    <span className="font-medium text-white/80">₹{remainingAmount}</span>
                   </div>
                 </div>
               )}
@@ -929,34 +977,30 @@ export default function BookingFlow() {
               <h2 className="text-xl font-bold flex items-center gap-2"><FiFileText className="text-brand" /> Confirm Booking & Pay Advance</h2>
               <p className="text-xs text-white/40">Verify the checkout details. Clicking "Pay" compiles your agreement, uploads files to storage, and notifies the owner.</p>
 
-              <div className="card divide-y divide-white/5 bg-surface-1">
-                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
-                  <span className="text-white/40">Vehicle</span>
-                  <span className="font-semibold text-white">{vehicle?.name}</span>
+              <div className="space-y-3 mb-6">
+                <div className="flex justify-between items-center">
+                  <span className="text-white/60">Vehicle Rental</span>
+                  <span className="font-medium text-white">₹{rentalAmount}</span>
                 </div>
-                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
-                  <span className="text-white/40">Duration</span>
-                  <span className="font-medium text-white">{duration} hours</span>
+                <div className="flex justify-between items-center border-t border-white/10 pt-3">
+                  <span className="text-white/80 font-bold">Total Rental</span>
+                  <span className="font-bold text-white">₹{totalAmount}</span>
                 </div>
-                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
-                  <span className="text-white/40">Hourly Price</span>
-                  <span className="font-medium text-brand">₹{vehicle?.pricePerHour}/hr</span>
+                <div className="flex justify-between items-center border-t border-brand/20 pt-3">
+                  <span className="text-brand font-semibold">Pay Now (30%)</span>
+                  <span className="text-xl font-extrabold text-brand">₹{advanceAmount}</span>
                 </div>
-                <div className="flex justify-between items-center px-4 py-3.5 text-sm">
-                  <span className="text-white/40">Total Agreed Price</span>
-                  <span className="font-medium text-white">₹{totalPrice}</span>
-                </div>
-                <div className="flex justify-between items-center px-4 py-4 bg-brand/5">
-                  <span className="font-semibold text-white/90">25% Booking Advance</span>
-                  <span className="text-xl font-extrabold text-brand">₹{Math.round(totalPrice * 0.25)}</span>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-white/40">Pay at Pickup (70%)</span>
+                  <span className="font-medium text-white/80">₹{remainingAmount}</span>
                 </div>
               </div>
 
-              <div className="card p-4 bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300 leading-normal flex gap-2">
-                <FiAlertCircle size={16} className="shrink-0 mt-0.5" />
-                <span>
-                  The 25% booking advance is refundable up to 24 hours before your booking start time (if booked 2+ days early). The remaining 75% payment (₹{Math.round(totalPrice * 0.75)}) is due at vehicle pickup directly to the owner.
-                </span>
+              <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-xs text-white/60 leading-relaxed mb-8 flex gap-3 items-start">
+                <FiAlertCircle className="text-brand text-lg shrink-0 mt-0.5" />
+                <p>
+                  The booking advance is refundable up to 24 hours before your booking start time (if booked 2+ days early). The remaining 70% payment (₹{remainingAmount}) is due at vehicle pickup directly to the owner.
+                </p>
               </div>
 
               {submitting && (
@@ -970,13 +1014,22 @@ export default function BookingFlow() {
               <div className="flex items-center gap-3 pt-4">
                 <button onClick={handlePrev} disabled={submitting} className="btn-secondary w-1/3 py-3.5 disabled:opacity-40">Back</button>
                 <button
-                  onClick={handleFinalSubmit}
+                  onClick={() => setShowAgreementModal(true)}
                   disabled={submitting}
                   className="btn-primary w-2/3 py-3.5 flex items-center justify-center gap-2 text-base font-bold disabled:opacity-50"
                 >
-                  {submitting ? 'Processing...' : `Pay ₹${Math.round(totalPrice * 0.25)} & Confirm`}
+                  {submitting ? 'Processing...' : `Pay ₹${advanceAmount} & Confirm`}
                 </button>
               </div>
+
+              <BookingAgreementModal 
+                isOpen={showAgreementModal}
+                onClose={() => setShowAgreementModal(false)}
+                onAccept={() => {
+                  setShowAgreementModal(false)
+                  handleFinalSubmit()
+                }}
+              />
             </motion.div>
           )}
         </AnimatePresence>

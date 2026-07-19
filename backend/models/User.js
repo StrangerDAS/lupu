@@ -28,7 +28,7 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['user', 'owner', 'admin'],
+      enum: ['user', 'owner', 'admin', 'super_admin', 'founder'],
       default: 'user',
     },
     isRider: {
@@ -60,6 +60,22 @@ const userSchema = new mongoose.Schema(
       payment:  { type: Boolean, default: true },
       email:    { type: Boolean, default: true },
     },
+    // Trust & Safety
+    isSuspended: {
+      type: Boolean,
+      default: false,
+    },
+    fraudScore: {
+      type: Number,
+      default: 0,
+    },
+    emergencyContacts: [
+      {
+        name: String,
+        phone: String,
+        relation: String,
+      }
+    ],
     // KYC fields
     collegeIdUrl: { type: String, default: null },
     governmentIdUrl: { type: String, default: null },
@@ -72,5 +88,9 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 )
+
+// Indexes for common queries
+userSchema.index({ role: 1 })
+userSchema.index({ kycStatus: 1 })
 
 export default mongoose.model('User', userSchema)

@@ -5,8 +5,6 @@ import { AnimatePresence } from 'framer-motion'
 // Layouts
 import MainLayout from './layouts/MainLayout'
 import AuthLayout from './layouts/AuthLayout'
-import CustomerDashboard from './pages/CustomerDashboard'
-import SimulatedInbox from './pages/SimulatedInbox'
 
 // Route guards
 import ProtectedRoute from './components/ProtectedRoute'
@@ -18,6 +16,7 @@ import PageLoader from './components/PageLoader'
 import { authAPI } from './api/endpoints'
 import useAuthStore from './store/authStore'
 import { ADMIN_ROLES } from './lib/roleUtils'
+import SOSButton from './components/SOSButton'
 
 // ── Lazy-loaded pages ──────────────────────────────────────────────────────────
 const Home              = lazy(() => import('./pages/Home'))
@@ -40,6 +39,8 @@ const Handover          = lazy(() => import('./pages/Handover'))
 const LegalCenter       = lazy(() => import('./pages/LegalCenter'))
 const PrivacyPolicy     = lazy(() => import('./pages/PrivacyPolicy'))
 const TermsOfService    = lazy(() => import('./pages/TermsOfService'))
+const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'))
+const SimulatedInbox    = lazy(() => import('./pages/SimulatedInbox'))
 
 export default function App() {
   const { setAuth } = useAuthStore()
@@ -143,7 +144,7 @@ export default function App() {
                   </ProtectedRoute>
                 } />
                 <Route path="/inbox" element={
-                  <ProtectedRoute allowedRoles={['user', 'admin']}>
+                  <ProtectedRoute allowedRoles={['admin', 'founder', 'super_admin']}>
                     <SimulatedInbox />
                   </ProtectedRoute>
                 } />
@@ -181,6 +182,7 @@ export default function App() {
 
         </Routes>
       </AnimatePresence>
+      <SOSButton />
     </Suspense>
   )
 }

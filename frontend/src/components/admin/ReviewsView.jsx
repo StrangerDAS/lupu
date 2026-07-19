@@ -9,10 +9,11 @@ export default function ReviewsView({ reviews = [] }) {
   const { user } = useAuthStore()
   const [search, setSearch] = useState('')
 
-  const filteredReviews = reviews.filter(r =>
-    (r.comment || '').toLowerCase().includes(search.toLowerCase()) ||
-    (r.reviewerName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (r.vehicleName || '').toLowerCase().includes(search.toLowerCase())
+  const safeReviews = Array.isArray(reviews) ? reviews : []
+  const filteredReviews = safeReviews.filter(r =>
+    (r?.comment || '').toLowerCase().includes(search.toLowerCase()) ||
+    (r?.reviewerName || '').toLowerCase().includes(search.toLowerCase()) ||
+    (r?.vehicleName || '').toLowerCase().includes(search.toLowerCase())
   )
 
   const handleDelete = async (id) => {
@@ -51,19 +52,19 @@ export default function ReviewsView({ reviews = [] }) {
           </div>
         ) : (
           filteredReviews.map(r => (
-            <motion.div layout key={r._id || r.id} className="glass p-4 rounded-xl border border-white/5 bg-surface-2/15 flex flex-col justify-between gap-4">
+            <motion.div layout key={r?._id || r?.id} className="glass p-4 rounded-xl border border-white/5 bg-surface-2/15 flex flex-col justify-between gap-4">
               <div className="space-y-2">
                 <div className="flex justify-between items-center text-[10px]">
-                  <span className="font-semibold text-brand">{r.reviewerName}</span>
-                  <span className="text-white/30">Target: {r.vehicleName || 'User Listing'}</span>
+                  <span className="font-semibold text-brand">{r?.reviewerName || 'Unknown'}</span>
+                  <span className="text-white/30">Target: {r?.vehicleName || 'User Listing'}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   {[...Array(5)].map((_, i) => (
-                    <span key={i} className={`text-xs ${i < r.rating ? 'text-yellow-400' : 'text-white/10'}`}>★</span>
+                    <span key={i} className={`text-xs ${i < (r?.rating || 0) ? 'text-yellow-400' : 'text-white/10'}`}>★</span>
                   ))}
-                  <span className="text-[10px] text-white/40 ml-1">Rating: {r.rating}/5</span>
+                  <span className="text-[10px] text-white/40 ml-1">Rating: {r?.rating || 0}/5</span>
                 </div>
-                <p className="text-xs text-white/80 leading-relaxed font-medium mt-1">"{r.comment}"</p>
+                <p className="text-xs text-white/80 leading-relaxed font-medium mt-1">"{r?.comment}"</p>
               </div>
 
               <div className="flex justify-end pt-2 border-t border-white/5">

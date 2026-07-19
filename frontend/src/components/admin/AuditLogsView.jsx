@@ -4,10 +4,11 @@ import { FiSearch, FiCpu } from 'react-icons/fi'
 export default function AuditLogsView({ adminActions = [] }) {
   const [search, setSearch] = useState('')
 
-  const filteredLogs = adminActions.filter(log =>
-    (log.adminName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (log.actionType || '').toLowerCase().includes(search.toLowerCase()) ||
-    (log.notes || '').toLowerCase().includes(search.toLowerCase())
+  const safeLogs = Array.isArray(adminActions) ? adminActions : []
+  const filteredLogs = safeLogs.filter(log =>
+    (log?.adminName || '').toLowerCase().includes(search.toLowerCase()) ||
+    (log?.actionType || '').toLowerCase().includes(search.toLowerCase()) ||
+    (log?.notes || '').toLowerCase().includes(search.toLowerCase())
   )
 
   return (
@@ -48,11 +49,11 @@ export default function AuditLogsView({ adminActions = [] }) {
                 </tr>
               ) : (
                 filteredLogs.map((log) => (
-                  <tr key={log._id} className="hover:bg-white/5 transition-colors">
-                    <td className="p-4 font-semibold text-white/90">{log.adminName}</td>
-                    <td className="p-4 font-mono font-bold text-brand">{log.actionType}</td>
+                  <tr key={log?._id || log?.id} className="hover:bg-white/5 transition-colors">
+                    <td className="p-4 font-semibold text-white/90">{log?.adminName || 'System'}</td>
+                    <td className="p-4 font-mono font-bold text-brand">{log?.actionType || 'Unknown'}</td>
                     <td className="p-4">
-                      {log.affectedRecord ? (
+                      {log?.affectedRecord ? (
                         <div>
                           <div className="font-semibold text-white/80">{log.affectedRecord.name}</div>
                           <div className="text-[10px] text-white/40">{log.affectedRecord.collection} : {log.affectedRecord.docId}</div>
@@ -61,9 +62,9 @@ export default function AuditLogsView({ adminActions = [] }) {
                         <span className="text-white/30">-</span>
                       )}
                     </td>
-                    <td className="p-4 text-white/70 max-w-xs truncate">{log.notes || '-'}</td>
+                    <td className="p-4 text-white/70 max-w-xs truncate">{log?.notes || '-'}</td>
                     <td className="p-4 text-right text-white/40">
-                      {log.timestamp?.seconds
+                      {log?.timestamp?.seconds
                         ? new Date(log.timestamp.seconds * 1000).toLocaleString()
                         : 'Just now'}
                     </td>

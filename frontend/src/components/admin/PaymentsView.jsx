@@ -4,10 +4,11 @@ import { FiSearch, FiDollarSign } from 'react-icons/fi'
 export default function PaymentsView({ payments = [] }) {
   const [search, setSearch] = useState('')
 
-  const filteredPayments = payments.filter(p =>
-    (p.bookingId || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p._id || p.id || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p.type || '').toLowerCase().includes(search.toLowerCase())
+  const safePayments = Array.isArray(payments) ? payments : []
+  const filteredPayments = safePayments.filter(p =>
+    (p?.bookingId || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p?._id || p?.id || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p?.type || '').toLowerCase().includes(search.toLowerCase())
   )
 
   return (
@@ -44,36 +45,44 @@ export default function PaymentsView({ payments = [] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {filteredPayments.map((p) => {
-                const amt = Number(p.amount) || 0
-                const isRefund = p.type === 'refund'
-                const comm = isRefund ? 0 : Math.round(amt * 0.15)
-                const ownerShare = isRefund ? 0 : amt - comm
+              {filteredPayments.length === 0 ? (
+                <tr>
+                  <td colSpan="7" className="p-8 text-center text-white/30 text-xs">
+                    No payment records found.
+                  </td>
+                </tr>
+              ) : (
+                filteredPayments.map((p) => {
+                  const amt = Number(p?.amount) || 0
+                  const isRefund = p?.type === 'refund'
+                  const comm = isRefund ? 0 : Math.round(amt * 0.15)
+                  const ownerShare = isRefund ? 0 : amt - comm
 
-                return (
-                  <tr key={p._id || p.id} className="hover:bg-white/5 transition-colors">
-                    <td className="p-4 font-mono text-white/50">{p._id || p.id}</td>
-                    <td className="p-4 font-mono font-bold text-white/80">{p.bookingId}</td>
-                    <td className={`p-4 font-semibold ${isRefund ? 'text-red-400' : 'text-white'}`}>
-                      {isRefund ? '-' : ''}₹{amt.toLocaleString()}
-                    </td>
-                    <td className="p-4 capitalize">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        isRefund ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'
-                      }`}>
-                        {p.type || 'payment'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-white/60">₹{comm.toLocaleString()}</td>
-                    <td className="p-4 text-brand">₹{ownerShare.toLocaleString()}</td>
-                    <td className="p-4">
-                      <span className="badge capitalize bg-green-500/20 text-green-400 border border-green-500/20">
-                        {p.status || 'completed'}
-                      </span>
-                    </td>
-                  </tr>
-                )
-              })}
+                  return (
+                    <tr key={p?._id || p?.id} className="hover:bg-white/5 transition-colors">
+                      <td className="p-4 font-mono text-white/50">{p?._id || p?.id}</td>
+                      <td className="p-4 font-mono font-bold text-white/80">{p?.bookingId || 'Unknown'}</td>
+                      <td className={`p-4 font-semibold ${isRefund ? 'text-red-400' : 'text-white'}`}>
+                        {isRefund ? '-' : ''}₹{amt.toLocaleString()}
+                      </td>
+                      <td className="p-4 capitalize">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          isRefund ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'
+                        }`}>
+                          {p?.type || 'payment'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-white/60">₹{comm.toLocaleString()}</td>
+                      <td className="p-4 text-brand">₹{ownerShare.toLocaleString()}</td>
+                      <td className="p-4">
+                        <span className="badge capitalize bg-green-500/20 text-green-400 border border-green-500/20">
+                          {p?.status || 'completed'}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </div>

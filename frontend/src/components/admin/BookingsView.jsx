@@ -6,11 +6,12 @@ export default function BookingsView({ bookings = [] }) {
   const [search, setSearch] = useState('')
   const [selectedBooking, setSelectedBooking] = useState(null)
 
-  const filteredBookings = bookings.filter(b =>
-    b.vehicleName?.toLowerCase().includes(search.toLowerCase()) ||
-    b.renterName?.toLowerCase().includes(search.toLowerCase()) ||
-    b.ownerName?.toLowerCase().includes(search.toLowerCase()) ||
-    (b._id || b.id || '').toLowerCase().includes(search.toLowerCase())
+  const safeBookings = Array.isArray(bookings) ? bookings : []
+  const filteredBookings = safeBookings.filter(b =>
+    b?.vehicleName?.toLowerCase().includes(search.toLowerCase()) ||
+    b?.renterName?.toLowerCase().includes(search.toLowerCase()) ||
+    b?.ownerName?.toLowerCase().includes(search.toLowerCase()) ||
+    (b?._id || b?.id || '').toLowerCase().includes(search.toLowerCase())
   )
 
   const getStatusBadge = (status) => {
@@ -59,27 +60,35 @@ export default function BookingsView({ bookings = [] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {filteredBookings.map((b) => (
-                <tr key={b._id || b.id} className="hover:bg-white/5 transition-colors">
-                  <td className="p-4 font-mono font-bold text-white/70">{b._id || b.id}</td>
-                  <td className="p-4 font-semibold text-white/95">{b.vehicleName}</td>
-                  <td className="p-4 text-white/75">{b.renterName}</td>
-                  <td className="p-4 text-white/75">{b.ownerName}</td>
-                  <td className="p-4">
-                    <span className="flex items-center gap-1"><FiClock /> {b.duration || 1} hrs</span>
-                  </td>
-                  <td className="p-4 font-semibold text-brand">₹{b.totalPrice || b.pricing?.total || 0}</td>
-                  <td className="p-4">{getStatusBadge(b.bookingStatus)}</td>
-                  <td className="p-4 text-right">
-                    <button
-                      onClick={() => setSelectedBooking(b)}
-                      className="px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-[10px] font-semibold"
-                    >
-                      View Details
-                    </button>
+              {filteredBookings.length === 0 ? (
+                <tr>
+                  <td colSpan="8" className="p-8 text-center text-white/30 text-xs">
+                    No bookings found.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredBookings.map((b) => (
+                  <tr key={b?._id || b?.id} className="hover:bg-white/5 transition-colors">
+                    <td className="p-4 font-mono font-bold text-white/70">{b?._id || b?.id}</td>
+                    <td className="p-4 font-semibold text-white/95">{b?.vehicleName || 'Unknown'}</td>
+                    <td className="p-4 text-white/75">{b?.renterName || 'Unknown'}</td>
+                    <td className="p-4 text-white/75">{b?.ownerName || 'Unknown'}</td>
+                    <td className="p-4">
+                      <span className="flex items-center gap-1"><FiClock /> {b?.duration || 1} hrs</span>
+                    </td>
+                    <td className="p-4 font-semibold text-brand">₹{b?.totalPrice || b?.pricing?.total || 0}</td>
+                    <td className="p-4">{getStatusBadge(b?.bookingStatus || b?.status)}</td>
+                    <td className="p-4 text-right">
+                      <button
+                        onClick={() => setSelectedBooking(b)}
+                        className="px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-[10px] font-semibold"
+                      >
+                        View Details
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

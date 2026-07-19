@@ -12,31 +12,75 @@ import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
 import Razorpay from 'razorpay'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
 import User from './models/User.js'
 import Vehicle from './models/Vehicle.js'
 import Booking from './models/Booking.js'
 import Accessory from './models/Accessory.js'
+import Payment from './models/Payment.js'
+import Notification from './models/Notification.js'
+import Email from './models/Email.js'
+import Review from './models/Review.js'
+import Report from './models/Report.js'
+import Dispute from './models/Dispute.js'
+import SOS from './models/SOS.js'
 import { seedDatabase } from './seed.js'
+import { kycUpload, vehicleUpload } from './middleware/uploadMiddleware.js'
+import { sendOTPEmail } from './utils/emailService.js'
+import { sendSMSOTP } from './utils/smsService.js'
+
+import { logger } from './utils/logger.js'
+import { errorHandler } from './middleware/errorHandler.js'
+import { rateLimiter } from './middleware/rateLimiter.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const app = express()
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+
 const PORT = process.env.PORT || 5001
+
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('❌ FATAL: JWT_SECRET environment variable is missing in production mode!')
+  process.exit(1)
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || 'lupu-dev-fallback-secret'
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lupu'
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID',
-  key_secret: process.env.RAZORPAY_KEY_SECRET || 'YOUR_RAZORPAY_KEY_SECRET',
-})
+let razorpay = null
+try {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID',
+    key_secret: process.env.RAZORPAY_KEY_SECRET || 'YOUR_RAZORPAY_KEY_SECRET',
+  })
+} catch (err) {
+  console.error('Failed to initialize Razorpay SDK:', err.message)
+}
 
 // ── Middleware ──────────────────────────────────────────────
-app.use(cors())
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:4173']
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile, curl, server-to-server)
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.includes(origin)) return callback(null, true)
+    callback(new Error(`CORS: Origin '${origin}' not allowed`))
+  },
+  credentials: true,
+}))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
 // ── Request logger ─────────────────────────────────────────
 app.use((req, _res, next) => {
-  console.log(`  → ${req.method} ${req.path}`)
+  logger.debug(`→ ${req.method} ${req.path}`)
   next()
 })
 
@@ -89,6 +133,7 @@ async function authMiddleware(req, res, next) {
     const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET)
     const user = await User.findById(decoded.id).lean()
     if (!user) return res.status(401).json({ message: 'User not found' })
+    if (user.isSuspended) return res.status(403).json({ message: 'Account suspended. Please contact support.' })
     req.user = user
     next()
   } catch {
@@ -102,17 +147,17 @@ function safeUser(u) {
   return rest
 }
 
-// KYC placeholder — not enforced in Phase 1.1
-function kycRequired(_req, _res, next) {
+// KYC placeholder — not enforced yet; will enforce in a future sprint
+function kycPlaceholder(_req, _res, next) {
   next()
 }
 
 // ── Auth Routes ────────────────────────────────────────────
 
-app.post('/api/auth/send-otp', async (req, res) => {
+app.post('/api/auth/send-otp', rateLimiter({ windowMs: 60000, max: 3, message: 'Too many OTP requests. Please wait 60 seconds.' }), async (req, res, next) => {
   try {
     const { identifier } = req.body
-    if (!identifier) return res.status(400).json({ message: 'Email or phone required' })
+    if (!identifier || !identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
 
     const existing = otpStore.get(identifier)
     if (existing && existing.expiresAt - OTP_EXPIRY_MS + 60000 > Date.now()) {
@@ -120,14 +165,32 @@ app.post('/api/auth/send-otp', async (req, res) => {
     }
 
     const code = generateOTP()
+    
+    // Check if identifier is an email
+    try {
+      await sendOTPEmail(identifier, code)
+    } catch (emailError) {
+      // Return 500 error, don't store OTP if it failed to send
+      return res.status(500).json({ message: 'Failed to send OTP email. Please try again later.' })
+    }
+    /* 
+    // FUTURE SMS INTEGRATION:
+    else {
+      try {
+        await sendSMSOTP(identifier, code)
+      } catch (smsError) {
+        return res.status(500).json({ message: smsError.message || 'Failed to send OTP SMS. Please try again later.' })
+      }
+    }
+    */
+    
+    // Only store OTP if email/SMS succeeded
     storeOTP(identifier, code)
-    console.log(`  🔐 OTP for ${identifier}: ${code}`)
+    
     const response = { message: 'OTP sent successfully' }
-    if (process.env.NODE_ENV !== 'production') response._dev_otp = code
     res.json(response)
   } catch (err) {
-    console.error('send-otp error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
@@ -135,11 +198,11 @@ app.post('/api/auth/signup', async (req, res) => {
   try {
     const { identifier, otp, name, role = 'user' } = req.body
     if (!name || !identifier || !otp) {
-      return res.status(400).json({ message: 'Name, identifier, and OTP are required' })
+      return res.status(400).json({ message: 'Name, email, and OTP are required' })
     }
+    if (!identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
 
-    const isEmail = identifier.includes('@')
-    const query = isEmail ? { email: identifier } : { phone: identifier }
+    const query = { email: identifier }
     const exists = await User.findOne(query)
     if (exists) return res.status(409).json({ message: 'Account already exists. Please log in.' })
 
@@ -148,8 +211,7 @@ app.post('/api/auth/signup', async (req, res) => {
 
     const newUser = await User.create({
       name,
-      email: isEmail ? identifier : undefined,
-      phone: !isEmail ? identifier : undefined,
+      email: identifier,
       role: ['user', 'owner'].includes(role) ? role : 'user',
       isRider: true,
       isOwner: role === 'owner',
@@ -167,15 +229,15 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 })
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', rateLimiter({ windowMs: 60000, max: 5, message: 'Too many login attempts. Please try again later.' }), async (req, res, next) => {
   try {
     const { identifier, otp } = req.body
     if (!identifier || !otp) {
-      return res.status(400).json({ message: 'Identifier and OTP are required' })
+      return res.status(400).json({ message: 'Email and OTP are required' })
     }
+    if (!identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
 
-    const isEmail = identifier.includes('@')
-    const query = isEmail ? { email: identifier } : { phone: identifier }
+    const query = { email: identifier }
     const user = await User.findOne(query)
     if (!user) return res.status(404).json({ message: 'User not found. Please sign up.' })
 
@@ -188,8 +250,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = generateToken(updatedUser)
     res.json({ user: safeUser(updatedUser), token })
   } catch (err) {
-    console.error('login error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
@@ -201,16 +262,13 @@ app.post('/api/auth/verify-contact', authMiddleware, async (req, res) => {
   try {
     const { identifier, otp } = req.body
     if (!identifier || !otp) return res.status(400).json({ message: 'Identifier and OTP required' })
+    if (!identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
 
-    const validOtp = otpStore.get(identifier)
-    if (!validOtp || validOtp !== otp) {
-      return res.status(400).json({ message: 'Invalid or expired OTP' })
-    }
+    // Use verifyOTP() to enforce attempt counting and expiry correctly
+    const result = verifyOTP(identifier, otp)
+    if (!result.valid) return res.status(400).json({ message: result.message })
 
-    otpStore.delete(identifier)
-
-    const isEmail = identifier.includes('@')
-    const updates = isEmail ? { emailVerified: true } : { phoneVerified: true, phone: identifier }
+    const updates = { emailVerified: true }
     
     const updatedUser = await User.findByIdAndUpdate(req.user._id, updates, { new: true, lean: true })
     res.json({ message: 'Contact verified successfully', user: safeUser(updatedUser) })
@@ -295,7 +353,7 @@ app.get('/api/items/:id', async (req, res) => {
   }
 })
 
-app.post('/api/items', authMiddleware, kycRequired, async (req, res) => {
+app.post('/api/items', authMiddleware, kycPlaceholder, async (req, res) => {
   try {
     if (!req.user.isOwner) {
       return res.status(403).json({ message: 'Activate owner role first.' })
@@ -326,7 +384,7 @@ app.post('/api/items', authMiddleware, kycRequired, async (req, res) => {
 
 app.get('/api/vehicles', async (req, res) => {
   try {
-    const vehicles = await Vehicle.find({ status: 'approved' }).lean()
+    const vehicles = await Vehicle.find({ verificationStatus: 'approved', isLive: true }).lean()
     res.json({ vehicles })
   } catch (err) {
     console.error('GET /api/vehicles error:', err)
@@ -358,41 +416,89 @@ app.get('/api/vehicles/:id', async (req, res) => {
   }
 })
 
-app.post('/api/vehicles', authMiddleware, kycRequired, async (req, res) => {
+app.post('/api/vehicles', authMiddleware, kycPlaceholder, vehicleUpload, async (req, res) => {
   try {
     if (!req.user.isOwner) {
       return res.status(403).json({ message: 'Activate owner role first.' })
     }
-    const { name, type, pricePerHour, pricePerDay, location, description, year } = req.body
-    if (!name || !type || !pricePerHour || !location) {
-      return res.status(400).json({ message: 'name, type, pricePerHour, and location are required' })
+
+    const {
+      name, brand, model, type, pricePerHour, pricePerDay, securityDeposit,
+      location, description, year, fuel, transmission, helmetAvailable,
+      verificationStatus
+    } = req.body
+
+    const rcFile = req.files?.['RC']?.[0]
+    const insFile = req.files?.['Insurance']?.[0]
+    const pucFile = req.files?.['PUC']?.[0]
+    const photoFiles = req.files?.['photos'] || []
+
+    const rcUrl = rcFile ? `/uploads/${rcFile.filename}` : (req.body.RC || req.body.documents?.RC)
+    const insUrl = insFile ? `/uploads/${insFile.filename}` : (req.body.Insurance || req.body.documents?.Insurance)
+    const pucUrl = pucFile ? `/uploads/${pucFile.filename}` : (req.body.PUC || req.body.documents?.PUC)
+    const photoUrls = photoFiles.length > 0
+      ? photoFiles.map(f => `/uploads/${f.filename}`)
+      : (Array.isArray(req.body.photos) ? req.body.photos : (req.body.photos ? [req.body.photos] : []))
+
+    const isSubmitting = verificationStatus === 'submitted' || !verificationStatus || verificationStatus === 'pending_verification'
+
+    // Perform validation if submitting
+    if (isSubmitting) {
+      if (!name) return res.status(400).json({ message: 'Vehicle name is required' })
+      if (!brand) return res.status(400).json({ message: 'Brand is required' })
+      if (!model) return res.status(400).json({ message: 'Model is required' })
+      if (!req.body.registrationNumber) return res.status(400).json({ message: 'Registration number is required' })
+      if (!rcUrl) return res.status(400).json({ message: 'Registration Certificate (RC) document is required' })
+      if (!insUrl) return res.status(400).json({ message: 'Insurance document is required' })
+      if (!pucUrl) return res.status(400).json({ message: 'Pollution certificate (PUC) is required' })
+      if (!pricePerHour || Number(pricePerHour) <= 0) return res.status(400).json({ message: 'Price per hour must be positive' })
+      if (!description) return res.status(400).json({ message: 'Description is required' })
+      if (photoUrls.length < 3) return res.status(400).json({ message: 'Minimum 3 photos are required' })
     }
+
+    const vStatus = isSubmitting ? 'submitted' : 'draft'
+
     const newVehicle = await Vehicle.create({
       name,
+      brand,
+      model,
+      registrationNumber: req.body.registrationNumber,
       type: type || 'bike',
-      pricePerHour: Number(pricePerHour) || 50,
-      pricePerDay: Number(pricePerDay) || 300,
-      status: 'pending',
-      isLive: true,
+      pricePerHour: Number(pricePerHour) || 0,
+      pricePerDay: Number(pricePerDay) || 0,
+      securityDeposit: Number(securityDeposit) || 0,
       location: location || 'Dibrugarh',
       description: description || '',
+      helmetAvailable: helmetAvailable === 'true' || helmetAvailable === true,
       specs: {
         year: Number(year) || new Date().getFullYear(),
-        fuel: 'Petrol',
-        transmission: type === 'scooty' ? 'Automatic' : 'Manual',
+        fuel: fuel || 'Petrol',
+        transmission: transmission || (type === 'scooty' ? 'Automatic' : 'Manual'),
       },
-      images: [],
+      documents: {
+        RC: rcUrl,
+        Insurance: insUrl,
+        PUC: pucUrl
+      },
+      photos: photoUrls,
+      images: photoUrls,
+      verificationStatus: vStatus,
+      submittedAt: isSubmitting ? new Date() : null,
+      isLive: false,
       ownerId: req.user._id,
       owner: { name: req.user.name, rating: 0, totalTrips: 0 },
     })
     res.status(201).json(newVehicle.toObject())
   } catch (err) {
     console.error('POST /api/vehicles error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Vehicle registration number already registered' })
+    }
     res.status(500).json({ message: 'Internal server error' })
   }
 })
 
-app.put('/api/vehicles/:id', authMiddleware, async (req, res) => {
+app.put('/api/vehicles/:id', authMiddleware, vehicleUpload, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
@@ -401,20 +507,105 @@ app.put('/api/vehicles/:id', authMiddleware, async (req, res) => {
     if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
 
     const ownerId = vehicle.ownerId?.toString()
-    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (ownerId !== req.user._id.toString() && !['admin', 'super_admin', 'founder'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Forbidden: not your vehicle' })
     }
 
-    // Prevent status from being changed via this route (use admin routes instead)
-    const { status, ownerId: _ownerId, ...updateFields } = req.body
+    const {
+      name, brand, model, type, pricePerHour, pricePerDay, securityDeposit,
+      location, description, year, fuel, transmission, helmetAvailable,
+      verificationStatus
+    } = req.body
+
+    const rcFile = req.files?.['RC']?.[0]
+    const insFile = req.files?.['Insurance']?.[0]
+    const pucFile = req.files?.['PUC']?.[0]
+    const photoFiles = req.files?.['photos'] || []
+
+    const rcUrl = rcFile ? `/uploads/${rcFile.filename}` : (req.body.RC || req.body.documents?.RC || vehicle.documents?.RC)
+    const insUrl = insFile ? `/uploads/${insFile.filename}` : (req.body.Insurance || req.body.documents?.Insurance || vehicle.documents?.Insurance)
+    const pucUrl = pucFile ? `/uploads/${pucFile.filename}` : (req.body.PUC || req.body.documents?.PUC || vehicle.documents?.PUC)
+    
+    let photoUrls = []
+    if (photoFiles.length > 0) {
+      photoUrls = photoFiles.map(f => `/uploads/${f.filename}`)
+    } else {
+      photoUrls = Array.isArray(req.body.photos) ? req.body.photos : (req.body.photos ? [req.body.photos] : (vehicle.photos || []))
+    }
+
+    const isSubmitting = verificationStatus === 'submitted' || (vehicle.verificationStatus === 'rejected' && verificationStatus === 'submitted')
+
+    // Perform validation if submitting
+    if (isSubmitting) {
+      const vName = name || vehicle.name
+      const vBrand = brand || vehicle.brand
+      const vModel = model || vehicle.model
+      const vReg = req.body.registrationNumber || vehicle.registrationNumber
+      const vPrice = pricePerHour !== undefined ? pricePerHour : vehicle.pricePerHour
+      const vDesc = description || vehicle.description
+
+      if (!vName) return res.status(400).json({ message: 'Vehicle name is required' })
+      if (!vBrand) return res.status(400).json({ message: 'Brand is required' })
+      if (!vModel) return res.status(400).json({ message: 'Model is required' })
+      if (!vReg) return res.status(400).json({ message: 'Registration number is required' })
+      if (!rcUrl) return res.status(400).json({ message: 'Registration Certificate (RC) document is required' })
+      if (!insUrl) return res.status(400).json({ message: 'Insurance document is required' })
+      if (!pucUrl) return res.status(400).json({ message: 'Pollution certificate (PUC) is required' })
+      if (!vPrice || Number(vPrice) <= 0) return res.status(400).json({ message: 'Price per hour must be positive' })
+      if (!vDesc) return res.status(400).json({ message: 'Description is required' })
+      if (photoUrls.length < 3) return res.status(400).json({ message: 'Minimum 3 photos are required' })
+    }
+
+    const updates = {
+      documents: {
+        RC: rcUrl,
+        Insurance: insUrl,
+        PUC: pucUrl
+      },
+      photos: photoUrls,
+      images: photoUrls
+    }
+
+    if (name !== undefined) updates.name = name
+    if (brand !== undefined) updates.brand = brand
+    if (model !== undefined) updates.model = model
+    if (req.body.registrationNumber !== undefined) updates.registrationNumber = req.body.registrationNumber
+    if (type !== undefined) updates.type = type
+    if (pricePerHour !== undefined) updates.pricePerHour = Number(pricePerHour)
+    if (pricePerDay !== undefined) updates.pricePerDay = Number(pricePerDay)
+    if (securityDeposit !== undefined) updates.securityDeposit = Number(securityDeposit)
+    if (location !== undefined) updates.location = location
+    if (description !== undefined) updates.description = description
+    if (helmetAvailable !== undefined) updates.helmetAvailable = helmetAvailable === 'true' || helmetAvailable === true
+
+    if (year !== undefined || fuel !== undefined || transmission !== undefined) {
+      updates.specs = {
+        year: year !== undefined ? Number(year) : (vehicle.specs?.year || new Date().getFullYear()),
+        fuel: fuel !== undefined ? fuel : (vehicle.specs?.fuel || 'Petrol'),
+        transmission: transmission !== undefined ? transmission : (vehicle.specs?.transmission || 'Manual')
+      }
+    }
+
+    if (verificationStatus !== undefined) {
+      updates.verificationStatus = verificationStatus
+      if (verificationStatus === 'submitted') {
+        updates.submittedAt = new Date()
+        updates.rejectionReason = null
+        updates.adminNotes = null
+      }
+    }
+
     const updated = await Vehicle.findByIdAndUpdate(
       req.params.id,
-      { $set: updateFields },
-      { new: true, runValidators: true, lean: true }
+      { $set: updates },
+      { new: true, runValidators: true }
     )
-    res.json(updated)
+    res.json(updated.toObject())
   } catch (err) {
     console.error('PUT /api/vehicles/:id error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Vehicle registration number already registered' })
+    }
     res.status(500).json({ message: 'Internal server error' })
   }
 })
@@ -428,8 +619,13 @@ app.patch('/api/vehicles/:id/toggle-status', authMiddleware, async (req, res) =>
     if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
 
     const ownerId = vehicle.ownerId?.toString()
-    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (ownerId !== req.user._id.toString() && !['admin', 'super_admin', 'founder'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Only the vehicle owner can change status' })
+    }
+
+    // Toggle live only if approved
+    if (vehicle.verificationStatus !== 'approved') {
+      return res.status(400).json({ message: 'Only approved vehicles can go live' })
     }
 
     vehicle.isLive = !vehicle.isLive
@@ -451,7 +647,7 @@ app.delete('/api/vehicles/:id', authMiddleware, async (req, res) => {
     if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
 
     const ownerId = vehicle.ownerId?.toString()
-    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin') {
+    if (ownerId !== req.user._id.toString() && !['admin', 'super_admin', 'founder'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Forbidden: not your vehicle' })
     }
 
@@ -465,171 +661,362 @@ app.delete('/api/vehicles/:id', authMiddleware, async (req, res) => {
 
 // ── Booking Routes ─────────────────────────────────────────
 
-app.post('/api/bookings', authMiddleware, kycRequired, async (req, res) => {
+app.get('/api/vehicles/:id/calendar', async (req, res, next) => {
   try {
-    const { items: bookingItems, startTime, endTime, agreementAccepted, vehicleId } = req.body
+    const { id } = req.params
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const bookings = await Booking.find({
+      vehicleId: id,
+      status: { $in: ['requested', 'accepted', 'confirmed', 'ready_for_pickup', 'ongoing'] }
+    }, 'startTime endTime status').lean()
+    
+    res.json({ bookings })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/bookings', authMiddleware, async (req, res, next) => {
+  try {
+    const { startTime, endTime, agreementAccepted, agreementVersion, agreementAcceptedAt, vehicleId, verificationDetails } = req.body
 
     if (!agreementAccepted) {
-      return res.status(400).json({ message: 'You must accept the rental agreement to proceed.' })
+      return res.status(400).json({ message: 'You must read and accept the mandatory Rental Agreement to proceed.' })
     }
     if (!startTime || !endTime) {
       return res.status(400).json({ message: 'startTime and endTime are required.' })
     }
-
-    const ms = new Date(endTime) - new Date(startTime)
-    if (ms <= 0) {
-      return res.status(400).json({ message: 'endTime must be after startTime.' })
-    }
-    const days = Math.max(1, Math.ceil(ms / (1000 * 60 * 60 * 24)))
-    const hours = Math.ceil(ms / (1000 * 60 * 60))
-
-    let resolvedItems = []
-
-    if (bookingItems && Array.isArray(bookingItems) && bookingItems.length > 0) {
-      for (const bi of bookingItems) {
-        // Try Vehicle first, then Accessory
-        let item = null
-        let itemType = null
-        let price = 0
-
-        if (mongoose.Types.ObjectId.isValid(bi.itemId)) {
-          const v = await Vehicle.findById(bi.itemId).lean()
-          if (v) {
-            item = v
-            itemType = 'vehicle'
-            price = hours * (v.pricePerHour || 0)
-          } else {
-            const a = await Accessory.findById(bi.itemId).lean()
-            if (a) {
-              item = a
-              itemType = 'accessory'
-              price = days * (a.pricePerDay || 0)
-            }
-          }
-        }
-
-        if (!item) continue
-        resolvedItems.push({
-          itemId: item._id.toString(),
-          name: item.name,
-          type: itemType,
-          price,
-        })
-      }
-    } else if (vehicleId) {
-      // Legacy single-vehicle support
-      if (!mongoose.Types.ObjectId.isValid(vehicleId)) {
-        return res.status(404).json({ message: 'Vehicle not found' })
-      }
-      const v = await Vehicle.findById(vehicleId).lean()
-      if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-      resolvedItems.push({
-        itemId: v._id.toString(),
-        name: v.name,
-        type: 'vehicle',
-        price: hours * v.pricePerHour,
-      })
+    if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId)) {
+      return res.status(400).json({ message: 'Valid vehicleId is required.' })
     }
 
-    if (resolvedItems.length === 0) {
-      return res.status(400).json({ message: 'No valid items selected.' })
+    const start = new Date(startTime)
+    const end = new Date(endTime)
+    if (end <= start) {
+      return res.status(400).json({ message: 'Return date must be after pickup date.' })
     }
 
-    const totalAmount = resolvedItems.reduce((s, i) => s + i.price, 0)
-    const booking = await Booking.create({
-      userId: req.user._id,
-      items: resolvedItems,
-      startTime: new Date(startTime),
-      endTime: new Date(endTime),
-      status: 'confirmed',
+    // Leeway for past dates (15 minutes)
+    const now = new Date()
+    now.setMinutes(now.getMinutes() - 15)
+    if (start < now) {
+      return res.status(400).json({ message: 'Pickup date cannot be in the past.' })
+    }
+
+    // 1. Only Approved Vehicles can be booked
+    const vehicle = await Vehicle.findById(vehicleId)
+    if (!vehicle) {
+      return res.status(404).json({ message: 'Vehicle not found.' })
+    }
+    if (vehicle.verificationStatus !== 'approved' || vehicle.isLive === false) {
+      return res.status(400).json({ message: 'This vehicle is currently offline or unapproved.' })
+    }
+
+    // 2. Only Verified Users can book
+    if (req.user.kycStatus !== 'verified') {
+      return res.status(400).json({ message: 'Only KYC-verified riders can request bookings. Please complete verification.' })
+    }
+
+    // 3. Owner cannot book own vehicle
+    if (vehicle.ownerId.toString() === req.user._id.toString()) {
+      return res.status(400).json({ message: 'Owners cannot book their own vehicles.' })
+    }
+
+    // 4. Overlapping Dates Check
+    const overlapping = await Booking.findOne({
+      vehicleId,
+      status: { $in: ['requested', 'Confirmed', 'Picked Up', 'In Progress'] },
+      startTime: { $lt: end },
+      endTime: { $gt: start }
+    })
+    if (overlapping) {
+      return res.status(400).json({ message: 'The vehicle is already booked or requested for these dates.' })
+    }
+
+    const hours = Math.ceil((end - start) / (1000 * 60 * 60))
+    const rentalAmount = hours * vehicle.pricePerHour
+    const bookingFee = 0 // Removed for Beta
+    const totalAmount = rentalAmount
+    const advanceAmount = Math.round(rentalAmount * 0.3)
+    const remainingAmount = rentalAmount - advanceAmount
+
+    const newBooking = await Booking.create({
+      vehicleId: vehicle._id,
+      ownerId: vehicle.ownerId,
+      renterId: req.user._id,
+      startTime: start,
+      endTime: end,
+      status: 'Requested',
+      price: totalAmount,
+      deposit: vehicle.securityDeposit || 0,
+      duration: hours,
+      vehicleName: vehicle.name,
+      vehicleType: vehicle.type,
+      renterName: req.user.name,
+      renterEmail: req.user.email || '',
+      ownerName: vehicle.owner?.name || 'Owner',
+      pricing: {
+        total: totalAmount,
+        advance: advanceAmount,
+        remaining: remainingAmount
+      },
+      rentalAmount,
+      bookingFee,
       totalAmount,
+      advanceAmount,
+      remainingAmount,
+      paymentStatus: 'Pending',
+      ownerPaymentStatus: 'Pending Pickup',
+      verificationDetails,
       agreementAccepted: true,
+      agreementVersion: agreementVersion || 'Beta v1.0',
+      agreementAcceptedAt: agreementAcceptedAt || new Date(),
+      ipAddress: req.ip || req.headers['x-forwarded-for'] || 'Unknown',
+      userAgent: req.headers['user-agent'] || 'Unknown',
       agreementTimestamp: new Date(),
     })
 
-    // Populate userId for response shape compatibility
-    const populated = await Booking.findById(booking._id).populate('userId', 'name').lean()
-    res.status(201).json(populated)
-  } catch (err) {
-    console.error('POST /api/bookings error:', err)
-    res.status(500).json({ message: 'Internal server error' })
-  }
-})
-
-app.get('/api/bookings/my', authMiddleware, async (req, res) => {
-  try {
-    const bookings = await Booking.find({ userId: req.user._id })
-      .populate('userId', 'name')
-      .sort({ createdAt: -1 })
-      .lean()
-    res.json({ bookings })
-  } catch (err) {
-    console.error('GET /api/bookings/my error:', err)
-    res.status(500).json({ message: 'Internal server error' })
-  }
-})
-
-app.get('/api/bookings', authMiddleware, async (req, res) => {
-  try {
-    if (req.user.role === 'admin') {
-      const bookings = await Booking.find()
-        .populate('userId', 'name')
-        .sort({ createdAt: -1 })
-        .lean()
-      return res.json({ bookings })
-    }
-
-    // For owners — bookings that contain their vehicles
-    const ownerVehicles = await Vehicle.find({ ownerId: req.user._id }, '_id').lean()
-    const ownerVehicleIds = ownerVehicles.map(v => v._id.toString())
-    const bookings = await Booking.find({
-      'items.itemId': { $in: ownerVehicleIds },
+    // Trigger Notifications for booking requested
+    await sendNotification(vehicle.ownerId, {
+      type: 'booking',
+      title: 'New Booking Request! 📅',
+      message: `You have received a booking request for ${vehicle.name}.`,
+      bookingId: newBooking._id,
+      vehicleId: vehicle._id
     })
-      .populate('userId', 'name')
+    await sendNotification(req.user._id, {
+      type: 'booking',
+      title: 'Booking Request Submitted 🚀',
+      message: `Your request for ${vehicle.name} has been sent to the owner.`,
+      bookingId: newBooking._id,
+      vehicleId: vehicle._id
+    })
+
+    res.status(201).json(newBooking.toObject())
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/bookings/my', authMiddleware, async (req, res, next) => {
+  try {
+    const bookings = await Booking.find({ renterId: req.user._id })
       .sort({ createdAt: -1 })
       .lean()
     res.json({ bookings })
   } catch (err) {
-    console.error('GET /api/bookings error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
-app.get('/api/bookings/:id', authMiddleware, async (req, res) => {
+app.get('/api/bookings', authMiddleware, async (req, res, next) => {
+  try {
+    let query = {}
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+      // Return bookings where user is renter OR owner
+      query = {
+        $or: [
+          { renterId: req.user._id },
+          { ownerId: req.user._id }
+        ]
+      }
+    }
+    const bookings = await Booking.find(query)
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ bookings })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/bookings/:id', authMiddleware, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Booking not found' })
     }
-    const b = await Booking.findById(req.params.id).populate('userId', 'name').lean()
-    if (!b) return res.status(404).json({ message: 'Booking not found' })
-    res.json(b)
+    const booking = await Booking.findById(req.params.id).lean()
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
+
+    const isRenter = booking.renterId?.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin = req.user.role === 'admin'
+
+    if (!isRenter && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Access denied.' })
+    }
+
+    res.json(booking)
   } catch (err) {
-    console.error('GET /api/bookings/:id error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
-app.patch('/api/bookings/:id/cancel', authMiddleware, async (req, res) => {
+app.put('/api/bookings/:id', authMiddleware, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Booking not found' })
     }
-    const b = await Booking.findById(req.params.id)
-    if (!b) return res.status(404).json({ message: 'Booking not found' })
+    const booking = await Booking.findById(req.params.id)
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
 
-    if (b.userId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Forbidden: not your booking' })
-    }
-    if (b.status === 'cancelled') {
-      return res.status(400).json({ message: 'Booking is already cancelled' })
+    const isRenter = booking.renterId?.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin = req.user.role === 'admin'
+
+    if (!isRenter && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden' })
     }
 
-    b.status = 'cancelled'
-    await b.save()
-    res.json(b.toObject())
+    // Allow partial updates of nested objects (handoverDetails, verificationDetails)
+    if (req.body.handoverDetails) {
+      booking.handoverDetails = {
+        ...booking.handoverDetails?.toObject(),
+        ...req.body.handoverDetails
+      }
+    }
+    if (req.body.verificationDetails) {
+      booking.verificationDetails = {
+        ...booking.verificationDetails?.toObject(),
+        ...req.body.verificationDetails
+      }
+    }
+    if (req.body.status) {
+      booking.status = req.body.status
+    }
+
+    await booking.save()
+    res.json(booking.toObject())
   } catch (err) {
-    console.error('PATCH /api/bookings/:id/cancel error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
+  }
+})
+
+app.patch('/api/bookings/:id/status', authMiddleware, async (req, res, next) => {
+  try {
+    const { status } = req.body
+    const allowed = [
+      'Requested',
+      'Accepted',
+      'Rejected',
+      'Confirmed',
+      'Picked Up',
+      'In Progress',
+      'Returned',
+      'Completed',
+      'Cancelled'
+    ]
+
+    if (!status || !allowed.includes(status)) {
+      return res.status(400).json({ message: 'Invalid or missing status' })
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+
+    const booking = await Booking.findById(req.params.id)
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
+
+    const isRenter = booking.renterId?.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin = req.user.role === 'admin'
+
+    // Status transition gates and authorization rules
+    if (status === 'Accepted' || status === 'Rejected') {
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ message: 'Only the vehicle owner can accept or reject booking requests.' })
+      }
+    }
+
+    if (status === 'Cancelled') {
+      if (!isRenter && !isOwner && !isAdmin) {
+        return res.status(403).json({ message: 'You are not authorized to cancel this booking.' })
+      }
+    }
+
+    // Late Return Calculation
+    if (status === 'Returned' || status === 'Completed') {
+      const now = new Date()
+      const end = new Date(booking.endTime)
+      const diffMs = now - end
+      if (diffMs > 0) {
+        const diffMins = Math.floor(diffMs / (1000 * 60))
+        if (diffMins > 15) { // past 15 min grace period
+          let lateHours = 0
+          if (diffMins <= 60) {
+            lateHours = 1
+          } else {
+            lateHours = Math.ceil(diffMins / 60)
+          }
+          
+          const vehicle = await Vehicle.findById(booking.vehicleId)
+          if (vehicle) {
+            const lateCharge = lateHours * vehicle.pricePerHour
+            booking.lateReturnInfo = { lateHours, lateCharge }
+            booking.remainingAmount += lateCharge // Owner receives late charge directly
+          }
+        }
+      }
+    }
+
+    booking.status = status
+    await booking.save()
+
+    // Trigger status transition notifications
+    if (status === 'Accepted') {
+      await sendNotification(booking.renterId, {
+        type: 'booking',
+        title: 'Booking Accepted! 🎉',
+        message: `Your request for ${booking.vehicleName} has been approved by the owner. Please complete the advance payment.`,
+        bookingId: booking._id
+      })
+    } else if (status === 'Rejected') {
+      await sendNotification(booking.renterId, {
+        type: 'booking',
+        title: 'Booking Request Rejected ❌',
+        message: `Your request for ${booking.vehicleName} was rejected.`,
+        bookingId: booking._id
+      })
+    } else if (status === 'cancelled') {
+      const recipientId = req.user._id.toString() === booking.renterId.toString() ? booking.ownerId : booking.renterId
+      await sendNotification(recipientId, {
+        type: 'booking',
+        title: 'Booking Cancelled ⚠️',
+        message: `The booking for ${booking.vehicleName} has been cancelled.`,
+        bookingId: booking._id
+      })
+    }
+
+    res.json(booking.toObject())
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.patch('/api/bookings/:id/cancel', authMiddleware, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+    const booking = await Booking.findById(req.params.id)
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
+
+    const isRenter = booking.renterId?.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin = req.user.role === 'admin'
+
+    if (!isRenter && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden' })
+    }
+
+    booking.status = 'cancelled'
+    await booking.save()
+    res.json(booking.toObject())
+  } catch (err) {
+    next(err)
   }
 })
 
@@ -666,18 +1053,31 @@ app.put('/api/users/profile', authMiddleware, async (req, res) => {
   }
 })
 
-app.post('/api/users/kyc', authMiddleware, async (req, res) => {
+app.post('/api/users/kyc', authMiddleware, kycUpload, async (req, res) => {
   try {
-    const { collegeIdUrl, governmentIdUrl } = req.body
-    if (!collegeIdUrl && !governmentIdUrl) {
+    const govFile = req.files?.['governmentIdUrl']?.[0]
+    const collegeFile = req.files?.['collegeIdUrl']?.[0]
+
+    if (!govFile && !collegeFile && !req.body.governmentIdUrl && !req.body.collegeIdUrl) {
       return res.status(400).json({ message: 'At least one ID is required' })
     }
+
     const updates = {
       kycStatus: 'pending',
       kycRejectionReason: null
     }
-    if (collegeIdUrl) updates.collegeIdUrl = collegeIdUrl
-    if (governmentIdUrl) updates.governmentIdUrl = governmentIdUrl
+
+    if (govFile) {
+      updates.governmentIdUrl = `/uploads/${govFile.filename}`
+    } else if (req.body.governmentIdUrl) {
+      updates.governmentIdUrl = req.body.governmentIdUrl
+    }
+
+    if (collegeFile) {
+      updates.collegeIdUrl = `/uploads/${collegeFile.filename}`
+    } else if (req.body.collegeIdUrl) {
+      updates.collegeIdUrl = req.body.collegeIdUrl
+    }
     
     const updated = await User.findByIdAndUpdate(req.user._id, updates, { new: true, lean: true })
     res.json({ message: 'KYC submitted successfully', user: safeUser(updated) })
@@ -689,7 +1089,7 @@ app.post('/api/users/kyc', authMiddleware, async (req, res) => {
 
 app.get('/api/users', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const users = await User.find().lean()
     res.json({ users: users.map(safeUser) })
   } catch (err) {
@@ -700,7 +1100,7 @@ app.get('/api/users', authMiddleware, async (req, res) => {
 
 app.patch('/api/users/:id/role', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
     }
@@ -719,7 +1119,7 @@ app.patch('/api/users/:id/role', authMiddleware, async (req, res) => {
 
 app.delete('/api/users/:id', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
     }
@@ -734,7 +1134,7 @@ app.delete('/api/users/:id', authMiddleware, async (req, res) => {
 
 app.patch('/api/admin/users/:id/kyc', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const { status, reason } = req.body
     if (!['verified', 'rejected'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' })
@@ -756,12 +1156,12 @@ app.patch('/api/admin/users/:id/kyc', authMiddleware, async (req, res) => {
 
 app.get('/api/admin/stats', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const [totalUsers, totalVehicles, totalBookings, pendingListings] = await Promise.all([
       User.countDocuments(),
-      Vehicle.countDocuments({ status: 'approved' }),
+      Vehicle.countDocuments({ verificationStatus: 'approved' }),
       Booking.countDocuments(),
-      Vehicle.countDocuments({ status: 'pending' }),
+      Vehicle.countDocuments({ verificationStatus: { $in: ['submitted', 'under_review'] } }),
     ])
     res.json({ users: totalUsers, vehicles: totalVehicles, bookings: totalBookings, pendingListings })
   } catch (err) {
@@ -770,15 +1170,48 @@ app.get('/api/admin/stats', authMiddleware, async (req, res) => {
   }
 })
 
+app.get('/api/admin/vehicles/pending', authMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+    const vehicles = await Vehicle.find({
+      verificationStatus: { $in: ['submitted', 'under_review'] }
+    }).lean()
+    res.json({ vehicles })
+  } catch (err) {
+    console.error('GET /api/admin/vehicles/pending error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+app.get('/api/admin/vehicles', authMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+    const vehicles = await Vehicle.find().lean()
+    res.json({ vehicles })
+  } catch (err) {
+    console.error('GET /api/admin/vehicles error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
 app.patch('/api/admin/vehicles/:id/approve', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
+    const { adminNotes } = req.body
     const v = await Vehicle.findByIdAndUpdate(
       req.params.id,
-      { status: 'approved' },
+      {
+        verificationStatus: 'approved',
+        status: 'approved',
+        verifiedBy: req.user._id,
+        verifiedAt: new Date(),
+        adminNotes: adminNotes || '',
+        rejectionReason: null,
+        isLive: true
+      },
       { new: true, lean: true }
     )
     if (!v) return res.status(404).json({ message: 'Vehicle not found' })
@@ -791,13 +1224,23 @@ app.patch('/api/admin/vehicles/:id/approve', authMiddleware, async (req, res) =>
 
 app.patch('/api/admin/vehicles/:id/reject', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' })
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
+    const { reason, adminNotes } = req.body
+    if (!reason) {
+      return res.status(400).json({ message: 'Rejection reason is required' })
+    }
     const v = await Vehicle.findByIdAndUpdate(
       req.params.id,
-      { status: 'rejected' },
+      {
+        verificationStatus: 'rejected',
+        status: 'rejected',
+        rejectionReason: reason,
+        adminNotes: adminNotes || '',
+        isLive: false
+      },
       { new: true, lean: true }
     )
     if (!v) return res.status(404).json({ message: 'Vehicle not found' })
@@ -808,46 +1251,796 @@ app.patch('/api/admin/vehicles/:id/reject', authMiddleware, async (req, res) => 
   }
 })
 
+app.patch('/api/admin/vehicles/:id/request-changes', authMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const { adminNotes } = req.body
+    if (!adminNotes) {
+      return res.status(400).json({ message: 'Change request notes are required' })
+    }
+    const v = await Vehicle.findByIdAndUpdate(
+      req.params.id,
+      {
+        verificationStatus: 'under_review',
+        status: 'under_review',
+        adminNotes,
+        isLive: false
+      },
+      { new: true, lean: true }
+    )
+    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+    res.json(v)
+  } catch (err) {
+    console.error('PATCH request-changes error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
 // ── Razorpay Payment Order Creation ────────────────────────
 
-app.post('/api/payments/create-order', authMiddleware, async (req, res) => {
-  const { amount, receipt, notes } = req.body
-  if (!amount) {
-    return res.status(400).json({ message: 'Amount is required' })
+// ── Payment & Escrow Routes ─────────────────────────────────
+
+import crypto from 'crypto'
+
+app.post('/api/payments/create-order', authMiddleware, async (req, res, next) => {
+  const { bookingId, type } = req.body
+  if (!bookingId || !type) {
+    return res.status(400).json({ message: 'bookingId and type (advance or final) are required' })
   }
   try {
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+
+    // Verify requester matches renter on booking record
+    if (booking.renterId.toString() !== req.user._id.toString() && !['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Forbidden: not your booking' })
+    }
+
+    const rentalAmount = booking.rentalAmount || booking.price
+    const advanceAmount = booking.advanceAmount
+    const remainingAmount = booking.remainingAmount
+    
+    let amount = 0
+    if (type === 'advance') {
+      amount = advanceAmount // Contains 30% advance + 100% booking fee
+    } else if (type === 'final') {
+      amount = remainingAmount
+    } else {
+      return res.status(400).json({ message: 'Invalid payment type. Must be advance or final.' })
+    }
+
     const keyId = process.env.RAZORPAY_KEY_ID || ''
-    if (!keyId || keyId.startsWith('YOUR_') || keyId === '') {
-      if (process.env.NODE_ENV === 'production') {
-        return res.status(500).json({ message: 'Razorpay key not configured for production' })
-      }
+    if (!razorpay || !keyId || keyId.startsWith('YOUR_') || keyId === '') {
+      // Mock order generation for local development/testing
       const mockOrder = {
-        id: `order_mock_${Date.now()}`,
+        id: `order_mock_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
         entity: 'order',
         amount: Math.round(amount * 100),
         amount_paid: 0,
         amount_due: Math.round(amount * 100),
         currency: 'INR',
-        receipt: receipt || `rcpt_${Date.now()}`,
+        receipt: `rcpt_${bookingId}_${type}`,
         status: 'created',
         attempts: 0,
-        notes: notes || {},
+        notes: { bookingId, type },
         created_at: Math.floor(Date.now() / 1000),
         isMock: true,
       }
       return res.status(200).json(mockOrder)
     }
+
     const options = {
-      amount: Math.round(amount * 100),
+      amount: Math.round(amount * 100), // convert to paise
       currency: 'INR',
-      receipt: receipt || `rcpt_${Date.now()}`,
-      notes: notes || {},
+      receipt: `rcpt_${bookingId}_${type}`,
+      notes: { bookingId, type },
     }
     const order = await razorpay.orders.create(options)
     res.status(200).json(order)
-  } catch (error) {
-    console.error('Razorpay order error:', error)
-    res.status(500).json({ message: 'Failed to create order', error: error.message })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/payments/verify', authMiddleware, async (req, res, next) => {
+  const { bookingId, type, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body
+  
+  if (!bookingId || !type || !razorpayOrderId || !razorpayPaymentId) {
+    return res.status(400).json({ message: 'Missing payment signature verification details' })
+  }
+
+  try {
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+
+    // 1. Signature Verification
+    const keyId = process.env.RAZORPAY_KEY_ID || ''
+    const isMock = razorpayOrderId.startsWith('order_mock_') || !keyId || keyId.startsWith('YOUR_')
+
+    if (!isMock) {
+      if (!razorpaySignature) {
+        return res.status(400).json({ message: 'razorpaySignature is required' })
+      }
+      const generated = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+        .digest('hex')
+
+      if (generated !== razorpaySignature) {
+        await sendNotification(booking.renterId, {
+          type: 'payment',
+          title: 'Payment Verification Failed ❌',
+          message: `Your payment verification for ${booking.vehicleName} failed due to signature mismatch.`,
+          bookingId: booking._id
+        })
+        return res.status(400).json({ message: 'Payment verification failed: Signature mismatch' })
+      }
+    }
+
+    // 2. Compute final amount allocations
+    const rentalAmount = booking.rentalAmount || booking.price
+    const advanceAmount = booking.advanceAmount
+    const remainingAmount = booking.remainingAmount
+
+    let finalAmount = 0
+    let platformFee = 0
+    let ownerShare = 0
+
+    if (type === 'advance') {
+      finalAmount = advanceAmount
+      platformFee = 0 // Removed for Beta
+      ownerShare = advanceAmount
+    } else {
+      finalAmount = remainingAmount
+      platformFee = 0
+      ownerShare = remainingAmount
+    }
+
+    // 3. Prevent duplicate payment recordings
+    const existing = await Payment.findOne({ transactionId: razorpayPaymentId })
+    if (existing) {
+      return res.status(200).json({ success: true, message: 'Payment already verified and registered', payment: existing })
+    }
+
+    // 4. Create Payment Record
+    const payment = await Payment.create({
+      bookingId: booking._id,
+      renterId: booking.renterId,
+      ownerId: booking.ownerId,
+      amount: finalAmount,
+      type,
+      status: 'success',
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+      platformFee,
+      ownerShare,
+      transactionId: razorpayPaymentId
+    })
+
+    // 5. Update Booking Status
+    if (type === 'advance') {
+      booking.status = 'Confirmed'
+      booking.paymentStatus = 'Paid'
+      // By default, ownerPaymentStatus is 'Pending Pickup'
+    } else if (type === 'final') {
+      booking.status = 'Completed'
+    }
+    await booking.save()
+
+    // Trigger payment success notifications
+    await sendNotification(booking.renterId, {
+      type: 'payment',
+      title: 'Payment Successful! ✅',
+      message: `Your ${type} payment of ₹${finalAmount} for ${booking.vehicleName} was verified.`,
+      bookingId: booking._id
+    })
+    await sendNotification(booking.ownerId, {
+      type: 'payment',
+      title: 'Payment Received! 💰',
+      message: `Payment of ₹${finalAmount} for ${booking.vehicleName} was credited to platform escrow.`,
+      bookingId: booking._id
+    })
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment verified and captured successfully',
+      payment
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/payments/:id/refund', authMiddleware, async (req, res, next) => {
+  try {
+    const payment = await Payment.findById(req.params.id)
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found' })
+    }
+
+    // Verify authorized user (only owner or admin can trigger refunds)
+    const isOwner = payment.ownerId.toString() === req.user._id.toString()
+    const isAdmin = req.user.role === 'admin'
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Only owner or admin can initiate refunds' })
+    }
+
+    if (payment.status === 'refunded') {
+      return res.status(400).json({ message: 'Payment is already refunded' })
+    }
+
+    // Create refund transaction log
+    const refundTxId = `ref_mock_${Date.now()}`
+    await Payment.create({
+      bookingId: payment.bookingId,
+      renterId: payment.renterId,
+      ownerId: payment.ownerId,
+      amount: payment.amount,
+      type: 'refund',
+      status: 'success',
+      transactionId: refundTxId,
+      platformFee: 0,
+      ownerShare: 0
+    })
+
+    payment.status = 'refunded'
+    await payment.save()
+
+    // Cancel the booking status
+    const booking = await Booking.findById(payment.bookingId)
+    if (booking) {
+      booking.status = 'cancelled'
+      await booking.save()
+    }
+
+    res.json({ success: true, message: 'Refund processed successfully', payment })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/payments/history', authMiddleware, async (req, res, next) => {
+  try {
+    let query = {}
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+      query = {
+        $or: [
+          { renterId: req.user._id },
+          { ownerId: req.user._id }
+        ]
+      }
+    }
+    const history = await Payment.find(query)
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ history })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/payments/:id/invoice', authMiddleware, async (req, res, next) => {
+  try {
+    const payment = await Payment.findById(req.params.id)
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment invoice not found' })
+    }
+
+    const booking = await Booking.findById(payment.bookingId).lean()
+    
+    // HTML Invoice Template Renderer
+    res.setHeader('Content-Type', 'text/html')
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>LUPU Invoice - ${payment.transactionId}</title>
+        <style>
+          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; margin: 40px; }
+          .invoice-box { max-width: 800px; margin: auto; padding: 30px; border: 1px solid #eee; box-shadow: 0 0 10px rgba(0,0,0,.05); }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ff6b00; padding-bottom: 20px; }
+          .logo { font-size: 28px; font-weight: bold; color: #ff6b00; }
+          .details { margin: 30px 0; display: flex; justify-content: space-between; }
+          .details div { line-height: 1.6; }
+          .table { width: 100%; border-collapse: collapse; margin: 30px 0; }
+          .table th { background: #fcfcfc; border-bottom: 2px solid #eee; text-align: left; padding: 10px; font-size: 13px; color: #888; }
+          .table td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 14px; }
+          .totals { text-align: right; margin-top: 20px; font-size: 14px; line-height: 1.8; }
+          .grand-total { font-size: 18px; font-weight: bold; color: #ff6b00; margin-top: 10px; }
+          .status { font-weight: bold; color: #2ecc71; margin-top: 20px; font-size: 15px; }
+        </style>
+      </head>
+      <body>
+        <div class="invoice-box">
+          <div class="header">
+            <div class="logo">LUPU Rentals</div>
+            <div>
+              <strong>Receipt Ref:</strong> ${payment.transactionId}<br>
+              <strong>Date:</strong> ${new Date(payment.createdAt).toLocaleDateString('en-IN')}<br>
+            </div>
+          </div>
+          
+          <div class="details">
+            <div>
+              <strong>Renter Details:</strong><br>
+              Name: ${booking?.renterName || 'Renter'}<br>
+              Email: ${booking?.renterEmail || '—'}<br>
+            </div>
+            <div>
+              <strong>Vehicle Details:</strong><br>
+              Name: ${booking?.vehicleName || 'Vehicle'}<br>
+              Type: ${booking?.vehicleType || 'Bike'}<br>
+              Rental Period: ${new Date(booking?.startTime).toLocaleString('en-IN')} to ${new Date(booking?.endTime).toLocaleString('en-IN')}
+            </div>
+          </div>
+
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Payment Type</th>
+                <th>Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>LUPU Rental Surcharge for booking ${booking?._id || ''}</td>
+                <td>${payment.type.toUpperCase()} PAYMENT</td>
+                <td>₹${payment.ownerShare}</td>
+              </tr>
+              <tr>
+                <td>Platform Administration Service Fee</td>
+                <td>Flat Fee</td>
+                <td>₹${payment.platformFee}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="totals">
+            <div><strong>Base Amount:</strong> ₹${payment.ownerShare + payment.platformFee}</div>
+            <div class="grand-total">Total Amount Charged: ₹${payment.amount}</div>
+          </div>
+
+          <div class="status">
+            Payment Status: ${payment.status.toUpperCase()} ✅
+          </div>
+        </div>
+      </body>
+      </html>
+    `)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Notification Engine helpers & endpoints ─────────────────
+
+async function sendEmailBackend(to, subject, content) {
+  try {
+    await Email.create({ to, subject, content })
+    logger.info(`[SIMULATED EMAIL SENDER] To: ${to} | Subject: ${subject}`)
+  } catch (err) {
+    console.error('Failed to save simulated email:', err)
+  }
+}
+
+async function sendNotification(userId, { type, title, message, bookingId, vehicleId }) {
+  try {
+    await Notification.create({
+      userId,
+      title,
+      message,
+      type,
+      bookingId,
+      vehicleId
+    })
+
+    const user = await User.findById(userId)
+    if (user) {
+      // 1. In-App: Stored above in MongoDB
+      // 2. Email: simulated email collection
+      await sendEmailBackend(user.email, title, message)
+
+      // 3. SMS & WhatsApp stubs (Design for future SMS/WhatsApp support)
+      if (user.phone) {
+        console.log(`[SMS/WhatsApp STUB] Phone: ${user.phone} | Content: ${title} - ${message}`)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to dispatch notification:', err)
+  }
+}
+
+// Background scheduler interval (runs every 60 seconds)
+setInterval(async () => {
+  try {
+    const now = new Date()
+
+    // 1. Pickup Reminders (status is confirmed and starts in <= 2 hours)
+    const pickupWindow = new Date(now.getTime() + 2 * 60 * 60 * 1000)
+    const bookingsForPickup = await Booking.find({
+      status: 'confirmed',
+      startTime: { $gte: now, $lte: pickupWindow },
+      pickupReminderSent: { $ne: true }
+    })
+    for (const b of bookingsForPickup) {
+      await sendNotification(b.renterId, {
+        type: 'booking',
+        title: 'Pickup Reminder 🔑',
+        message: `Your ride for ${b.vehicleName} starts soon. Please prepare for pickup check.`,
+        bookingId: b._id
+      })
+      b.pickupReminderSent = true
+      await b.save()
+    }
+
+    // 2. Return Reminders (status is ongoing and ends in <= 1 hour)
+    const returnWindow = new Date(now.getTime() + 1 * 60 * 60 * 1000)
+    const bookingsForReturn = await Booking.find({
+      status: 'ongoing',
+      endTime: { $gte: now, $lte: returnWindow },
+      returnReminderSent: { $ne: true }
+    })
+    for (const b of bookingsForReturn) {
+      await sendNotification(b.renterId, {
+        type: 'booking',
+        title: 'Return Reminder ⏰',
+        message: `Your ride for ${b.vehicleName} ends soon. Please return vehicle before deadline.`,
+        bookingId: b._id
+      })
+      b.returnReminderSent = true
+      await b.save()
+    }
+
+    // 3. Review Reminders (status is completed and completed in last 24h)
+    const completedWindow = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const completedBookings = await Booking.find({
+      status: 'completed',
+      updatedAt: { $gte: completedWindow },
+      reviewReminderSent: { $ne: true }
+    })
+    for (const b of completedBookings) {
+      await sendNotification(b.renterId, {
+        type: 'review',
+        title: 'Share Your Experience! ⭐',
+        message: `We hope you enjoyed renting ${b.vehicleName}! Please leave a rating and comment on the hub.`,
+        bookingId: b._id
+      })
+      b.reviewReminderSent = true
+      await b.save()
+    }
+  } catch (err) {
+    console.error('Notification scheduler cron execution warning:', err)
+  }
+}, 60000)
+
+app.get('/api/notifications', authMiddleware, async (req, res, next) => {
+  try {
+    const notifications = await Notification.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ notifications })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.patch('/api/notifications/:id/read', authMiddleware, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Notification not found' })
+    }
+    const notif = await Notification.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      { read: true },
+      { new: true }
+    )
+    if (!notif) return res.status(404).json({ message: 'Notification not found' })
+    res.json({ success: true, notification: notif })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/notifications/read-all', authMiddleware, async (req, res, next) => {
+  try {
+    await Notification.updateMany({ userId: req.user._id, read: false }, { read: true })
+    res.json({ success: true, message: 'All notifications marked as read' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/emails/simulated', authMiddleware, async (req, res, next) => {
+  try {
+    let query = {}
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+      query = { to: req.user.email }
+    }
+    const emails = await Email.find(query).sort({ createdAt: -1 }).lean()
+    res.json({ emails })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.delete('/api/emails/simulated', authMiddleware, async (req, res, next) => {
+  try {
+    let query = {}
+    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+      query = { to: req.user.email }
+    }
+    await Email.deleteMany(query)
+    res.json({ success: true, message: 'Simulated inbox cleared' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Review System REST Endpoints ───────────────────────────
+
+app.post('/api/reviews', authMiddleware, async (req, res, next) => {
+  const { bookingId, rating, comment, reviewType } = req.body
+  if (!bookingId || !rating || !reviewType) {
+    return res.status(400).json({ message: 'bookingId, rating, and reviewType are required' })
+  }
+
+  try {
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+
+    // Only completed bookings can leave reviews
+    if (booking.status !== 'completed') {
+      return res.status(400).json({ message: 'Reviews can only be submitted after the ride is completed' })
+    }
+
+    const isRenter = booking.renterId.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId.toString() === req.user._id.toString()
+
+    // Validate reviewer authorization
+    if (reviewType === 'vehicle' || reviewType === 'owner') {
+      if (!isRenter) {
+        return res.status(403).json({ message: 'Only the renter can review the vehicle and owner' })
+      }
+    } else if (reviewType === 'customer') {
+      if (!isOwner) {
+        return res.status(403).json({ message: 'Only the vehicle owner can review the customer' })
+      }
+    } else {
+      return res.status(400).json({ message: 'Invalid reviewType' })
+    }
+
+    // Check for duplicate review in DB
+    const existing = await Review.findOne({
+      bookingId,
+      reviewerId: req.user._id,
+      reviewType
+    })
+    if (existing) {
+      return res.status(400).json({ message: 'You have already submitted a review for this booking' })
+    }
+
+    const reviewedUserId = reviewType === 'customer' ? booking.renterId : booking.ownerId
+
+    // Create review
+    const review = await Review.create({
+      bookingId,
+      reviewerId: req.user._id,
+      reviewerName: req.user.name || 'User',
+      reviewedUserId,
+      vehicleId: booking.vehicleId,
+      vehicleName: booking.vehicleName,
+      rating,
+      comment: comment || '',
+      reviewType
+    })
+
+    // Recalculate average ratings
+    if (reviewType === 'vehicle' && booking.vehicleId) {
+      const stats = await Review.aggregate([
+        { $match: { vehicleId: booking.vehicleId, reviewType: 'vehicle' } },
+        { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
+      ])
+      if (stats.length > 0) {
+        await Vehicle.findByIdAndUpdate(booking.vehicleId, {
+          rating: Math.round(stats[0].avgRating * 10) / 10,
+          totalReviews: stats[0].count
+        })
+      }
+    } else if (reviewType === 'owner' || reviewType === 'customer') {
+      const stats = await Review.aggregate([
+        { $match: { reviewedUserId } },
+        { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
+      ])
+      if (stats.length > 0) {
+        await User.findByIdAndUpdate(reviewedUserId, {
+          rating: Math.round(stats[0].avgRating * 10) / 10,
+          totalReviews: stats[0].count
+        })
+      }
+    }
+
+    res.status(201).json({ success: true, review })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/reviews/vehicle/:vehicleId', async (req, res, next) => {
+  try {
+    const reviews = await Review.find({ vehicleId: req.params.vehicleId, reviewType: 'vehicle' })
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ reviews })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/reviews/user/:userId', async (req, res, next) => {
+  try {
+    const reviews = await Review.find({ reviewedUserId: req.params.userId })
+      .sort({ createdAt: -1 })
+      .lean()
+    res.json({ reviews })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/reviews/eligible/:bookingId', authMiddleware, async (req, res, next) => {
+  try {
+    const reviews = await Review.find({
+      bookingId: req.params.bookingId,
+      reviewerId: req.user._id
+    }).lean()
+
+    const check = {
+      vehicle: reviews.some(r => r.reviewType === 'vehicle'),
+      owner: reviews.some(r => r.reviewType === 'owner'),
+      customer: reviews.some(r => r.reviewType === 'customer')
+    }
+
+    res.json({ check })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Trust & Safety Endpoints ───────────────────────────────
+
+app.post('/api/safety/report', authMiddleware, async (req, res, next) => {
+  try {
+    const { targetType, targetId, reason, description } = req.body
+    if (!['user', 'vehicle'].includes(targetType) || !targetId || !reason) {
+      return res.status(400).json({ message: 'Missing required report fields' })
+    }
+    const report = await Report.create({
+      reporterId: req.user._id,
+      targetType,
+      targetId,
+      reason,
+      description
+    })
+    res.status(201).json({ success: true, report })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/safety/dispute', authMiddleware, async (req, res, next) => {
+  try {
+    const { bookingId, reason, description } = req.body
+    if (!bookingId || !reason) {
+      return res.status(400).json({ message: 'Missing required dispute fields' })
+    }
+    const dispute = await Dispute.create({
+      raisedBy: req.user._id,
+      bookingId,
+      reason,
+      description
+    })
+    res.status(201).json({ success: true, dispute })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/safety/sos', authMiddleware, async (req, res, next) => {
+  try {
+    const { bookingId, location } = req.body
+    if (!bookingId) {
+      return res.status(400).json({ message: 'Booking ID required for SOS' })
+    }
+    const sos = await SOS.create({
+      userId: req.user._id,
+      bookingId,
+      location
+    })
+    // In a real app, this would also trigger immediate SMS/push notifications to emergency contacts and admins
+    console.error(`🚨 [SOS TRIGGERED] User ${req.user._id} | Booking ${bookingId} | Location ${location}`)
+    res.status(201).json({ success: true, sos })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.put('/api/users/emergency-contacts', authMiddleware, async (req, res, next) => {
+  try {
+    const { emergencyContacts } = req.body
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { emergencyContacts },
+      { new: true }
+    )
+    res.json({ success: true, emergencyContacts: user.emergencyContacts })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Admin Safety API ────────────────────────────────────────
+
+app.patch('/api/admin/users/:id/suspend', authMiddleware, async (req, res, next) => {
+  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+  try {
+    const { isSuspended } = req.body
+    const user = await User.findByIdAndUpdate(req.params.id, { isSuspended }, { new: true })
+    res.json({ success: true, user })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.patch('/api/admin/users/:id/fraud', authMiddleware, async (req, res, next) => {
+  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+  try {
+    const { fraudScore } = req.body
+    const user = await User.findByIdAndUpdate(req.params.id, { fraudScore }, { new: true })
+    res.json({ success: true, user })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/safety/reports', authMiddleware, async (req, res, next) => {
+  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+  try {
+    const reports = await Report.find().sort({ createdAt: -1 }).populate('reporterId', 'name email').lean()
+    res.json({ reports })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/safety/disputes', authMiddleware, async (req, res, next) => {
+  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+  try {
+    const disputes = await Dispute.find().sort({ createdAt: -1 }).populate('raisedBy', 'name email').lean()
+    res.json({ disputes })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/safety/sos', authMiddleware, async (req, res, next) => {
+  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+  try {
+    const sosList = await SOS.find().sort({ createdAt: -1 }).populate('userId', 'name email phone').lean()
+    res.json({ sosList })
+  } catch (err) {
+    next(err)
   }
 })
 
@@ -869,48 +2062,40 @@ app.use((req, res) => {
 })
 
 // ── Global error handler ───────────────────────────────────
-// eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err)
-  res.status(500).json({ message: 'Internal server error' })
-})
-
-
+app.use(errorHandler)
 
 // ── Start ──────────────────────────────────────────────────
 async function start() {
   try {
-    console.log('')
-    console.log('  🔌 Connecting to MongoDB...')
+    logger.info('Connecting to MongoDB...')
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
     })
-    console.log(`  ✅ MongoDB connected: ${MONGODB_URI.replace(/\/\/.*@/, '//***@')}`)
+    logger.info(`MongoDB connected: ${MONGODB_URI.replace(/\/\/.*@/, '//***@')}`)
 
     await seedDatabase()
 
     app.listen(PORT, () => {
-      console.log('')
-      console.log('  ╔══════════════════════════════════════════════════╗')
-      console.log('  ║                                                  ║')
-      console.log(`  ║   🏍️  LUPU API  →  http://localhost:${PORT}          ║`)
-      console.log('  ║   📦  Storage   →  MongoDB (persistent)          ║')
-      console.log('  ║   🔑  Auth      →  OTP (in-memory, 5 min TTL)   ║')
-      console.log('  ║                                                  ║')
-      console.log('  ╚══════════════════════════════════════════════════╝')
-      console.log('')
+      logger.info('LUPU API Started', {
+        port: PORT,
+        storage: 'MongoDB (persistent)',
+        auth: 'OTP (in-memory, 5 min TTL)'
+      })
     })
   } catch (err) {
-    console.error('  ❌ Failed to connect to MongoDB:', err.message)
-    console.error('  💡 Check that MongoDB is running or update MONGODB_URI in .env')
+    logger.error('Failed to connect to MongoDB', err)
     process.exit(1)
   }
 }
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  await mongoose.connection.close()
-  console.log('\n  👋 MongoDB disconnected. Server stopped.')
+  try {
+    await mongoose.connection.close()
+    logger.info('MongoDB disconnected. Server stopped.')
+  } catch (err) {
+    logger.error('Error during shutdown', err)
+  }
   process.exit(0)
 })
 

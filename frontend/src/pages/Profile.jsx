@@ -10,6 +10,7 @@ import PageWrapper from '../components/PageWrapper'
 import useAuthStore from '../store/authStore'
 import { BookingCardSkeleton } from '../components/Skeletons'
 import { profileSchema } from '../utils/schemas'
+import EmergencyContacts from '../components/EmergencyContacts'
 
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { storage } from '../firebase/config'
@@ -59,7 +60,7 @@ export default function Profile() {
       if (!user?.isOwner) return
       try {
         const { data } = await vehicleAPI.myVehicles()
-        setVehiclesCount(data.length || 0)
+        setVehiclesCount(data.vehicles?.length || (Array.isArray(data) ? data.length : 0))
       } catch (err) {
         console.error('Failed to fetch owner vehicles:', err)
       }
@@ -73,7 +74,7 @@ export default function Profile() {
       setLoadingBookings(true)
       try {
         const { data } = await bookingAPI.myBookings()
-        setBookings(data)
+        setBookings(data.bookings || (Array.isArray(data) ? data : []))
       } catch (err) {
         console.error('Failed to fetch bookings', err)
       } finally {
@@ -453,6 +454,9 @@ export default function Profile() {
             })}
           </div>
         </div>
+
+        {/* Emergency Contacts */}
+        <EmergencyContacts />
 
       </div>
     </PageWrapper>

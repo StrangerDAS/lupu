@@ -11,10 +11,11 @@ export default function SupportView({ tickets = [] }) {
   const [selectedTicket, setSelectedTicket] = useState(null)
   const [message, setMessage] = useState('')
 
-  const filteredTickets = tickets.filter(t =>
-    (t.subject || '').toLowerCase().includes(search.toLowerCase()) ||
-    (t.userName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (t._id || t.id || '').toLowerCase().includes(search.toLowerCase())
+  const safeTickets = Array.isArray(tickets) ? tickets : []
+  const filteredTickets = safeTickets.filter(t =>
+    (t?.subject || '').toLowerCase().includes(search.toLowerCase()) ||
+    (t?.userName || '').toLowerCase().includes(search.toLowerCase()) ||
+    (t?._id || t?.id || '').toLowerCase().includes(search.toLowerCase())
   )
 
   const handleReply = async (e) => {
@@ -67,21 +68,21 @@ export default function SupportView({ tickets = [] }) {
           ) : (
             filteredTickets.map(t => (
               <div
-                key={t._id || t.id}
+                key={t?._id || t?.id}
                 onClick={() => setSelectedTicket(t)}
                 className={`p-3.5 rounded-xl border cursor-pointer transition text-xs flex flex-col gap-2 ${
-                  selectedTicket?._id === t._id 
+                  selectedTicket?._id === (t?._id || t?.id) 
                     ? 'border-brand/40 bg-brand/5' 
                     : 'border-white/5 bg-surface-2/15 hover:bg-white/5'
                 }`}
               >
                 <div className="flex justify-between items-center">
-                  <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded text-[9px] font-bold uppercase">{t.category}</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[9px] capitalize ${t.status === 'closed' ? 'bg-white/10 text-white/40' : 'bg-green-500/20 text-green-400'}`}>{t.status}</span>
+                  <span className="px-2 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/30 rounded text-[9px] font-bold uppercase">{t?.category || 'General'}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] capitalize ${t?.status === 'closed' ? 'bg-white/10 text-white/40' : 'bg-green-500/20 text-green-400'}`}>{t?.status || 'Open'}</span>
                 </div>
-                <h4 className="font-semibold text-white/90 truncate">{t.subject}</h4>
+                <h4 className="font-semibold text-white/90 truncate">{t?.subject || 'No Subject'}</h4>
                 <div className="text-[10px] text-white/40 flex justify-between items-center mt-1">
-                  <span>From: {t.userName}</span>
+                  <span>From: {t?.userName || 'Unknown User'}</span>
                 </div>
               </div>
             ))

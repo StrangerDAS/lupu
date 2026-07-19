@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiMail, FiLoader, FiSmartphone, FiCheckCircle, FiUser } from 'react-icons/fi'
+import { FiMail, FiLoader, FiCheckCircle, FiUser } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authAPI } from '../api/endpoints'
@@ -10,7 +10,6 @@ export default function Signup() {
   const navigate = useNavigate()
   const { setAuth } = useAuthStore()
   
-  const [authMethod, setAuthMethod] = useState('email') // 'email' | 'phone'
   const [loading, setLoading] = useState(false)
   
   const [name, setName] = useState('')
@@ -21,8 +20,7 @@ export default function Signup() {
   const handleSendOtp = async (e) => {
     e.preventDefault()
     if (!name.trim()) return toast.error("Please enter your name")
-    if (authMethod === 'email' && !identifier.includes('@')) return toast.error("Please enter a valid email")
-    if (authMethod === 'phone' && identifier.length !== 10) return toast.error("Please enter a valid 10-digit phone number")
+    if (!identifier.includes('@')) return toast.error("Please enter a valid email")
 
     setLoading(true)
     try {
@@ -67,23 +65,7 @@ export default function Signup() {
 
       <div className="card p-8 shadow-2xl">
         
-        {/* Auth Method Toggle */}
-        {!otpSent && (
-          <div className="flex rounded-lg bg-white/5 p-1 mb-6">
-            <button
-              onClick={() => { setAuthMethod('email'); setIdentifier(''); }}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${authMethod === 'email' ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}
-            >
-              Email
-            </button>
-            <button
-              onClick={() => { setAuthMethod('phone'); setIdentifier(''); }}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${authMethod === 'phone' ? 'bg-brand text-white' : 'text-white/40 hover:text-white'}`}
-            >
-              Phone
-            </button>
-          </div>
-        )}
+
 
         <div className="space-y-5">
           {!otpSent ? (
@@ -106,32 +88,19 @@ export default function Signup() {
 
               <div>
                 <label className="label" htmlFor="identifier">
-                  {authMethod === 'email' ? 'Email address' : 'Phone Number'}
+                  Email address
                 </label>
                 <div className="relative flex items-center">
-                  {authMethod === 'email' ? (
-                    <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
-                  ) : (
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-white/70 border-r border-white/10 pr-2 z-10 select-none">
-                      <span role="img" aria-label="India">🇮🇳</span> <span className="font-semibold">+91</span>
-                    </span>
-                  )}
+                  <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
                   
                   <input
                     id="identifier"
-                    type={authMethod === 'email' ? "email" : "tel"}
+                    type="email"
                     required
                     value={identifier}
-                    onChange={(e) => {
-                      if (authMethod === 'phone') {
-                        const val = e.target.value.replace(/\D/g, '')
-                        if (val.length <= 10) setIdentifier(val)
-                      } else {
-                        setIdentifier(e.target.value)
-                      }
-                    }}
-                    placeholder={authMethod === 'email' ? "you@example.com" : "7002630628"}
-                    className={`input-field ${authMethod === 'email' ? 'pl-11' : 'pl-[84px]'}`}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    placeholder="you@example.com"
+                    className="input-field pl-11"
                   />
                 </div>
               </div>
@@ -182,7 +151,7 @@ export default function Signup() {
                 onClick={() => setOtpSent(false)}
                 className="w-full text-sm text-brand mt-2"
               >
-                Change {authMethod === 'email' ? 'Email' : 'Phone Number'}
+                Change Email
               </button>
             </form>
           )}

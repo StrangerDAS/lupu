@@ -4,7 +4,7 @@ import { FiX, FiCheckCircle, FiAlertCircle } from 'react-icons/fi'
 import { RiMotorbikeLine } from 'react-icons/ri'
 import toast from 'react-hot-toast'
 import StarRating from './StarRating'
-import { submitReview, hasReviewed } from '../firebase/firestoreService'
+import { reviewAPI } from '../api/endpoints'
 
 /**
  * ReviewModal — Uber/Airbnb-style post-booking review flow.
@@ -65,19 +65,19 @@ export default function ReviewModal({ isOpen, onClose, booking, currentUser, rol
   // Check which steps have already been reviewed
   useEffect(() => {
     if (!isOpen || !booking?._id || !currentUser?._id) return
-    Promise.all(
-      steps.map((s) => hasReviewed(booking._id, currentUser._id, s.type))
-    ).then((results) => {
-      const done = steps.filter((_, i) => results[i]).map((s) => s.type)
-      setAlreadyReviewed(done)
-      // Advance to first unreviewed step
-      const firstPending = steps.findIndex((_, i) => !results[i])
-      if (firstPending === -1) {
-        setDone(true)
-      } else {
-        setStepIndex(firstPending)
-      }
-    }).catch(() => {})
+    reviewAPI.getEligibility(booking._id)
+      .then((res) => {
+        const check = res.data?.check || {}
+        const done = steps.filter((s) => check[s.type]).map((s) => s.type)
+        setAlreadyReviewed(done)
+        // Advance to first unreviewed step
+        const firstPending = steps.findIndex((s) => !check[s.type])
+        if (firstPending === -1) {
+          setDone(true)
+        } else {
+          setStepIndex(firstPending)
+        }
+      }).catch(() => {})
   }, [isOpen, booking?._id, currentUser?._id])
 
   const handleClose = () => {
@@ -97,20 +97,12 @@ export default function ReviewModal({ isOpen, onClose, booking, currentUser, rol
 
     setSubmitting(true)
     try {
-      const reviewedUserId = role === 'owner' ? booking.renterId : booking.ownerId
-      const reviewPayload = {
+      await reviewAPI.submit({
         bookingId: booking._id,
-        reviewerId: currentUser._id,
-        reviewerName: currentUser.name || currentUser.email || 'User',
-        reviewedUserId,
-        vehicleId: booking.vehicleId || '',
-        vehicleName: booking.vehicleName || '',
         rating,
         comment: comments[currentStep.type] || '',
         reviewType: currentStep.type,
-      }
-
-      await submitReview(reviewPayload)
+      })
       toast.success(`${currentStep.label} submitted!`)
 
       // Advance to next step or finish

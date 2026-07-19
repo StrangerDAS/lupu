@@ -1,12 +1,10 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiMail, FiTrash2, FiChevronLeft, FiExternalLink } from 'react-icons/fi'
-import { collection, query, orderBy, onSnapshot, getDocs, deleteDoc, doc } from 'firebase/firestore'
-import { db } from '../firebase/config'
+import { FiMail, FiTrash2, FiChevronLeft } from 'react-icons/fi'
 import PageWrapper from '../components/PageWrapper'
 import useAuthStore from '../store/authStore'
 import toast from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { simulatedEmailAPI } from '../api/endpoints'
 
 export default function SimulatedInbox() {
   const [emails, setEmails] = useState([])
@@ -15,37 +13,36 @@ export default function SimulatedInbox() {
   const { user } = useAuthStore()
 
   useEffect(() => {
-    // We listen to all emails for admin, or just the user's emails
-    // But since it's a simulated inbox for testing, let's just fetch all emails
-    // Or filter by user.email if we want it isolated. Let's filter by user.email to match reality.
-    
     if (!user?.email) return
-    
-    // For localhost testing flexibility, if they are admin, they see all. Otherwise, they see theirs.
-    const isGlobal = user?.roles?.includes('admin')
-    
-    let q = query(collection(db, 'emails'), orderBy('createdAt', 'desc'))
-    
-    const unsub = onSnapshot(q, (snap) => {
-      const allEmails = snap.docs.map(d => ({ _id: d.id, ...d.data() }))
-      // Filter clientside if needed
-      if (!isGlobal) {
-        setEmails(allEmails.filter(e => e.to === user.email || e.to?.includes(user.email)))
-      } else {
-        setEmails(allEmails)
+    const isGlobal = user?.roles?.includes('admin') || user?.role === 'admin'
+
+    const fetchEmails = async () => {
+      try {
+        const { data } = await simulatedEmailAPI.getEmails()
+        const allEmails = data.emails || []
+        if (!isGlobal) {
+          setEmails(allEmails.filter(e => e.to === user.email || e.to?.includes(user.email)))
+        } else {
+          setEmails(allEmails)
+        }
+      } catch (err) {
+        console.error('Failed to load simulated emails:', err)
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
-    })
-    
-    return () => unsub()
+    }
+
+    fetchEmails()
+    const interval = setInterval(fetchEmails, 3000)
+    return () => clearInterval(interval)
   }, [user])
 
   const handleClearInbox = async () => {
     if (!confirm('Are you sure you want to delete all emails in this inbox?')) return
     const toastId = toast.loading('Clearing inbox...')
     try {
-      const promises = emails.map(e => deleteDoc(doc(db, 'emails', e._id)))
-      await Promise.all(promises)
+      await simulatedEmailAPI.clearInbox()
+      setEmails([])
       toast.success('Inbox cleared', { id: toastId })
       setSelectedEmail(null)
     } catch (err) {

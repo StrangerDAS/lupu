@@ -12,7 +12,7 @@ import { db } from '../firebase/config'
 // Toggle this via env vars in production (e.g. import.meta.env.VITE_EMAIL_PROVIDER)
 const EMAIL_PROVIDER = 'SIMULATION' // 'RESEND' | 'SENDGRID' | 'BREVO' | 'SIMULATION'
 
-const emailsCol = collection(db, 'emails')
+const getEmailsCollection = () => collection(db, 'emails')
 
 /**
  * Main email dispatch function
@@ -41,7 +41,7 @@ export async function sendEmail(to, subject, content) {
 export async function sendEmailSimulation(to, subject, content) {
   console.log(`[SIMULATED EMAIL] To: ${to} | Subject: ${subject}`)
   
-  await addDoc(emailsCol, {
+  await addDoc(getEmailsCollection(), {
     to,
     subject,
     content,

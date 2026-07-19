@@ -29,8 +29,11 @@ export const bookingAPI = {
   create: (data) => api.post('/bookings', data),
   myBookings: () => api.get('/bookings/my'),
   cancel: (id) => api.patch(`/bookings/${id}/cancel`),
-  getAll: () => api.get('/bookings'),         // admin
+  getAll: () => api.get('/bookings'),         // admin, owner, renter
   getById: (id) => api.get(`/bookings/${id}`),
+  updateStatus: (id, status) => api.patch(`/bookings/${id}/status`, { status }),
+  updateBooking: (id, data) => api.put(`/bookings/${id}`, data),
+  getCalendar: (vehicleId) => api.get(`/vehicles/${vehicleId}/calendar`),
 }
 
 /* ── Users ──────────────────────────────────────────────── */
@@ -47,8 +50,11 @@ export const userAPI = {
 
 /* ── Admin ──────────────────────────────────────────────── */
 export const adminAPI = {
-  approveVehicle: (id) => api.patch(`/admin/vehicles/${id}/approve`),
-  rejectVehicle: (id) => api.patch(`/admin/vehicles/${id}/reject`),
+  approveVehicle: (id, notes) => api.patch(`/admin/vehicles/${id}/approve`, { adminNotes: notes }),
+  rejectVehicle: (id, reason, notes) => api.patch(`/admin/vehicles/${id}/reject`, { reason, adminNotes: notes }),
+  requestChanges: (id, notes) => api.patch(`/admin/vehicles/${id}/request-changes`, { adminNotes: notes }),
+  getPendingVehicles: () => api.get('/admin/vehicles/pending'),
+  getAllVehicles: () => api.get('/admin/vehicles'),
   getDashboardStats: () => api.get('/admin/stats'),
 }
 
@@ -69,6 +75,47 @@ export const roleAPI = {
 
 /* ── Payments ───────────────────────────────────────────── */
 export const paymentAPI = {
-  createOrder: (data) => api.post('/payments/create-order', data),
+  createOrder: (bookingId, type) => api.post('/payments/create-order', { bookingId, type }),
+  verify: (data) => api.post('/payments/verify', data),
+  refund: (id) => api.post(`/payments/${id}/refund`),
+  getHistory: () => api.get('/payments/history'),
+}
+
+/* ── Notifications ──────────────────────────────────────── */
+export const notificationAPI = {
+  getAll: () => api.get('/notifications'),
+  markRead: (id) => api.patch(`/notifications/${id}/read`),
+  markAllRead: () => api.post('/notifications/read-all'),
+}
+
+/* ── Simulated Emails ───────────────────────────────────── */
+export const simulatedEmailAPI = {
+  getEmails: () => api.get('/emails/simulated'),
+  clearInbox: () => api.delete('/emails/simulated'),
+}
+
+/* ── Reviews ────────────────────────────────────────────── */
+export const reviewAPI = {
+  submit: (data) => api.post('/reviews', data),
+  getVehicleReviews: (vehicleId) => api.get(`/reviews/vehicle/${vehicleId}`),
+  getUserReviews: (userId) => api.get(`/reviews/user/${userId}`),
+  getEligibility: (bookingId) => api.get(`/reviews/eligible/${bookingId}`),
+}
+
+/* ── Trust & Safety ─────────────────────────────────────── */
+export const safetyAPI = {
+  report: (data) => api.post('/safety/report', data),
+  dispute: (data) => api.post('/safety/dispute', data),
+  triggerSOS: (data) => api.post('/safety/sos', data),
+  updateEmergencyContacts: (data) => api.put('/users/emergency-contacts', data),
+}
+
+/* ── Admin Safety ───────────────────────────────────────── */
+export const adminSafetyAPI = {
+  suspendUser: (id, isSuspended) => api.patch(`/admin/users/${id}/suspend`, { isSuspended }),
+  updateFraudScore: (id, fraudScore) => api.patch(`/admin/users/${id}/fraud`, { fraudScore }),
+  getReports: () => api.get('/admin/safety/reports'),
+  getDisputes: () => api.get('/admin/safety/disputes'),
+  getSOS: () => api.get('/admin/safety/sos'),
 }
 

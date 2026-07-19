@@ -4,27 +4,42 @@ import { FiUsers, FiCpu, FiBookmark, FiAlertCircle, FiSettings, FiCheckCircle } 
 import { RiMotorbikeLine } from 'react-icons/ri'
 
 export default function DashboardView({ users = [], vehicles = [], bookings = [], disputes = [], tickets = [], reports = [], adminActions = [] }) {
+  const safeUsers = Array.isArray(users) ? users : []
+  const safeVehicles = Array.isArray(vehicles) ? vehicles : []
+  const safeBookings = Array.isArray(bookings) ? bookings : []
+  const safeDisputes = Array.isArray(disputes) ? disputes : []
+  const safeTickets = Array.isArray(tickets) ? tickets : []
+  const safeReports = Array.isArray(reports) ? reports : []
+  const safeActions = Array.isArray(adminActions) ? adminActions : []
+
   const stats = {
-    totalUsers: users.length,
-    activeUsers: users.filter(u => u.status !== 'suspended').length,
-    verifiedUsers: users.filter(u => u.emailVerified || u.phoneVerified).length,
-    suspendedUsers: users.filter(u => u.status === 'suspended').length,
+    totalUsers: safeUsers.length,
+    activeUsers: safeUsers.filter(u => u?.status !== 'suspended').length,
+    verifiedUsers: safeUsers.filter(u => u?.kycStatus === 'verified').length,
+    pendingVerifications: safeUsers.filter(u => u?.kycStatus === 'pending').length,
+    suspendedUsers: safeUsers.filter(u => u?.status === 'suspended').length,
     
-    totalVehicles: vehicles.length,
-    approvedVehicles: vehicles.filter(v => v.status === 'approved').length,
-    pendingVehicles: vehicles.filter(v => v.status === 'pending').length,
-    rejectedVehicles: vehicles.filter(v => v.status === 'rejected').length,
-    activeVehicles: vehicles.filter(v => v.isLive).length,
+    totalVehicles: safeVehicles.length,
+    approvedVehicles: safeVehicles.filter(v => v?.status === 'approved').length,
+    pendingVehicles: safeVehicles.filter(v => v?.status === 'pending').length,
+    rejectedVehicles: safeVehicles.filter(v => v?.status === 'rejected').length,
+    activeVehicles: safeVehicles.filter(v => v?.isLive).length,
 
-    totalBookings: bookings.length,
-    activeBookings: bookings.filter(b => b.bookingStatus === 'active' || b.bookingStatus === 'ongoing').length,
-    completedBookings: bookings.filter(b => b.bookingStatus === 'completed').length,
-    cancelledBookings: bookings.filter(b => b.bookingStatus === 'cancelled').length,
-    disputedBookings: bookings.filter(b => b.bookingStatus === 'disputed').length,
+    totalBookings: safeBookings.length,
+    activeBookings: safeBookings.filter(b => b?.bookingStatus === 'active' || b?.bookingStatus === 'ongoing').length,
+    completedBookings: safeBookings.filter(b => b?.bookingStatus === 'completed').length,
+    cancelledBookings: safeBookings.filter(b => b?.bookingStatus === 'cancelled').length,
+    disputedBookings: safeBookings.filter(b => b?.bookingStatus === 'disputed').length,
 
-    openDisputes: disputes.filter(d => d.status === 'open').length,
-    openReports: reports.filter(r => r.status === 'open').length,
-    openTickets: tickets.filter(t => t.status === 'open').length,
+    openDisputes: safeDisputes.filter(d => d?.status === 'open').length,
+    openReports: safeReports.filter(r => r?.status === 'open').length,
+    openTickets: safeTickets.filter(t => t?.status === 'open').length,
+    
+    // Finance
+    totalRevenue: safeBookings.reduce((sum, b) => sum + (b?.bookingFee || 0), 0),
+    outstandingOwnerPayments: safeBookings.filter(b => b?.ownerPaymentStatus === 'Pending Owner Payment').reduce((sum, b) => sum + ((b?.remainingAmount || 0) + (b?.lateReturnInfo?.lateCharge || 0)), 0),
+    lateChargesEarned: safeBookings.reduce((sum, b) => sum + (b?.lateReturnInfo?.lateCharge || 0), 0),
+    totalRentalVolume: safeBookings.reduce((sum, b) => sum + (b?.rentalAmount || 0), 0),
   }
 
   const statGroups = [
@@ -35,8 +50,9 @@ export default function DashboardView({ users = [], vehicles = [], bookings = []
       items: [
         { label: 'Total Users', value: stats.totalUsers },
         { label: 'Active Users', value: stats.activeUsers },
+        { label: 'Pending KYC', value: stats.pendingVerifications, highlight: stats.pendingVerifications > 0 ? 'text-yellow-400 font-bold' : '' },
         { label: 'Verified Users', value: stats.verifiedUsers },
-        { label: 'Suspended Users', value: stats.suspendedUsers, highlight: stats.suspendedUsers > 0 ? 'text-red-400 font-bold' : '' }
+        { label: 'Suspended', value: stats.suspendedUsers, highlight: stats.suspendedUsers > 0 ? 'text-red-400 font-bold' : '' }
       ]
     },
     {
@@ -70,11 +86,22 @@ export default function DashboardView({ users = [], vehicles = [], bookings = []
         { label: 'Open Reports', value: stats.openReports, highlight: stats.openReports > 0 ? 'text-yellow-400 font-bold' : '' },
         { label: 'Open Tickets', value: stats.openTickets, highlight: stats.openTickets > 0 ? 'text-blue-400 font-bold' : '' }
       ]
+    },
+    {
+      title: 'Finance & Revenue',
+      color: 'from-amber-500/20 to-yellow-500/20 border-amber-500/30 text-amber-400',
+      icon: FiCheckCircle,
+      items: [
+        // { label: 'Total Platform Revenue', value: `₹${stats.totalRevenue}` }, // Hidden for Beta
+        { label: 'Total Rental Volume', value: `₹${stats.totalRentalVolume}` },
+        { label: 'Pending Owner Payouts', value: `₹${stats.outstandingOwnerPayments}`, highlight: stats.outstandingOwnerPayments > 0 ? 'text-red-400 font-bold' : '' },
+        { label: 'Late Charges Generated', value: `₹${stats.lateChargesEarned}` }
+      ]
     }
   ]
 
   // Combine real activity logs
-  const displayActivities = [...adminActions].slice(0, 10)
+  const displayActivities = [...safeActions].slice(0, 10)
 
   return (
     <div className="space-y-8">
@@ -83,7 +110,7 @@ export default function DashboardView({ users = [], vehicles = [], bookings = []
         <p className="text-white/40 text-xs">Real-time status updates across the Lupu network.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
         {statGroups.map((g, idx) => (
           <motion.div
             key={g.title}

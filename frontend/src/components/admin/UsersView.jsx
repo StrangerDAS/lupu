@@ -7,6 +7,7 @@ import { ADMIN_ROLES } from '../../lib/roleUtils'
 import toast from 'react-hot-toast'
 import { userAPI, adminAPI } from '../../api/endpoints'
 import axiosInstance from '../../api/axiosInstance'
+import { getImageUrl } from '../../utils/urlUtils'
 
 export default function UsersView() {
   const { user: currentAdmin } = useAuthStore()
@@ -22,7 +23,7 @@ export default function UsersView() {
   const fetchUsers = async () => {
     try {
       const { data } = await userAPI.getAll()
-      setUsers(data)
+      setUsers(data.users || data || [])
     } catch (err) {
       console.error(err)
       toast.error('Failed to fetch users')
@@ -35,10 +36,11 @@ export default function UsersView() {
     fetchUsers()
   }, [])
 
-  const filteredUsers = users.filter(u =>
-    u.name?.toLowerCase().includes(search.toLowerCase()) ||
-    u.email?.toLowerCase().includes(search.toLowerCase()) ||
-    u._id?.toLowerCase().includes(search.toLowerCase())
+  const safeUsers = Array.isArray(users) ? users : []
+  const filteredUsers = safeUsers.filter(u =>
+    u?.name?.toLowerCase().includes(search.toLowerCase()) ||
+    u?.email?.toLowerCase().includes(search.toLowerCase()) ||
+    u?._id?.toLowerCase().includes(search.toLowerCase())
   )
 
   const handleAction = async () => {
@@ -118,85 +120,93 @@ export default function UsersView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {filteredUsers.map((u) => {
-                const isSuspended = u.status === 'suspended'
-                return (
-                  <tr key={u._id} className="hover:bg-white/5 transition-colors">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-brand/10 text-brand flex items-center justify-center font-bold text-xs shrink-0">
-                          {u.avatar ? (
-                            <img src={u.avatar} alt="" className="w-full h-full rounded-full object-cover" />
-                          ) : (
-                            (u.name?.[0] || u.email?.[0] || '?').toUpperCase()
-                          )}
+              {filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan="5" className="p-8 text-center text-white/30 text-xs">
+                    No users found.
+                  </td>
+                </tr>
+              ) : (
+                filteredUsers.map((u) => {
+                  const isSuspended = u?.status === 'suspended'
+                  return (
+                    <tr key={u?._id} className="hover:bg-white/5 transition-colors">
+                      <td className="p-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-brand/10 text-brand flex items-center justify-center font-bold text-xs shrink-0">
+                            {u?.avatar ? (
+                              <img src={u.avatar} alt="" className="w-full h-full rounded-full object-cover" />
+                            ) : (
+                              (u?.name?.[0] || u?.email?.[0] || '?').toUpperCase()
+                            )}
+                          </div>
+                          <div>
+                            <div className="font-semibold text-white/95">{u?.name || 'Unnamed User'}</div>
+                            <div className="text-[10px] text-white/40">{u?.email}</div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="font-semibold text-white/95">{u.name || 'Unnamed User'}</div>
-                          <div className="text-[10px] text-white/40">{u.email}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-4 capitalize">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        ADMIN_ROLES.includes(u.role)
-                          ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                          : 'bg-blue-500/10 text-blue-400'
-                      }`}>
-                        {u.role || 'user'}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                        u.kycStatus === 'verified' ? 'bg-green-500/20 text-green-400' :
-                        u.kycStatus === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
-                        u.kycStatus === 'rejected' ? 'bg-red-500/20 text-red-400' :
-                        'bg-white/10 text-white/40'
-                      }`}>
-                        {u.kycStatus === 'verified' && <FiCheckCircle size={10} />}
-                        {u.kycStatus === 'pending' && <FiAlertTriangle size={10} />}
-                        {u.kycStatus || 'unsubmitted'}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                        isSuspended
-                          ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                          : 'bg-green-500/20 text-green-400 border border-green-500/30'
-                      }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isSuspended ? 'bg-red-400 animate-pulse' : 'bg-green-400'}`} />
-                        {isSuspended ? 'Suspended' : 'Active'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-right space-x-2">
-                      {u.kycStatus === 'pending' && (
-                        <button
-                          onClick={() => { setSelectedUser(u); setModalType('kyc-review'); setNotes(''); }}
-                          className="px-2.5 py-1.5 bg-brand/20 hover:bg-brand text-white rounded-lg transition text-[10px] font-bold inline-flex items-center gap-1"
-                        >
-                          <FiFileText size={10} /> Review KYC
-                        </button>
-                      )}
-                      
-                      {isSuspended ? (
-                        <button
-                          onClick={() => { setSelectedUser(u); setModalType('restore') }}
-                          className="px-2.5 py-1.5 bg-green-500/20 hover:bg-green-500 text-green-400 hover:text-white rounded-lg transition text-[10px] font-bold"
-                        >
-                          Restore
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => { setSelectedUser(u); setModalType('suspend') }}
-                          className="px-2.5 py-1.5 bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg transition text-[10px] font-bold"
-                        >
-                          Suspend
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
+                      </td>
+                      <td className="p-4 capitalize">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          ADMIN_ROLES.includes(u?.role)
+                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                            : 'bg-blue-500/10 text-blue-400'
+                        }`}>
+                          {u?.role || 'user'}
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                          u?.kycStatus === 'verified' ? 'bg-green-500/20 text-green-400' :
+                          u?.kycStatus === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
+                          u?.kycStatus === 'rejected' ? 'bg-red-500/20 text-red-400' :
+                          'bg-white/10 text-white/40'
+                        }`}>
+                          {u?.kycStatus === 'verified' && <FiCheckCircle size={10} />}
+                          {u?.kycStatus === 'pending' && <FiAlertTriangle size={10} />}
+                          {u?.kycStatus || 'unsubmitted'}
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                          isSuspended
+                            ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            : 'bg-green-500/20 text-green-400 border border-green-500/30'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${isSuspended ? 'bg-red-400 animate-pulse' : 'bg-green-400'}`} />
+                          {isSuspended ? 'Suspended' : 'Active'}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right space-x-2">
+                        {u?.kycStatus === 'pending' && (
+                          <button
+                            onClick={() => { setSelectedUser(u); setModalType('kyc-review'); setNotes(''); }}
+                            className="px-2.5 py-1.5 bg-brand/20 hover:bg-brand text-white rounded-lg transition text-[10px] font-bold inline-flex items-center gap-1"
+                          >
+                            <FiFileText size={10} /> Review KYC
+                          </button>
+                        )}
+                        
+                        {isSuspended ? (
+                          <button
+                            onClick={() => { setSelectedUser(u); setModalType('restore') }}
+                            className="px-2.5 py-1.5 bg-green-500/20 hover:bg-green-500 text-green-400 hover:text-white rounded-lg transition text-[10px] font-bold"
+                          >
+                            Restore
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => { setSelectedUser(u); setModalType('suspend') }}
+                            className="px-2.5 py-1.5 bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg transition text-[10px] font-bold"
+                          >
+                            Suspend
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -263,11 +273,11 @@ export default function UsersView() {
               <div>
                 <p className="text-xs font-semibold text-white/50 mb-2">Government ID</p>
                 {selectedUser.governmentIdUrl ? (
-                  <a href={selectedUser.governmentIdUrl} target="_blank" rel="noreferrer" className="block w-full h-48 bg-white/5 rounded-xl overflow-hidden hover:opacity-90 transition border border-white/10 relative group">
+                  <a href={getImageUrl(selectedUser.governmentIdUrl)} target="_blank" rel="noreferrer" className="block w-full h-48 bg-white/5 rounded-xl overflow-hidden hover:opacity-90 transition border border-white/10 relative group">
                     {selectedUser.governmentIdUrl.includes('.pdf') ? (
                       <div className="w-full h-full flex items-center justify-center text-white/50"><FiFileText size={48} /> <span className="absolute bottom-4">View PDF</span></div>
                     ) : (
-                      <img src={selectedUser.governmentIdUrl} className="w-full h-full object-cover" alt="Gov ID" />
+                      <img src={getImageUrl(selectedUser.governmentIdUrl)} className="w-full h-full object-cover" alt="Gov ID" />
                     )}
                   </a>
                 ) : <div className="h-48 bg-white/5 rounded-xl flex items-center justify-center text-white/30 text-xs border border-white/10">Not uploaded</div>}
@@ -276,11 +286,11 @@ export default function UsersView() {
               <div>
                 <p className="text-xs font-semibold text-white/50 mb-2">College ID</p>
                 {selectedUser.collegeIdUrl ? (
-                  <a href={selectedUser.collegeIdUrl} target="_blank" rel="noreferrer" className="block w-full h-48 bg-white/5 rounded-xl overflow-hidden hover:opacity-90 transition border border-white/10 relative group">
+                  <a href={getImageUrl(selectedUser.collegeIdUrl)} target="_blank" rel="noreferrer" className="block w-full h-48 bg-white/5 rounded-xl overflow-hidden hover:opacity-90 transition border border-white/10 relative group">
                     {selectedUser.collegeIdUrl.includes('.pdf') ? (
                       <div className="w-full h-full flex items-center justify-center text-white/50"><FiFileText size={48} /> <span className="absolute bottom-4">View PDF</span></div>
                     ) : (
-                      <img src={selectedUser.collegeIdUrl} className="w-full h-full object-cover" alt="College ID" />
+                      <img src={getImageUrl(selectedUser.collegeIdUrl)} className="w-full h-full object-cover" alt="College ID" />
                     )}
                   </a>
                 ) : <div className="h-48 bg-white/5 rounded-xl flex items-center justify-center text-white/30 text-xs border border-white/10">Not uploaded</div>}

@@ -82,8 +82,7 @@ export const ADMIN_NAV_MODULES = [
   { id: 'vehicles',      label: 'Verifications',       roles: ADMIN_ROLES },
   { id: 'bookings',      label: 'Booking Logs',        roles: ADMIN_ROLES },
   { id: 'payments',      label: 'Revenue',            roles: ADMIN_ROLES },
-  { id: 'disputes',      label: 'Disputes',            roles: ADMIN_ROLES },
-  { id: 'reports',       label: 'Analytics',           roles: ADMIN_ROLES },
+  { id: 'safety',        label: 'Trust & Safety',      roles: ADMIN_ROLES },
   { id: 'support',       label: 'Tickets',             roles: ADMIN_ROLES },
   { id: 'reviews',       label: 'Reviews',             roles: ADMIN_ROLES },
   { id: 'audit-logs',    label: 'Audit Logs',          roles: ADMIN_ROLES },
@@ -96,3 +95,4 @@ export const ADMIN_NAV_MODULES = [
 /** Filter nav modules a given user can see */
 export const getVisibleModules = (user) =>
   ADMIN_NAV_MODULES.filter((m) => hasRole(user, m.roles))
+

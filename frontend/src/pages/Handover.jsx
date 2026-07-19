@@ -1,11 +1,10 @@
-import { useParams, useNavigate } from 'react-router-dom'
 import { useEffect, useState, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { doc, onSnapshot } from 'firebase/firestore'
-import { db } from '../firebase/config'
 import {
-  FiCheckCircle, FiAlertCircle, FiCamera, FiCheck,
-  FiFileText, FiMapPin, FiPhone, FiMail, FiUser, FiInfo, FiActivity
+  FiCheck, FiUpload, FiLock, FiUnlock, FiKey, FiMapPin, FiCheckCircle, FiInfo,
+  FiFileText, FiShield, FiAlertTriangle, FiAlertCircle, FiCamera,
+  FiUserCheck, FiShare2, FiDownload, FiArrowLeft, FiClock, FiPlus
 } from 'react-icons/fi'
 import { RiMotorbikeLine as BikeIcon, RiEBikeLine as ScootyIcon } from 'react-icons/ri'
 import toast from 'react-hot-toast'
@@ -13,14 +12,10 @@ import jsPDF from 'jspdf'
 import PageWrapper from '../components/PageWrapper'
 import useAuthStore from '../store/authStore'
 import {
-  updateHandoverDetails,
-  saveIdVerificationAcknowledgement,
-  activateBookingRide,
-  completeReturnHandover,
   uploadBookingFile,
-  createPaymentRecord,
   addNotification
 } from '../firebase/firestoreService'
+import { bookingAPI } from '../api/endpoints'
 
 const HANDOVER_CHECKLIST_ITEMS = [
   { key: 'scratches', label: 'No new major scratches or dents' },
@@ -58,21 +53,41 @@ export default function Handover() {
 
   // Real-time synchronization
   useEffect(() => {
-    setLoading(true)
-    const unsub = onSnapshot(doc(db, 'bookings', bookingId), (snap) => {
-      if (snap.exists()) {
-        setBooking({ _id: snap.id, ...snap.data() })
-      } else {
-        toast.error('Booking not found')
-        navigate('/hub')
+    let active = true
+    const fetchBooking = async () => {
+      try {
+        const { data } = await bookingAPI.getById(bookingId)
+        if (active) {
+          const statusMap = {
+            requested: 'under_review',
+            accepted: 'accepted',
+            confirmed: 'advance_paid',
+            ready_for_pickup: 'ready_for_pickup',
+            ongoing: 'ongoing',
+            completed: 'completed',
+            cancelled: 'cancelled',
+            rejected: 'rejected'
+          }
+          const adapted = {
+            ...data,
+            bookingStatus: statusMap[data.status] || data.status
+          }
+          setBooking(adapted)
+          setLoading(false)
+        }
+      } catch (err) {
+        if (active) {
+          toast.error('Booking not found')
+          navigate('/my-bookings')
+        }
       }
-      setLoading(false)
-    }, (err) => {
-      console.error(err)
-      toast.error('Error fetching booking data')
-      setLoading(false)
-    })
-    return () => unsub()
+    }
+    fetchBooking()
+    const interval = setInterval(fetchBooking, 3000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
   }, [bookingId, navigate])
 
   const isOwner = user?._id === booking?.ownerId
@@ -315,10 +330,16 @@ export default function Handover() {
         comments: ownerComments,
         gps: ownerGps,
         signature: sigUrl,
-        verified: true
+        verified: true,
+        timestamp: new Date().toISOString()
       }
 
-      await updateHandoverDetails(bookingId, 'owner', details)
+      await bookingAPI.updateBooking(bookingId, {
+        handoverDetails: {
+          ...booking.handoverDetails,
+          owner: details
+        }
+      })
       toast.success('Your handover checklist submitted successfully!')
     } catch (err) {
       console.error(err)
@@ -364,16 +385,30 @@ export default function Handover() {
         verified: true
       }
 
-      await updateHandoverDetails(bookingId, 'renter', details)
-      await saveIdVerificationAcknowledgement(bookingId, idHoldAgreed)
+      const updatedHandoverDetails = {
+        ...booking.handoverDetails,
+        renter: {
+          ...details,
+          timestamp: new Date().toISOString()
+        },
+        idVerified: {
+          acknowledged: true,
+          holdAgreed: idHoldAgreed,
+          timestamp: new Date().toISOString()
+        }
+      }
 
       // Automatically compile Handover PDF if Owner has also completed
       if (booking?.handoverDetails?.owner?.verified) {
         setSubmittingMsg('Compiling Handover Agreement PDF...')
         const pdfUrl = await compileHandoverPDF(booking.handoverDetails.owner, details)
+        updatedHandoverDetails.handoverPdfUrl = pdfUrl
         
         setSubmittingMsg('Activating rental ride...')
-        await activateBookingRide(bookingId, pdfUrl)
+        await bookingAPI.updateBooking(bookingId, {
+          status: 'ongoing',
+          handoverDetails: updatedHandoverDetails
+        })
         
         await addNotification(booking.ownerId, {
           title: 'Ride Activated! 🟢',
@@ -428,12 +463,19 @@ export default function Handover() {
       const sigUrl = await uploadBookingFile(`handover/signatures/${bookingId}_return_sig.png`, sigFile)
 
       setSubmittingMsg('Archiving agreement & finalizing ride...')
-      await completeReturnHandover(bookingId, {
-        photos: urls,
-        checklist: returnChecklist,
-        comments: returnComments,
-        signature: sigUrl,
-        verified: true
+      await bookingAPI.updateBooking(bookingId, {
+        status: 'completed',
+        handoverDetails: {
+          ...booking.handoverDetails,
+          return: {
+            photos: urls,
+            checklist: returnChecklist,
+            comments: returnComments,
+            signature: sigUrl,
+            verified: true,
+            timestamp: new Date().toISOString()
+          }
+        }
       })
 
       // Send notifications

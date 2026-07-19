@@ -3,6 +3,11 @@ import { motion } from 'framer-motion'
 import { FiTrendingUp, FiDollarSign, FiPercent, FiActivity, FiArrowRight } from 'react-icons/fi'
 
 export default function FounderDashboard({ users = [], vehicles = [], bookings = [], payments = [] }) {
+  const safeUsers = Array.isArray(users) ? users : []
+  const safeVehicles = Array.isArray(vehicles) ? vehicles : []
+  const safeBookings = Array.isArray(bookings) ? bookings : []
+  const safePayments = Array.isArray(payments) ? payments : []
+
   // Financial metrics calculations
   const metrics = useMemo(() => {
     let gross = 0
@@ -11,30 +16,30 @@ export default function FounderDashboard({ users = [], vehicles = [], bookings =
     let pending = 0
 
     // Look at payments list
-    payments.forEach(p => {
-      const amt = Number(p.amount) || 0
-      if (p.type === 'refund') {
+    safePayments.forEach(p => {
+      const amt = Number(p?.amount) || 0
+      if (p?.type === 'refund') {
         refunds += amt
       } else {
-        if (p.status === 'completed' || p.status === 'paid' || p.status === 'success') {
+        if (p?.status === 'completed' || p?.status === 'paid' || p?.status === 'success') {
           gross += amt
           // Commission calculation - 15% standard or dynamic
           commission += Math.round(amt * 0.15)
-        } else if (p.status === 'pending') {
+        } else if (p?.status === 'pending') {
           pending += amt
         }
       }
     })
 
     // If payments list is empty, calculate based on bookings
-    if (gross === 0 && bookings.length > 0) {
-      bookings.forEach(b => {
-        const total = Number(b.totalPrice) || 0
-        if (b.bookingStatus === 'completed' || b.bookingStatus === 'ongoing' || b.bookingStatus === 'accepted') {
+    if (gross === 0 && safeBookings.length > 0) {
+      safeBookings.forEach(b => {
+        const total = Number(b?.totalPrice) || 0
+        if (b?.bookingStatus === 'completed' || b?.bookingStatus === 'ongoing' || b?.bookingStatus === 'accepted') {
           gross += total
           commission += Math.round(total * 0.15)
-        } else if (b.bookingStatus === 'cancelled') {
-          const refundAmt = Number(b.refundAmount) || 0
+        } else if (b?.bookingStatus === 'cancelled') {
+          const refundAmt = Number(b?.refundAmount) || 0
           refunds += refundAmt
         }
       })
@@ -128,11 +133,11 @@ export default function FounderDashboard({ users = [], vehicles = [], bookings =
   ]
 
   const bookingChartData = [
-    { label: 'Jan', value: Math.round(bookings.length * 0.15) },
-    { label: 'Feb', value: Math.round(bookings.length * 0.3) },
-    { label: 'Mar', value: Math.round(bookings.length * 0.5) },
-    { label: 'Apr', value: Math.round(bookings.length * 0.8) },
-    { label: 'May', value: bookings.length }
+    { label: 'Jan', value: Math.round(safeBookings.length * 0.15) },
+    { label: 'Feb', value: Math.round(safeBookings.length * 0.3) },
+    { label: 'Mar', value: Math.round(safeBookings.length * 0.5) },
+    { label: 'Apr', value: Math.round(safeBookings.length * 0.8) },
+    { label: 'May', value: safeBookings.length }
   ]
 
   return (
@@ -196,15 +201,15 @@ export default function FounderDashboard({ users = [], vehicles = [], bookings =
           </div>
 
           <div className="space-y-3.5">
-            {users.slice(0, 5).map((u, i) => (
-              <div key={u._id || i} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0 text-xs">
+            {safeUsers.slice(0, 5).map((u, i) => (
+              <div key={u?._id || i} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0 text-xs">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-brand/10 text-brand flex items-center justify-center font-bold">
-                    {u.displayName?.[0] || u.name?.[0] || 'U'}
+                    {u?.displayName?.[0] || u?.name?.[0] || 'U'}
                   </div>
                   <div>
-                    <div className="font-semibold text-white/90">{u.displayName || u.name || 'Owner User'}</div>
-                    <div className="text-[10px] text-white/40">{u.email}</div>
+                    <div className="font-semibold text-white/90">{u?.displayName || u?.name || 'Owner User'}</div>
+                    <div className="text-[10px] text-white/40">{u?.email}</div>
                   </div>
                 </div>
                 <div className="text-right">
@@ -256,7 +261,7 @@ export default function FounderDashboard({ users = [], vehicles = [], bookings =
             <div className="pt-2 border-t border-white/5 space-y-2">
               <div className="flex justify-between items-center text-[11px]">
                 <span className="text-white/40">Total Active Fleet:</span>
-                <span className="font-semibold text-white">{vehicles.filter(v => v.isLive).length} / {vehicles.length}</span>
+                <span className="font-semibold text-white">{safeVehicles.filter(v => v?.isLive).length} / {safeVehicles.length}</span>
               </div>
               <div className="flex justify-between items-center text-[11px]">
                 <span className="text-white/40">Average Fleet Rating:</span>

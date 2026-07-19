@@ -8,26 +8,23 @@ import {
   hasPermission as _hasPermission,
 } from '../lib/roleUtils'
 
-const STORAGE_KEY = 'uniride-auth'
+const STORAGE_KEY = 'lupu-auth'
 
 /**
  * useAuthStore — Zustand auth store with Express/JWT-driven RBAC.
  *
- * ── Design decisions ─────────────────────────────────────────────────────────
+ * ── Authentication flow ────────────────────────────────────────────────────────
  *
- * authReady is now PERSISTED.
+ * 1. User enters OTP → backend validates → issues JWT.
+ * 2. JWT + user object stored in Zustand (persisted to localStorage).
+ * 3. On page reload, `authReady` is already true (persisted), so no loader flash.
+ * 4. App.jsx calls `/api/auth/me` to re-validate the token with the backend.
+ * 5. If token is invalid/expired, the Axios 401 interceptor calls logout().
  *
- * Why: On a hard page reload, the browser restores token + user from
- * localStorage instantly (before Firebase resolves). If authReady stayed
- * false until Firebase called back, ProtectedRoute would show a full-screen
- * PageLoader for 1–3 seconds even though we already have a valid cached
- * session. By persisting authReady=true alongside the token, the route guard
- * can trust the cached session immediately and let Firebase silently confirm
- * it in the background.
- *
- * When a user logs out, authReady stays true (Firebase has resolved —
- * we know the answer: no user). It only becomes false on a fresh install
- * (no localStorage) or after an explicit localStorage clear.
+ * `authReady` is persisted. On a hard reload with a cached session, the route
+ * guards can trust the cache immediately while the background `/api/auth/me`
+ * call confirms validity. On first visit (no cache), authReady=false shows a
+ * loader until verification completes.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -37,34 +34,35 @@ const useAuthStore = create(
       // ── Persisted state ─────────────────────────────────────────────────
       user:          null,   // User object from Express API
       token:         null,   // JWT token from Express backend
-      authReady:     false,  // Has Firebase resolved auth at least once?
+      authReady:     false,  // Has auth been resolved at least once?
       permissions:   [],     // Explicit permission strings
       accountStatus: null,   // 'active' | 'suspended' | 'banned'
 
       // ── Setters ─────────────────────────────────────────────────────────
 
       /**
-       * setAuth — called exclusively by App.jsx's onAuthStateChanged callback.
+       * setAuth — called exclusively by App.jsx's session verification.
        * This is the ONLY way user + token enter the store.
        */
       setAuth: (user, token) => {
-        const msg = user
-          ? `[AuthStore] ✅ setAuth → uid=${user.uid} | role=${user.role} | status=${user.status}`
-          : '[AuthStore] 🔴 setAuth → cleared (user signed out)'
-        console.log(msg)
+        if (import.meta.env.DEV) {
+          const msg = user
+            ? `[AuthStore] ✅ setAuth → uid=${user._id} | role=${user.role}`
+            : '[AuthStore] 🔴 setAuth → cleared (signed out)'
+          console.log(msg)
+        }
 
         set({
           user,
           token,
-          authReady:     true, // Firebase has resolved — persist this
+          authReady:     true,
           permissions:   user?.permissions   ?? [],
           accountStatus: user?.status        ?? null,
         })
       },
 
-      /** Explicitly mark Firebase as resolved (used in edge-cases) */
+      /** Explicitly mark auth as resolved (used in edge-cases) */
       setAuthReady: () => {
-        console.log('[AuthStore] 🏁 setAuthReady called')
         set({ authReady: true })
       },
 
@@ -78,35 +76,30 @@ const useAuthStore = create(
 
       /**
        * logout(navigate?)
-       *  1. Firebase signOut → server-side session terminated
-       *  2. Clear Zustand state eagerly (UI updates immediately)
-       *  3. Wipe localStorage key (prevent restore on next load)
-       *  4. Navigate to /auth/login
+       *  1. Clear Zustand state eagerly (UI updates immediately)
+       *  2. Wipe localStorage key (prevent restore on next load)
+       *  3. Navigate to /auth/login (if navigate is provided)
        *
-       * navigate is optional — pass it from components using React Router.
-       * The Axios interceptor (401 handler) can call logout() without navigate,
-       * and then use window.location.replace('/auth/login') separately.
+       * The Axios 401 interceptor calls logout() without navigate,
+       * then uses window.location.replace('/auth/login') separately.
        */
       logout: async (navigate) => {
-        console.log('[AuthStore] 🔐 logout() called — terminating session…')
+        if (import.meta.env.DEV) {
+          console.log('[AuthStore] 🔐 logout() called — terminating session…')
+        }
 
-        // Clear Zustand eagerly so the UI responds immediately
         set({
           user:          null,
           token:         null,
           permissions:   [],
           accountStatus: null,
-          // Keep authReady = true — Firebase resolved, answer is "no user"
+          // Keep authReady = true — auth has resolved, answer is "no user"
         })
 
-        // Wipe persisted localStorage (prevents restore on next page load)
         localStorage.removeItem(STORAGE_KEY)
-        console.log('[AuthStore] 🗑️  localStorage cleared')
 
-        // Redirect
         if (navigate) {
           navigate('/auth/login', { replace: true })
-          console.log('[AuthStore] 🔀 Navigated to /auth/login')
         }
       },
 
@@ -115,9 +108,7 @@ const useAuthStore = create(
 
       isAuthenticated: () => {
         const { token, user } = get()
-        const result = !!(token && user)
-        console.log('[AuthStore] 🔒 isAuthenticated() →', result, '| token:', !!token, '| user:', !!user)
-        return result
+        return !!(token && user)
       },
 
       isFounder:    () => _isFounder(get().user),
@@ -130,7 +121,7 @@ const useAuthStore = create(
         const { user } = get()
         if (!user) return false
         if (_isAdmin(user)) return true
-        return user.kycStatus === 'Verified' || !!user.emailVerified || !!user.phoneVerified
+        return user.kycStatus === 'verified' || !!user.emailVerified
       },
 
       // isOwner: admins can act as owners in the system
@@ -139,7 +130,6 @@ const useAuthStore = create(
     }),
     {
       name: STORAGE_KEY,
-      // Persist ALL relevant auth fields including authReady
       partialize: (state) => ({
         user:          state.user,
         token:         state.token,

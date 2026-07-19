@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { FiSearch, FiFileText, FiEye, FiCheck, FiX, FiRefreshCw } from 'react-icons/fi'
-import { verifyVehicleStatus } from '../../firebase/firestoreService'
+import { adminAPI } from '../../api/endpoints'
 import useAuthStore from '../../store/authStore'
 import toast from 'react-hot-toast'
+import { getImageUrl } from '../../utils/urlUtils'
 
-export default function VehiclesView({ vehicles = [] }) {
+export default function VehiclesView({ vehicles = [], onRefresh }) {
   const { user: currentAdmin } = useAuthStore()
   const [search, setSearch] = useState('')
   const [activeQueue, setActiveQueue] = useState('pending') // 'pending' | 'approved' | 'rejected' | 'all'
@@ -14,45 +15,51 @@ export default function VehiclesView({ vehicles = [] }) {
   const [rejectionReason, setRejectionReason] = useState('')
   const [actionType, setActionType] = useState(null) // 'approve' | 'reject' | 'needs_update'
 
-  const filteredVehicles = vehicles.filter(v => {
-    const matchesSearch = v.name?.toLowerCase().includes(search.toLowerCase()) || 
-                          v.ownerName?.toLowerCase().includes(search.toLowerCase())
+
+  const safeVehicles = Array.isArray(vehicles) ? vehicles : []
+  const filteredVehicles = safeVehicles.filter(v => {
+    const nameMatch = v?.name?.toLowerCase().includes(search.toLowerCase())
+    const brandMatch = v?.brand?.toLowerCase().includes(search.toLowerCase())
+    const modelMatch = v?.model?.toLowerCase().includes(search.toLowerCase())
+    const regMatch = v?.registrationNumber?.toLowerCase().includes(search.toLowerCase())
+    const ownerMatch = v?.owner?.name?.toLowerCase().includes(search.toLowerCase()) || v?.ownerName?.toLowerCase().includes(search.toLowerCase())
+    const matchesSearch = nameMatch || brandMatch || modelMatch || regMatch || ownerMatch
     if (!matchesSearch) return false
 
     if (activeQueue === 'all') return true
-    if (activeQueue === 'pending') return v.status === 'pending' || v.status === 'under_review' || v.status === 'needs_update'
-    return v.status === activeQueue
+    if (activeQueue === 'pending') return v?.verificationStatus === 'submitted' || v?.verificationStatus === 'under_review' || v?.status === 'pending' || v?.status === 'pending_verification'
+    return v?.verificationStatus === activeQueue || v?.status === activeQueue
   })
 
   const handleVerification = async () => {
     if (!selectedVehicle) return
+    const vehicleId = selectedVehicle._id || selectedVehicle.id
     try {
-      let nextStatus = 'approved'
-      if (actionType === 'reject') {
+      if (actionType === 'approve') {
+        await adminAPI.approveVehicle(vehicleId, notes)
+        toast.success('Vehicle listing approved successfully')
+      } else if (actionType === 'reject') {
         if (!rejectionReason) {
           toast.error('Rejection reason is required')
           return
         }
-        nextStatus = 'rejected'
+        await adminAPI.rejectVehicle(vehicleId, rejectionReason, notes)
+        toast.success('Vehicle listing rejected')
       } else if (actionType === 'needs_update') {
-        nextStatus = 'needs_update'
+        if (!notes) {
+          toast.error('Notes are required to request changes')
+          return
+        }
+        await adminAPI.requestChanges(vehicleId, notes)
+        toast.success('Change request submitted')
       }
-
-      await verifyVehicleStatus(
-        selectedVehicle._id || selectedVehicle.id,
-        nextStatus,
-        currentAdmin._id,
-        currentAdmin.name,
-        notes,
-        rejectionReason
-      )
       
-      toast.success(`Vehicle listing marked as ${nextStatus}`)
       setSelectedVehicle(null)
       setNotes('')
       setRejectionReason('')
+      onRefresh?.()
     } catch (err) {
-      toast.error('Update failed: ' + err.message)
+      toast.error('Update failed: ' + (err.response?.data?.message || err.message))
     }
   }
 
@@ -99,33 +106,51 @@ export default function VehiclesView({ vehicles = [] }) {
           </div>
         ) : (
           filteredVehicles.map((v) => (
-            <motion.div layout key={v._id || v.id} className="card p-4 flex flex-col justify-between border border-white/5 bg-surface-2/20">
+            <motion.div layout key={v?._id || v?.id} className="card p-4 flex flex-col justify-between border border-white/5 bg-surface-2/20">
               <div className="space-y-3.5">
                 <div className="flex justify-between items-start">
                   <div>
-                    <h3 className="font-bold text-xs truncate max-w-[180px]">{v.name}</h3>
-                    <span className="text-[10px] text-white/40">Owner: {v.ownerName || 'Unknown Owner'}</span>
+                    <h3 className="font-bold text-xs truncate max-w-[180px]">{v?.name || 'Unknown Vehicle'}</h3>
+                    <span className="text-[10px] text-white/40">Owner: {v?.owner?.name || v?.ownerName || 'Unknown Owner'}</span>
                   </div>
                   <span className={`px-2 py-0.5 rounded text-[9px] font-bold capitalize ${
-                    v.status === 'approved' ? 'bg-green-500/20 text-green-400' :
-                    v.status === 'rejected' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'
+                    v?.verificationStatus === 'approved' || v?.status === 'approved' ? 'bg-green-500/20 text-green-400' :
+                    v?.verificationStatus === 'rejected' || v?.status === 'rejected' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'
                   }`}>
-                    {v.status || 'pending'}
+                    {v?.verificationStatus || v?.status || 'pending'}
                   </span>
+                </div>
+
+                <div className="text-[10px] text-white/60 space-y-1 bg-white/5 p-2.5 rounded-xl border border-white/5">
+                  <div><span className="text-white/30">Reg No:</span> <span className="font-mono font-semibold">{v?.registrationNumber || 'N/A'}</span></div>
+                  <div><span className="text-white/30">Brand/Model:</span> <span>{v?.brand || 'N/A'} / {v?.model || 'N/A'}</span></div>
+                  <div><span className="text-white/30">Specs:</span> <span>{v?.specs?.year || 'N/A'} · {v?.specs?.cc ? `${v.specs.cc}cc` : 'N/A'} · {v?.specs?.transmission || 'N/A'}</span></div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-1.5 text-[9px] bg-white/5 p-2 rounded-lg text-center border border-white/5">
                   <div className="space-y-0.5">
                     <span className="text-white/40 block uppercase font-semibold">RC DOC</span>
-                    <span className="text-green-400 flex items-center justify-center gap-0.5"><FiFileText /> Linked</span>
+                    {v?.documents?.RC ? (
+                      <a href={getImageUrl(v.documents.RC)} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:underline flex items-center justify-center gap-0.5"><FiFileText /> View</a>
+                    ) : (
+                      <span className="text-red-400">Missing</span>
+                    )}
                   </div>
                   <div className="space-y-0.5">
                     <span className="text-white/40 block uppercase font-semibold">INSURANCE</span>
-                    <span className="text-green-400 flex items-center justify-center gap-0.5"><FiFileText /> Linked</span>
+                    {v?.documents?.Insurance ? (
+                      <a href={getImageUrl(v.documents.Insurance)} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:underline flex items-center justify-center gap-0.5"><FiFileText /> View</a>
+                    ) : (
+                      <span className="text-red-400">Missing</span>
+                    )}
                   </div>
                   <div className="space-y-0.5">
                     <span className="text-white/40 block uppercase font-semibold">PUC DOC</span>
-                    <span className="text-green-400 flex items-center justify-center gap-0.5"><FiFileText /> Linked</span>
+                    {v?.documents?.PUC ? (
+                      <a href={getImageUrl(v.documents.PUC)} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:underline flex items-center justify-center gap-0.5"><FiFileText /> View</a>
+                    ) : (
+                      <span className="text-red-400">Missing</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -163,18 +188,34 @@ export default function VehiclesView({ vehicles = [] }) {
               Vehicle Listing Review · {actionType}
             </h3>
             <p className="text-xs text-white/60">
-              Confirming decision state for: <strong>{selectedVehicle.name}</strong> listed by {selectedVehicle.ownerName}.
+              Confirming decision state for: <strong>{selectedVehicle.name}</strong> listed by {selectedVehicle.owner?.name || selectedVehicle.ownerName}.
             </p>
 
             <div className="bg-white/5 p-3 rounded-lg border border-white/5 space-y-2 text-xs">
               <div className="font-semibold text-white/50 text-[10px] uppercase">Compliance Checks</div>
               <div className="flex justify-between items-center text-[11px]">
-                <span className="text-white/60">Registration Certificate:</span>
-                <button className="text-brand hover:underline font-bold flex items-center gap-0.5"><FiEye /> Inspect File</button>
+                <span className="text-white/60">Registration Certificate (RC):</span>
+                {selectedVehicle.documents?.RC ? (
+                  <a href={getImageUrl(selectedVehicle.documents.RC)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline font-bold flex items-center gap-0.5"><FiEye /> Inspect File</a>
+                ) : (
+                  <span className="text-red-400">Missing</span>
+                )}
               </div>
               <div className="flex justify-between items-center text-[11px]">
                 <span className="text-white/60">Motor Insurance Policy:</span>
-                <button className="text-brand hover:underline font-bold flex items-center gap-0.5"><FiEye /> Inspect File</button>
+                {selectedVehicle.documents?.Insurance ? (
+                  <a href={getImageUrl(selectedVehicle.documents.Insurance)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline font-bold flex items-center gap-0.5"><FiEye /> Inspect File</a>
+                ) : (
+                  <span className="text-red-400">Missing</span>
+                )}
+              </div>
+              <div className="flex justify-between items-center text-[11px]">
+                <span className="text-white/60">Pollution Certificate (PUC):</span>
+                {selectedVehicle.documents?.PUC ? (
+                  <a href={getImageUrl(selectedVehicle.documents.PUC)} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline font-bold flex items-center gap-0.5"><FiEye /> Inspect File</a>
+                ) : (
+                  <span className="text-red-400">Missing</span>
+                )}
               </div>
             </div>
 

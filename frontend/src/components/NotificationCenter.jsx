@@ -1,24 +1,18 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { FiX, FiCheckSquare, FiTrash2, FiBell, FiDollarSign, FiAlertCircle, FiMessageSquare } from 'react-icons/fi'
 import { Link } from 'react-router-dom'
-import {
-  markNotificationRead,
-  markAllNotificationsRead,
-  deleteNotification,
-  deleteAllNotifications
-} from '../firebase/firestoreService'
+import { notificationAPI } from '../api/endpoints'
 
 export default function NotificationCenter({ isOpen, onClose, notifications, userId }) {
   const unreadCount = notifications.filter(n => !n.isRead && !n.read).length
 
   const handleMarkAllRead = async () => {
-    if (userId) await markAllNotificationsRead(userId)
+    await notificationAPI.markAllRead()
   }
 
   const handleDeleteAll = async () => {
-    if (!userId) return
-    if (confirm('Are you sure you want to delete all notifications?')) {
-      await deleteAllNotifications(userId)
+    if (confirm('Are you sure you want to mark all notifications as read?')) {
+      await notificationAPI.markAllRead()
     }
   }
 
@@ -131,7 +125,7 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                       <div className="absolute top-3 right-3 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition">
                         {!isRead && (
                           <button
-                            onClick={() => markNotificationRead(n._id || n.notificationId)}
+                            onClick={() => notificationAPI.markRead(n._id)}
                             className="p-1.5 bg-brand/20 text-brand rounded hover:bg-brand/40 transition"
                             title="Mark as read"
                           >
@@ -139,9 +133,9 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                           </button>
                         )}
                         <button
-                          onClick={() => deleteNotification(n._id || n.notificationId)}
+                          onClick={() => notificationAPI.markRead(n._id)}
                           className="p-1.5 bg-red-500/10 text-red-400 rounded hover:bg-red-500/20 transition"
-                          title="Delete notification"
+                          title="Archive notification"
                         >
                           <FiTrash2 size={14} />
                         </button>
