@@ -27,6 +27,7 @@ import Report from './models/Report.js'
 import Dispute from './models/Dispute.js'
 import SOS from './models/SOS.js'
 import { seedDatabase } from './seed.js'
+import { attachVehicleAvailability, checkOverlap } from './utils/availability.js'
 import { kycUpload, vehicleUpload } from './middleware/uploadMiddleware.js'
 import { sendOTPEmail } from './utils/emailService.js'
 import { sendSMSOTP } from './utils/smsService.js'
@@ -38,8 +39,12 @@ import { rateLimiter } from './middleware/rateLimiter.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+import paymentRoutes from './routes/paymentRoutes.js'
+
 const app = express()
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+
+app.use('/api/payment', paymentRoutes)
 
 const PORT = process.env.PORT || 5001
 
@@ -64,9 +69,15 @@ try {
 // ── Middleware ──────────────────────────────────────────────
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:4173']
+  : [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:4173',
+      'https://lupu.in',
+      'https://www.lupu.in'
+    ]
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile, curl, server-to-server)
     if (!origin) return callback(null, true)
@@ -74,7 +85,10 @@ app.use(cors({
     callback(new Error(`CORS: Origin '${origin}' not allowed`))
   },
   credentials: true,
-}))
+}
+
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions)) // Ensure OPTIONS preflight requests are handled correctly globally
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
@@ -384,8 +398,30 @@ app.post('/api/items', authMiddleware, kycPlaceholder, async (req, res) => {
 
 app.get('/api/vehicles', async (req, res) => {
   try {
-    const vehicles = await Vehicle.find({ verificationStatus: 'approved', isLive: true }).lean()
-    res.json({ vehicles })
+    const vehicles = await Vehicle.aggregate([
+      { $match: { verificationStatus: 'approved', isLive: true } },
+      { $lookup: {
+          from: 'bookings',
+          let: { vId: '$_id' },
+          pipeline: [
+            { $match: {
+                $expr: { $eq: ['$vehicleId', '$$vId'] },
+                status: { $in: ['confirmed', 'ongoing', 'ready_for_pickup'] },
+                endTime: { $gt: new Date() }
+              }
+            },
+            { $sort: { startTime: 1 } }
+          ],
+          as: 'activeBookings'
+      }}
+    ])
+    
+    const vehiclesWithAvailability = vehicles.map(v => {
+      const { activeBookings, ...vehicleData } = v
+      return attachVehicleAvailability(vehicleData, activeBookings)
+    })
+    
+    res.json({ vehicles: vehiclesWithAvailability })
   } catch (err) {
     console.error('GET /api/vehicles error:', err)
     res.status(500).json({ message: 'Internal server error' })
@@ -407,9 +443,31 @@ app.get('/api/vehicles/:id', async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
-    const v = await Vehicle.findById(req.params.id).lean()
-    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
-    res.json(v)
+    const vehicles = await Vehicle.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
+      { $lookup: {
+          from: 'bookings',
+          let: { vId: '$_id' },
+          pipeline: [
+            { $match: {
+                $expr: { $eq: ['$vehicleId', '$$vId'] },
+                status: { $in: ['confirmed', 'ongoing', 'ready_for_pickup'] },
+                endTime: { $gt: new Date() }
+              }
+            },
+            { $sort: { startTime: 1 } }
+          ],
+          as: 'activeBookings'
+      }}
+    ])
+    
+    if (!vehicles || vehicles.length === 0) return res.status(404).json({ message: 'Vehicle not found' })
+    
+    const v = vehicles[0]
+    const { activeBookings, ...vehicleData } = v
+    const vWithAvailability = attachVehicleAvailability(vehicleData, activeBookings)
+    
+    res.json(vWithAvailability)
   } catch (err) {
     console.error('GET /api/vehicles/:id error:', err)
     res.status(500).json({ message: 'Internal server error' })
@@ -727,12 +785,12 @@ app.post('/api/bookings', authMiddleware, async (req, res, next) => {
     // 4. Overlapping Dates Check
     const overlapping = await Booking.findOne({
       vehicleId,
-      status: { $in: ['requested', 'Confirmed', 'Picked Up', 'In Progress'] },
+      status: { $in: ['confirmed', 'ongoing', 'ready_for_pickup'] },
       startTime: { $lt: end },
       endTime: { $gt: start }
     })
     if (overlapping) {
-      return res.status(400).json({ message: 'The vehicle is already booked or requested for these dates.' })
+      return res.status(400).json({ message: 'The vehicle is already booked for these dates.' })
     }
 
     const hours = Math.ceil((end - start) / (1000 * 60 * 60))
