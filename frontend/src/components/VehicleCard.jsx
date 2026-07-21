@@ -19,16 +19,30 @@ export default function VehicleCard({ vehicle, index = 0 }) {
     location,
     rating,
     totalReviews,
-    status,
-    isLive,
+    currentStatus = 'Available',
+    bookedFrom,
+    bookedUntil,
+    availableAgain,
   } = vehicle
 
   // Only show rating if there are real reviews
   const hasRating = rating > 0 && totalReviews > 0
 
-  const isApproved = status === 'approved'
-  const isAvailable = isApproved && isLive !== false
+  const isAvailable = currentStatus === 'Available'
+  const isBooked = currentStatus === 'Booked'
+  const isPending = currentStatus === 'Pending Approval'
+  
   const Icon = type === 'bike' ? RiMotorbikeLine : RiEBikeLine
+
+  // Format dates
+  const formatDate = (dateString) => {
+    if (!dateString) return ''
+    return new Date(dateString).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  }
+  const formatTime = (dateString) => {
+    if (!dateString) return ''
+    return new Date(dateString).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  }
 
   return (
     <motion.div
@@ -65,13 +79,13 @@ export default function VehicleCard({ vehicle, index = 0 }) {
             {/* Status dot — top right */}
             <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-2.5 py-1">
               <span
-                className={`status-dot ${isAvailable ? 'status-dot--live' : 'status-dot--offline'}`}
-                title={isAvailable ? 'Live' : 'Offline'}
+                className={`status-dot ${isAvailable ? 'status-dot--live' : isBooked ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' : 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]'}`}
+                title={currentStatus}
               />
               <span className={`text-[10px] font-semibold uppercase tracking-wider ${
-                isAvailable ? 'text-green-400' : 'text-red-400'
+                isAvailable ? 'text-green-400' : isBooked ? 'text-red-400' : 'text-yellow-400'
               }`}>
-                {isAvailable ? 'Live' : 'Offline'}
+                {currentStatus}
               </span>
             </div>
           </div>
@@ -98,31 +112,48 @@ export default function VehicleCard({ vehicle, index = 0 }) {
               </div>
             )}
 
-            <div className="flex items-center justify-between mt-4">
-              <div>
-                {pricePerHour && (
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-lg font-bold text-brand">₹{pricePerHour}</span>
-                    <span className="text-xs text-white/40">/hr</span>
-                  </div>
-                )}
-                {pricePerDay && (
-                  <div className="flex items-center gap-1 text-xs text-white/40 mt-0.5">
-                    <FiClock size={10} />
-                    <span>₹{pricePerDay}/day</span>
-                  </div>
-                )}
+            {isBooked ? (
+              <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5 bg-red-500/5 -mx-4 px-4 pb-1 rounded-b-xl">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-white/40">Booked From:</span>
+                  <span className="text-white/70 font-medium">{formatDate(bookedFrom)} {formatTime(bookedFrom)}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-white/40">Booked Until:</span>
+                  <span className="text-white/70 font-medium">{formatDate(bookedUntil)} {formatTime(bookedUntil)}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs pt-1 border-t border-white/5">
+                  <span className="text-brand/80 font-medium">Available Again:</span>
+                  <span className="text-green-400 font-semibold">{formatDate(availableAgain)} {formatTime(availableAgain)}</span>
+                </div>
               </div>
-              <span
-                className={`badge text-xs ${
-                  isAvailable
-                    ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                }`}
-              >
-                {isAvailable ? 'Available' : 'Unavailable'}
-              </span>
-            </div>
+            ) : (
+              <div className="flex items-center justify-between mt-4">
+                <div>
+                  {pricePerHour && (
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-lg font-bold text-brand">₹{pricePerHour}</span>
+                      <span className="text-xs text-white/40">/hr</span>
+                    </div>
+                  )}
+                  {pricePerDay && (
+                    <div className="flex items-center gap-1 text-xs text-white/40 mt-0.5">
+                      <FiClock size={10} />
+                      <span>₹{pricePerDay}/day</span>
+                    </div>
+                  )}
+                </div>
+                <span
+                  className={`badge text-xs ${
+                    isAvailable
+                      ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                      : isPending ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                  }`}
+                >
+                  {currentStatus}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </Link>

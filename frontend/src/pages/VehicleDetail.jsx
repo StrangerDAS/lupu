@@ -14,6 +14,8 @@ import useAuthStore from '../store/authStore'
 import { getFavorites, toggleFavorite } from '../firebase/firestoreService'
 import { reviewAPI, bookingAPI } from '../api/endpoints'
 import { getImageUrl } from '../utils/urlUtils'
+import Calendar from 'react-calendar'
+import 'react-calendar/dist/Calendar.css'
 
 /* ═══════════════════════════════════════════════════════════
    MAIN COMPONENT
@@ -50,7 +52,24 @@ export default function VehicleDetail() {
   // Determine availability: must be approved AND isLive
   const isApproved = vehicle?.status === 'approved'
   const isLive = vehicle?.isLive !== false
-  const isBookable = isApproved && isLive
+  const isBookable = vehicle?.currentStatus === 'Available' || (isApproved && isLive && !vehicle?.currentStatus)
+
+  // Disable dates based on disabledDates from API
+  const tileDisabled = ({ date, view }) => {
+    if (view === 'month') {
+      return (vehicle?.disabledDates || []).some(disabledRange => {
+        const start = new Date(disabledRange.start)
+        const end = new Date(disabledRange.end)
+        // Set date to start of day for accurate comparison
+        const checkDate = new Date(date)
+        checkDate.setHours(0, 0, 0, 0)
+        start.setHours(0, 0, 0, 0)
+        end.setHours(23, 59, 59, 999)
+        return checkDate >= start && checkDate <= end
+      })
+    }
+    return false
+  }
 
   /* ── Load favorites on mount ───────────────────────────── */
   useEffect(() => {
@@ -406,14 +425,14 @@ export default function VehicleDetail() {
                 </span>
                 {/* Status badge with glowing dot */}
                 <span className={`badge text-xs flex items-center gap-1.5 ${
-                  isBookable
+                  vehicle.currentStatus === 'Available'
                     ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                    : vehicle.currentStatus === 'Booked' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
                 }`}>
-                  <span className={`status-dot ${isBookable ? 'status-dot--live' : 'status-dot--offline'}`}
+                  <span className={`status-dot ${vehicle.currentStatus === 'Available' ? 'status-dot--live' : vehicle.currentStatus === 'Booked' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]' : 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.6)]'}`}
                     style={{ width: 8, height: 8 }}
                   />
-                  {isBookable ? 'Available' : 'Unavailable'}
+                  {vehicle.currentStatus || (isBookable ? 'Available' : 'Unavailable')}
                 </span>
               </div>
               <h1 className="text-2xl md:text-3xl font-bold leading-tight">{vehicle.name}</h1>
@@ -492,21 +511,50 @@ export default function VehicleDetail() {
             )}
 
             {/* Unavailable notice */}
-            {!isBookable && (
+            {!isBookable && vehicle.currentStatus === 'Pending Approval' && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card p-4 bg-yellow-500/5 border-yellow-500/20 flex items-center gap-3"
+              >
+                <span className="status-dot bg-yellow-500" />
+                <div>
+                  <p className="text-yellow-400 text-sm font-semibold">Currently Unavailable</p>
+                  <p className="text-white/30 text-xs mt-0.5">
+                    This vehicle is pending admin approval or has been set offline. Check back later.
+                  </p>
+                </div>
+              </motion.div>
+            )}
+
+            {vehicle.currentStatus === 'Booked' && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="card p-4 bg-red-500/5 border-red-500/20 flex items-center gap-3"
               >
-                <span className="status-dot status-dot--offline" />
+                <span className="status-dot bg-red-500" />
                 <div>
-                  <p className="text-red-400 text-sm font-semibold">Currently Unavailable</p>
-                  <p className="text-white/30 text-xs mt-0.5">
-                    This vehicle has been set offline by the owner. Check back later.
+                  <p className="text-red-400 text-sm font-semibold">Currently Booked</p>
+                  <p className="text-white/40 text-xs mt-0.5">
+                    Available again on {new Date(vehicle.availableAgain).toLocaleString('en-US', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' })}
                   </p>
                 </div>
               </motion.div>
             )}
+
+            {/* Availability Calendar */}
+            <div className="card p-5">
+              <h3 className="font-semibold mb-4 text-sm flex items-center gap-2"><FiCalendar className="text-brand"/> Availability Calendar</h3>
+              <div className="custom-calendar-wrapper">
+                <Calendar
+                  tileDisabled={tileDisabled}
+                  minDate={new Date()}
+                  prev2Label={null}
+                  next2Label={null}
+                />
+              </div>
+            </div>
 
             {/* Book button */}
             <motion.button

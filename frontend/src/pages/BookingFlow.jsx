@@ -17,8 +17,9 @@ import {
   createPaymentRecord,
   addNotification
 } from '../firebase/firestoreService'
-import { bookingAPI } from '../api/endpoints'
+import { bookingAPI, paymentAPI } from '../api/endpoints'
 import BookingAgreementModal from '../components/BookingAgreementModal'
+import { loadRazorpayScript } from '../utils/paymentUtils'
 
 const STEPS = ['Select Time', 'Verify Identity', 'Sign Agreement', 'Advance Payment']
 
@@ -104,6 +105,7 @@ export default function BookingFlow() {
   const [submitting, setSubmitting] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
   const [showAgreementModal, setShowAgreementModal] = useState(false)
+  const [createdBookingId, setCreatedBookingId] = useState(null)
 
   // Pricing (No fees for Beta)ime change
   useEffect(() => {
@@ -127,6 +129,16 @@ export default function BookingFlow() {
         .catch(err => console.error('Failed to load blocked dates', err))
     }
   }, [id])
+
+  // Overlap checks dynamically
+  const isOverlap = blockedDates.some(b => {
+    if (!startTime || !endTime) return false
+    const bStart = new Date(b.startTime)
+    const bEnd = new Date(b.endTime)
+    const selStart = new Date(startTime)
+    const selEnd = new Date(endTime)
+    return selStart < bEnd && selEnd > bStart
+  })
 
   // Sync permanent address if same address checked
   useEffect(() => {
@@ -236,13 +248,6 @@ export default function BookingFlow() {
       }
 
       // Overlap checks
-      const isOverlap = blockedDates.some(b => {
-        const bStart = new Date(b.startTime)
-        const bEnd = new Date(b.endTime)
-        const selStart = new Date(startTime)
-        const selEnd = new Date(endTime)
-        return selStart < bEnd && selEnd > bStart
-      })
       if (isOverlap) {
         toast.error('The selected dates overlap with an existing booking.')
         return false
@@ -454,103 +459,158 @@ export default function BookingFlow() {
     const tempId = `LUPU_${Date.now()}_${Math.floor(Math.random() * 1000)}`
 
     try {
-      setStatusMessage('Uploading secure documents...')
-      
-      let selfieUrl = ''
-      let frontUrl = ''
-      let backUrl = ''
-      let collegeUrl = ''
+      let actualBookingId = createdBookingId
 
-      if (user?.kycStatus === 'Verified') {
-        selfieUrl = user.kycDetails?.selfieUrl || ''
-        collegeUrl = user.kycDetails?.collegeIdUrl || ''
-        frontUrl = user.kycDetails?.aadhaarFrontUrl || ''
-        backUrl = user.kycDetails?.aadhaarBackUrl || ''
-      } else {
-        if (files.selfie) {
-          selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie)
-        }
-        if (kycOption === 'college_id') {
-          if (files.collegeId) {
-            collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId)
-          }
+      if (!actualBookingId) {
+        setStatusMessage('Uploading secure documents...')
+        
+        let selfieUrl = ''
+        let frontUrl = ''
+        let backUrl = ''
+        let collegeUrl = ''
+
+        if (user?.kycStatus === 'Verified') {
+          selfieUrl = user.kycDetails?.selfieUrl || ''
+          collegeUrl = user.kycDetails?.collegeIdUrl || ''
+          frontUrl = user.kycDetails?.aadhaarFrontUrl || ''
+          backUrl = user.kycDetails?.aadhaarBackUrl || ''
         } else {
-          if (files.aadhaarFront) {
-            frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront)
+          if (files.selfie) {
+            selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie)
           }
-          if (files.aadhaarBack) {
-            backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack)
+          if (kycOption === 'college_id') {
+            if (files.collegeId) {
+              collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId)
+            }
+          } else {
+            if (files.aadhaarFront) {
+              frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront)
+            }
+            if (files.aadhaarBack) {
+              backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack)
+            }
           }
+        }
+
+        // Upload Signature
+        setStatusMessage('Uploading signature...')
+        // Convert signature base64 back to Blob file
+        const sigRes = await fetch(signatureData)
+        const sigBlob = await sigRes.blob()
+        const sigFile = new File([sigBlob], `signature_${tempId}.png`, { type: 'image/png' })
+        const signatureUrl = await uploadBookingFile(`bookings/signatures/${tempId}_sig.png`, sigFile)
+
+        setStatusMessage('Compiling Verification Agreement PDF...')
+        const pdfUrl = await compilePDF(tempId)
+
+        setStatusMessage('Creating booking in system...')
+        // Submit Booking details via Express MongoDB REST API first
+        const bookingRes = await bookingAPI.create({
+          vehicleId: id,
+          startTime,
+          endTime,
+          agreementAccepted: true,
+          agreementVersion: 'Beta v1.0',
+          agreementAcceptedAt: new Date().toISOString(),
+          verificationDetails: {
+            currentAddress,
+            permanentAddress,
+            collegeName: kycOption === 'college_id' ? collegeName : '',
+            aadhaarNumber: kycOption === 'aadhaar' ? aadhaarNumber : '',
+            selfieUrl,
+            aadhaarFrontUrl: frontUrl,
+            aadhaarBackUrl: backUrl,
+            collegeIdUrl: collegeUrl,
+            signatureUrl,
+            verificationPdfUrl: pdfUrl
+          }
+        })
+
+        actualBookingId = bookingRes.data._id
+        setCreatedBookingId(actualBookingId)
+
+        // Send owner notification
+        await addNotification(vehicle?.ownerId, {
+          title: 'New Booking Request 🚘',
+          message: `Renter ${user?.name} requested to book ${vehicle?.name}. Verification documents submitted.`,
+          bookingId: actualBookingId,
+          type: 'status'
+        })
+      }
+
+      setStatusMessage('Initializing Secure Checkout...')
+      
+      const isRazorpayLoaded = await loadRazorpayScript()
+      if (!isRazorpayLoaded) {
+        throw new Error('Razorpay SDK failed to load. Are you online?')
+      }
+
+      // Create Order on Backend using real booking ID
+      const orderRes = await paymentAPI.createOrder({
+        bookingId: actualBookingId
+      })
+
+      const { order_id, amount, currency, key_id } = orderRes.data
+
+      const options = {
+        key: key_id,
+        amount: amount,
+        currency: currency,
+        name: 'LUPU Rentals',
+        description: `Booking for ${vehicle?.name}`,
+        order_id: order_id,
+        handler: async function (response) {
+          try {
+            setStatusMessage('Verifying payment...')
+            setSubmitting(true) // Re-enable loading state
+            
+            await paymentAPI.verify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              bookingId: actualBookingId
+            })
+            
+            // Navigate to Success Page
+            navigate('/payment-success', {
+              state: {
+                bookingId: actualBookingId,
+                vehicleName: vehicle?.name,
+                amount: advanceAmount,
+                transactionId: response.razorpay_payment_id
+              }
+            })
+          } catch (verifyErr) {
+            console.error('Verification Error:', verifyErr)
+            toast.error('Payment verification failed. If money was deducted, it will be refunded.')
+            setSubmitting(false)
+          }
+        },
+        prefill: {
+          name: user?.name,
+          email: user?.email,
+          contact: user?.phone || ''
+        },
+        theme: {
+          color: '#ff6b00'
         }
       }
 
-      // Upload Signature
-      setStatusMessage('Uploading signature...')
-      // Convert signature base64 back to Blob file
-      const sigRes = await fetch(signatureData)
-      const sigBlob = await sigRes.blob()
-      const sigFile = new File([sigBlob], `signature_${tempId}.png`, { type: 'image/png' })
-      const signatureUrl = await uploadBookingFile(`bookings/signatures/${tempId}_sig.png`, sigFile)
-
-      setStatusMessage('Compiling Verification Agreement PDF...')
-      const pdfUrl = await compilePDF(tempId)
-
-      setStatusMessage('Processing Payment...')
-      // Create Order on Backend
-      const orderRes = await bookingAPI.createPaymentOrder({
-        bookingId: tempId,
-        amount: advanceAmount,
-        type: 'advance'
+      const rzp = new window.Razorpay(options)
+      rzp.on('payment.failed', function (response) {
+        console.error('Payment Failed:', response.error)
+        toast.error(`Payment failed: ${response.error.description}. Please try again.`)
+        setSubmitting(false)
+        setStatusMessage('')
       })
-
-      // Save payment transaction record
-      const paymentRefId = await createPaymentRecord({
-        bookingId: tempId,
-        amount: advanceAmount,
-        type: 'advance',
-        status: 'completed',
-        renterId: user?._id || 'anonymous',
-        renterName: user?.name || 'Renter',
-        description: `30% Advance payment for booking ${tempId}`
-      })
-
-      setStatusMessage('Submitting booking to owner review...')
-      // Submit Booking details via Express MongoDB REST API
-      await bookingAPI.create({
-        vehicleId: id,
-        startTime,
-        endTime,
-        agreementAccepted: true,
-        agreementVersion: 'Beta v1.0',
-        agreementAcceptedAt: new Date().toISOString(),
-        verificationDetails: {
-          currentAddress,
-          permanentAddress,
-          collegeName: kycOption === 'college_id' ? collegeName : '',
-          aadhaarNumber: kycOption === 'aadhaar' ? aadhaarNumber : '',
-          selfieUrl,
-          aadhaarFrontUrl: frontUrl,
-          aadhaarBackUrl: backUrl,
-          collegeIdUrl: collegeUrl,
-          signatureUrl,
-          verificationPdfUrl: pdfUrl
-        }
-      })
-
-      // Send owner notification
-      await addNotification(vehicle?.ownerId, {
-        title: 'New Booking Request 🚘',
-        message: `Renter ${user?.name} requested to book ${vehicle?.name}. Verification documents submitted.`,
-        bookingId: tempId,
-        type: 'status'
-      })
-
-      toast.success('Booking & Verification Submitted Successfully! 🎉')
-      navigate('/my-bookings')
+      
+      // Open the Razorpay checkout overlay
+      rzp.open()
+      
+      // We don't navigate away or hide submitting until payment is done or closed
     } catch (err) {
       console.error(err)
-      toast.error(err.message || 'Something went wrong. Please check your network and try again.')
-    } finally {
+      toast.error(err.response?.data?.message || err.message || 'Something went wrong. Please check your network and try again.')
       setSubmitting(false)
       setStatusMessage('')
     }
@@ -705,7 +765,13 @@ export default function BookingFlow() {
                 </div>
               )}
 
-              <button onClick={handleNext} className="btn-primary w-full flex items-center justify-center gap-2 py-3.5 mt-2">
+              {isOverlap && (
+                <div className="mt-4 p-4 card bg-red-500/5 border border-red-500/20 text-center">
+                  <p className="text-red-400 text-sm font-semibold">This vehicle is already booked during the selected period.</p>
+                </div>
+              )}
+
+              <button onClick={handleNext} disabled={isOverlap} className="btn-primary w-full flex items-center justify-center gap-2 py-3.5 mt-2 disabled:opacity-40 disabled:cursor-not-allowed">
                 Continue to Verification <FiArrowRight />
               </button>
             </motion.div>

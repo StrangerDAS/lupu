@@ -75,10 +75,10 @@ export const roleAPI = {
 
 /* ── Payments ───────────────────────────────────────────── */
 export const paymentAPI = {
-  createOrder: (bookingId, type) => api.post('/payments/create-order', { bookingId, type }),
-  verify: (data) => api.post('/payments/verify', data),
-  refund: (id) => api.post(`/payments/${id}/refund`),
-  getHistory: () => api.get('/payments/history'),
+  createOrder: (data) => api.post('/payment/create-order', data),
+  verify: (data) => api.post('/payment/verify', data),
+  refund: (id) => api.post(`/payment/${id}/refund`),
+  getHistory: () => api.get('/payment/history'),
 }
 
 /* ── Notifications ──────────────────────────────────────── */

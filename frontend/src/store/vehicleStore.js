@@ -17,13 +17,16 @@ const useVehicleStore = create((set, get) => ({
     minPrice: '',
     maxPrice: '',
     search: '',
+    availabilityStatus: '', // 'Available', 'Booked', ''
+    dateStart: '',
+    dateEnd: '',
   },
 
   setFilter: (key, value) =>
     set((state) => ({ filters: { ...state.filters, [key]: value } })),
 
   clearFilters: () =>
-    set({ filters: { type: '', category: '', minPrice: '', maxPrice: '', search: '' } }),
+    set({ filters: { type: '', category: '', minPrice: '', maxPrice: '', search: '', availabilityStatus: '', dateStart: '', dateEnd: '' } }),
 
   setVehicles: (vehicles) => set({ vehicles }),
 
@@ -67,6 +70,19 @@ const useVehicleStore = create((set, get) => ({
         )
           return false
       }
+      if (filters.availabilityStatus && v.currentStatus !== filters.availabilityStatus) return false
+      
+      if (filters.dateStart && filters.dateEnd && v.disabledDates) {
+        const start = new Date(filters.dateStart)
+        const end = new Date(filters.dateEnd)
+        const hasOverlap = v.disabledDates.some(range => {
+          const rStart = new Date(range.start)
+          const rEnd = new Date(range.end)
+          return start < rEnd && end > rStart
+        })
+        if (hasOverlap) return false
+      }
+      
       return true
     })
   },

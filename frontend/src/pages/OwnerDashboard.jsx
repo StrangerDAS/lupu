@@ -421,7 +421,7 @@ export default function OwnerDashboard() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [editVehicle, setEditVehicle] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [bookingFilter, setBookingFilter] = useState('all')
+  const [bookingFilter, setBookingFilter] = useState('upcoming')
   const [reviewBooking, setReviewBooking] = useState(null)
   const [disputeBookingId, setDisputeBookingId] = useState(null)
   const [vehicleFilter, setVehicleFilter] = useState(null) // filter bookings by vehicle
@@ -971,18 +971,13 @@ export default function OwnerDashboard() {
 
                   {/* Filter tabs */}
                   <div className="flex gap-1 bg-surface-2 rounded-xl p-1 w-fit mb-6 overflow-x-auto no-scrollbar">
-                    {['all', 'pending_verification', 'under_review', 'approved', 'advance_paid', 'ongoing', 'completed', 'fully_paid', 'cancelled', 'rejected'].map((f) => {
+                    {['all', 'current', 'upcoming', 'completed', 'cancelled'].map((f) => {
                       const labels = {
                         all: 'All',
-                        pending_verification: 'Pending Verify',
-                        under_review: 'Under Review',
-                        approved: 'Approved',
-                        advance_paid: 'Advance Paid',
-                        ongoing: 'Ongoing',
+                        current: 'Current Bookings',
+                        upcoming: 'Upcoming Bookings',
                         completed: 'Completed',
-                        fully_paid: 'Fully Paid',
                         cancelled: 'Cancelled',
-                        rejected: 'Rejected'
                       }
                       return (
                         <button
@@ -994,14 +989,33 @@ export default function OwnerDashboard() {
                               : 'text-white/40 hover:text-white'
                           }`}
                         >
-                          {labels[f] || f}
+                          {labels[f]}
                         </button>
                       )
                     })}
                   </div>
 
-                  {/* Booking cards */}
-                  <div className="space-y-4">
+                  {(() => {
+                    const now = new Date()
+                    const filteredBookings = bookings.filter(b => {
+                      if (vehicleFilter && b.vehicleId !== vehicleFilter) return false
+                      if (bookingFilter === 'all') return true
+                      
+                      const isCurrent = ['ongoing', 'ready_for_pickup'].includes(b.bookingStatus) || (b.bookingStatus === 'confirmed' && new Date(b.startTime) <= now && new Date(b.endTime) >= now)
+                      const isUpcoming = ['accepted', 'advance_paid', 'under_review', 'pending_verification'].includes(b.bookingStatus) || (b.bookingStatus === 'confirmed' && new Date(b.startTime) > now)
+                      const isCompleted = ['completed', 'fully_paid'].includes(b.bookingStatus)
+                      const isCancelled = ['cancelled', 'rejected'].includes(b.bookingStatus)
+                      
+                      if (bookingFilter === 'current') return isCurrent
+                      if (bookingFilter === 'upcoming') return isUpcoming
+                      if (bookingFilter === 'completed') return isCompleted
+                      if (bookingFilter === 'cancelled') return isCancelled
+                      
+                      return false
+                    })
+
+                    return (
+                      <div className="space-y-4">
                     {loading ? (
                       [...Array(3)].map((_, i) => <BookingCardSkeleton key={i} />)
                     ) : filteredBookings.length === 0 ? (
@@ -1149,6 +1163,8 @@ export default function OwnerDashboard() {
                       })
                     )}
                   </div>
+                  )
+                })()}
                 </motion.div>
               )}
 

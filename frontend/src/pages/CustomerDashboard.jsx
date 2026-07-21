@@ -40,9 +40,10 @@ import DisputeModal from '../components/DisputeModal'
 
 const NAV_ITEMS = [
   { key: 'overview',     label: 'Overview',        icon: FiTrendingUp },
-  { key: 'requests',     label: 'My Requests',     icon: FiCalendar },
-  { key: 'active',       label: 'Active Rentals',   icon: FiClock },
-  { key: 'history',      label: 'Rental History',   icon: FiClock },
+  { key: 'current',      label: 'Current Booking', icon: FiClock },
+  { key: 'upcoming',     label: 'Upcoming Booking',icon: FiCalendar },
+  { key: 'completed',    label: 'Completed',       icon: FiCheckCircle },
+  { key: 'cancelled',    label: 'Cancelled',       icon: FiX },
   { key: 'payments',     label: 'Payments',        icon: FiDollarSign },
   { key: 'saved',        label: 'Saved Vehicles',  icon: FiHeart },
   { key: 'notifications',label: 'Notifications',   icon: FiBell },
@@ -345,11 +346,27 @@ export default function CustomerDashboard() {
 
   /* ── Derived Metrics & Tabs ─────────────────────────── */
 
-  const activeRentals = useMemo(() => bookings.filter(b => b.bookingStatus === 'ongoing'), [bookings])
-  const pendingRequests = useMemo(() => bookings.filter(b => ['pending_verification', 'under_review'].includes(b.bookingStatus)), [bookings])
-  const approvedRequests = useMemo(() => bookings.filter(b => ['approved', 'accepted', 'advance_paid'].includes(b.bookingStatus)), [bookings])
-  const completedRentals = useMemo(() => bookings.filter(b => ['completed', 'fully_paid'].includes(b.bookingStatus)), [bookings])
-  const cancelledRentals = useMemo(() => bookings.filter(b => ['cancelled', 'rejected'].includes(b.bookingStatus)), [bookings])
+  const now = new Date()
+  
+  const currentBookings = useMemo(() => bookings.filter(b => 
+    ['ongoing', 'ready_for_pickup'].includes(b.bookingStatus) || (b.bookingStatus === 'confirmed' && new Date(b.startTime) <= now && new Date(b.endTime) >= now)
+  ), [bookings])
+
+  const upcomingBookings = useMemo(() => bookings.filter(b => 
+    ['accepted', 'advance_paid', 'under_review', 'pending_verification'].includes(b.bookingStatus) || (b.bookingStatus === 'confirmed' && new Date(b.startTime) > now)
+  ).sort((a, b) => new Date(a.startTime) - new Date(b.startTime)), [bookings])
+
+  const completedBookings = useMemo(() => bookings.filter(b => 
+    ['completed', 'fully_paid'].includes(b.bookingStatus)
+  ).sort((a, b) => new Date(b.endTime) - new Date(a.endTime)), [bookings])
+
+  const cancelledBookings = useMemo(() => bookings.filter(b => 
+    ['cancelled', 'rejected'].includes(b.bookingStatus)
+  ).sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)), [bookings])
+
+  const activeRentals = currentBookings
+  const pastRentals = completedBookings.concat(cancelledBookings)
+
 
   /* ── Razorpay Payment Integration ───────────────────── */
   const loadRazorpay = () => {
@@ -511,17 +528,16 @@ export default function CustomerDashboard() {
   }
   
   const totalSpent = useMemo(() => {
-    return completedRentals.reduce((sum, b) => sum + (b.totalPrice || 0), 0)
-  }, [completedRentals])
+    return completedBookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0)
+  }, [completedBookings])
 
   const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications])
 
   const overviewStats = [
-    { label: 'Active Rentals',   value: activeRentals.length,   icon: FiClock,        color: 'text-brand',      bg: 'bg-brand/10' },
-    { label: 'Pending Requests', value: pendingRequests.length, icon: FiCalendar,     color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
-    { label: 'Approved Requests',value: approvedRequests.length,icon: FiCheck,        color: 'text-blue-400',   bg: 'bg-blue-500/10' },
-    { label: 'Completed Rentals',value: completedRentals.length,icon: FiCheckCircle,  color: 'text-green-400',  bg: 'bg-green-500/10' },
-    { label: 'Cancelled/Rejected',value: cancelledRentals.length,icon: FiX,           color: 'text-red-400',    bg: 'bg-red-500/10' },
+    { label: 'Active Rentals',   value: currentBookings.length,   icon: FiClock,        color: 'text-brand',      bg: 'bg-brand/10' },
+    { label: 'Upcoming', value: upcomingBookings.length, icon: FiCalendar,     color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
+    { label: 'Completed',value: completedBookings.length,icon: FiCheckCircle,  color: 'text-green-400',  bg: 'bg-green-500/10' },
+    { label: 'Cancelled',value: cancelledBookings.length,icon: FiX,           color: 'text-red-400',    bg: 'bg-red-500/10' },
     { label: 'Saved Vehicles',   value: favoriteIds.length,     icon: FiHeart,        color: 'text-red-400',    bg: 'bg-red-500/10' },
     { label: 'Total Spent',      value: `₹${totalSpent.toLocaleString('en-IN')}`, icon: FiDollarSign, color: 'text-green-400', bg: 'bg-green-500/10' }
   ]
@@ -831,7 +847,7 @@ export default function CustomerDashboard() {
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {bookings.slice(0, 3).map((b) => (
+                        {currentBookings.length > 0 ? currentBookings.slice(0, 3).map((b) => (
                           <div key={b._id || b.bookingId} className="card p-4 flex items-center justify-between gap-4 bg-surface hover:border-white/10 transition">
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-xl bg-surface-2 flex items-center justify-center">
@@ -847,32 +863,113 @@ export default function CustomerDashboard() {
                               <p className="text-white font-bold text-xs mt-1">₹{b.totalPrice}</p>
                             </div>
                           </div>
-                        ))}
+                        )) : (
+                          <div className="text-sm text-white/50 py-2">No active rentals.</div>
+                        )}
                       </div>
                     )}
                   </div>
                 </motion.div>
               )}
 
-              {/* 2. MY REQUESTS TAB */}
-              {activeTab === 'requests' && (
+              {/* 2. CURRENT TAB */}
+              {activeTab === 'current' && (
                 <motion.div
-                  key="requests"
+                  key="current"
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.25 }}
                   className="space-y-4"
                 >
-                  <h2 className="text-lg font-semibold">My Rental Requests</h2>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-brand animate-pulse" /> Current Bookings
+                  </h2>
+
                   {loading ? (
-                    [...Array(3)].map((_, i) => <BookingCardSkeleton key={i} />)
-                  ) : bookings.length === 0 ? (
+                    [...Array(2)].map((_, i) => <BookingCardSkeleton key={i} />)
+                  ) : currentBookings.length === 0 ? (
                     <div className="card p-16 text-center text-white/40 text-sm">
-                      You have not made any booking requests yet. <Link to="/explore" className="text-brand hover:underline">Browse rides</Link> to start.
+                      No current bookings at the moment.
                     </div>
                   ) : (
-                    bookings.map((b) => {
+                    currentBookings.map((b) => {
+                      const isReturnToday = isActiveReturnToday(b.endTime)
+                      return (
+                        <div key={b._id || b.bookingId} className="card p-5 border-l-4 border-brand space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                            <div className="flex gap-4">
+                              <div className="w-14 h-14 rounded-xl bg-surface-2 flex items-center justify-center shrink-0">
+                                <VehicleIcon type={b.vehicleType} />
+                              </div>
+                              <div className="space-y-1">
+                                <h3 className="font-bold text-base">{b.vehicleName}</h3>
+                                <p className="text-xs text-white/45">Owner: {b.ownerName}</p>
+                                <p className="text-xs text-white/30">
+                                  Period: {formatDate(b.startTime)} → {formatDate(b.endTime)}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className={`badge text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                isReturnToday 
+                                  ? 'bg-red-500/25 text-red-400 border border-red-500/30 animate-pulse' 
+                                  : 'bg-green-500/10 text-green-400 border border-green-500/20'
+                              }`}>
+                                {isReturnToday ? 'Return Today ⚠️' : 'Active'}
+                              </span>
+                              <p className="text-brand font-bold text-base mt-2">₹{b.totalPrice}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-3 pt-3 border-t border-white/5">
+                            <button
+                              onClick={() => setInspectBooking(b)}
+                              className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
+                            >
+                              View Details
+                            </button>
+                            <button
+                              onClick={() => setContactOwnerBooking(b)}
+                              className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
+                            >
+                              Contact Owner
+                            </button>
+                            {b.bookingStatus === 'ready_for_pickup' && (
+                              <button
+                                onClick={() => handleConfirmPickup(b)}
+                                className="btn-primary bg-brand hover:bg-brand-dark text-xs py-2 px-4 font-semibold text-white ml-auto"
+                              >
+                                Confirm Pickup 🔑
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </motion.div>
+              )}
+
+              {/* 3. UPCOMING TAB */}
+              {activeTab === 'upcoming' && (
+                <motion.div
+                  key="upcoming"
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.25 }}
+                  className="space-y-4"
+                >
+                  <h2 className="text-lg font-semibold">Upcoming Bookings</h2>
+                  {loading ? (
+                    [...Array(3)].map((_, i) => <BookingCardSkeleton key={i} />)
+                  ) : upcomingBookings.length === 0 ? (
+                    <div className="card p-16 text-center text-white/40 text-sm">
+                      You have no upcoming bookings. <Link to="/explore" className="text-brand hover:underline">Browse rides</Link> to start.
+                    </div>
+                  ) : (
+                    upcomingBookings.map((b) => {
                       const isPending = ['pending_verification', 'under_review'].includes(b.bookingStatus)
                       return (
                         <div key={b._id || b.bookingId} className="card p-5 space-y-4 hover:border-white/10 transition">
@@ -928,20 +1025,6 @@ export default function CustomerDashboard() {
                                  Pay 25% Advance (₹{b.pricing?.advance || Math.round(b.totalPrice * 0.25)})
                                </button>
                              )}
-                             {b.bookingStatus === 'completed' && (
-                               <button
-                                 onClick={() => handleRazorpayPayment(b, 'final')}
-                                 className="btn-primary text-xs py-2 px-4 bg-brand text-white hover:bg-brand-dark transition font-semibold"
-                               >
-                                 Pay Remaining 75% (₹{b.pricing?.remaining || Math.round(b.totalPrice * 0.75)})
-                               </button>
-                             )}
-                             <button
-                               onClick={() => setDisputeBookingId(b._id || b.bookingId)}
-                               className="btn-secondary text-xs py-2 px-4 text-red-400/80 border-white/5 hover:bg-red-500/10 hover:text-red-400 transition"
-                             >
-                               Dispute
-                             </button>
                            </div>
                         </div>
                       )
@@ -1020,26 +1103,26 @@ export default function CustomerDashboard() {
                 </motion.div>
               )}
 
-              {/* 4. RENTAL HISTORY TAB */}
-              {activeTab === 'history' && (
+              {/* 4. COMPLETED TAB */}
+              {activeTab === 'completed' && (
                 <motion.div
-                  key="history"
+                  key="completed"
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.25 }}
                   className="space-y-4"
                 >
-                  <h2 className="text-lg font-semibold">Rental History</h2>
+                  <h2 className="text-lg font-semibold">Completed Bookings</h2>
                   {loading ? (
                     [...Array(3)].map((_, i) => <BookingCardSkeleton key={i} />)
-                  ) : completedRentals.length === 0 && cancelledRentals.length === 0 ? (
+                  ) : completedBookings.length === 0 ? (
                     <div className="card p-16 text-center text-white/40 text-sm">
-                      No past rental history found.
+                      No completed bookings found.
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {completedRentals.map((b) => (
+                      {completedBookings.map((b) => (
                         <div key={b._id || b.bookingId} className="card p-5 hover:border-white/10 transition border-l-4 border-green-500/30 space-y-4">
                           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                             <div className="flex gap-4">
@@ -1076,8 +1159,31 @@ export default function CustomerDashboard() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+                </motion.div>
+              )}
 
-                      {cancelledRentals.map((b) => (
+              {/* 4.1 CANCELLED TAB */}
+              {activeTab === 'cancelled' && (
+                <motion.div
+                  key="cancelled"
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.25 }}
+                  className="space-y-4"
+                >
+                  <h2 className="text-lg font-semibold">Cancelled Bookings</h2>
+                  {loading ? (
+                    [...Array(3)].map((_, i) => <BookingCardSkeleton key={i} />)
+                  ) : cancelledBookings.length === 0 ? (
+                    <div className="card p-16 text-center text-white/40 text-sm">
+                      No cancelled bookings found.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {cancelledBookings.map((b) => (
                         <div key={b._id || b.bookingId} className="card p-5 hover:border-white/10 transition opacity-60 space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                             <div className="flex gap-4">

@@ -41,6 +41,7 @@ const PrivacyPolicy     = lazy(() => import('./pages/PrivacyPolicy'))
 const TermsOfService    = lazy(() => import('./pages/TermsOfService'))
 const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'))
 const SimulatedInbox    = lazy(() => import('./pages/SimulatedInbox'))
+const PaymentSuccess    = lazy(() => import('./pages/PaymentSuccess'))
 
 export default function App() {
   const { setAuth } = useAuthStore()
@@ -157,6 +158,7 @@ export default function App() {
               <Route path="/book/:id"             element={<BookingFlow />} />
               <Route path="/my-bookings"          element={<CustomerDashboard />} />
               <Route path="/handover/:bookingId"  element={<Handover />} />
+              <Route path="/payment-success"      element={<PaymentSuccess />} />
             </Route>
 
             {/* ── Owner or any admin ──────────────────────────────── */}

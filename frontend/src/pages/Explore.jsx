@@ -27,7 +27,7 @@ export default function Explore() {
   const { vehicles, loading, filters, setFilter, clearFilters } = useVehicles()
   const [filterOpen, setFilterOpen] = useState(false)
 
-  const hasFilters = filters.type || filters.minPrice || filters.search || filters.category
+  const hasFilters = filters.type || filters.minPrice || filters.search || filters.category || filters.availabilityStatus || (filters.dateStart && filters.dateEnd)
 
   const activePriceLabel = PRICE_RANGES.find(
     (r) => r.min === filters.minPrice && r.max === filters.maxPrice
@@ -91,7 +91,7 @@ export default function Explore() {
             Filters
             {hasFilters && (
               <span className="w-5 h-5 bg-brand text-white text-xs rounded-full flex items-center justify-center leading-none">
-                {[filters.type, filters.minPrice, filters.category].filter(Boolean).length}
+                {[filters.type, filters.minPrice, filters.category, filters.availabilityStatus, filters.dateStart].filter(Boolean).length}
               </span>
             )}
           </button>
@@ -149,6 +149,54 @@ export default function Explore() {
                 ))}
               </div>
             </div>
+
+            {/* Availability filter */}
+            {filters.category !== 'accessory' && (
+              <div className="w-full">
+                <div className="flex flex-col sm:flex-row gap-6">
+                  <div>
+                    <p className="label">Availability Status</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {[
+                        { value: '', label: 'Any Status' },
+                        { value: 'Available', label: 'Available Now' },
+                        { value: 'Booked', label: 'Currently Booked' },
+                      ].map((t) => (
+                        <button
+                          key={t.value}
+                          onClick={() => setFilter('availabilityStatus', t.value)}
+                          className={`badge px-3 py-1.5 text-sm cursor-pointer transition ${
+                            filters.availabilityStatus === t.value
+                              ? 'bg-brand text-white'
+                              : 'bg-surface-2 text-white/60 hover:bg-surface-3'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="label">Available On Dates</p>
+                    <div className="flex gap-2 items-center">
+                      <input 
+                        type="date" 
+                        value={filters.dateStart} 
+                        onChange={(e) => setFilter('dateStart', e.target.value)} 
+                        className="input-field text-sm px-3 py-1.5 max-w-[140px]" 
+                      />
+                      <span className="text-white/40">to</span>
+                      <input 
+                        type="date" 
+                        value={filters.dateEnd} 
+                        onChange={(e) => setFilter('dateEnd', e.target.value)} 
+                        className="input-field text-sm px-3 py-1.5 max-w-[140px]" 
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {hasFilters && (
               <button
