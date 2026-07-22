@@ -30,10 +30,8 @@ api.interceptors.response.use(
       if (import.meta.env.DEV) {
         console.warn('[Axios] ⚠️ 401 received — forcing full logout (token expired)')
       }
-      // Clear Zustand + localStorage
+      // Clear Zustand + localStorage (which now also clears Firebase session)
       useAuthStore.getState().logout()
-      // Hard redirect — no React Router available in interceptor scope
-      window.location.replace('/auth/login')
     }
     return Promise.reject(error)
   }

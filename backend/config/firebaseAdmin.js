@@ -1,26 +1,27 @@
-import admin from 'firebase-admin'
+import { initializeApp, getApps, cert } from 'firebase-admin/app'
+import { getAuth } from 'firebase-admin/auth'
 
-if (!admin.apps.length) {
-  // If FIREBASE_SERVICE_ACCOUNT is provided in .env as a JSON string, use it.
-  // Otherwise, default to application default credentials (useful for GCP environments)
+// Only initialize once (guard for hot-reload environments)
+if (!getApps().length) {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     try {
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        databaseURL: "https://uniride-9be37-default-rtdb.firebaseio.com"
+      initializeApp({
+        credential: cert(serviceAccount),
+        databaseURL: 'https://uniride-9be37-default-rtdb.firebaseio.com'
       })
-      console.log('Firebase Admin initialized with service account JSON.')
+      console.log('[Firebase Admin] ✅ Initialized with service account.')
     } catch (error) {
-      console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT JSON:', error)
+      console.error('[Firebase Admin] ❌ Failed to parse FIREBASE_SERVICE_ACCOUNT:', error.message)
       process.exit(1)
     }
   } else {
-    console.warn('FIREBASE_SERVICE_ACCOUNT is missing. Initializing Firebase Admin with default credentials. Make sure GOOGLE_APPLICATION_CREDENTIALS is set.')
-    admin.initializeApp({
-      databaseURL: "https://uniride-9be37-default-rtdb.firebaseio.com"
+    console.warn('[Firebase Admin] ⚠️  FIREBASE_SERVICE_ACCOUNT not set — using default credentials.')
+    initializeApp({
+      databaseURL: 'https://uniride-9be37-default-rtdb.firebaseio.com'
     })
   }
 }
 
-export default admin
+export const adminAuth = getAuth()
+export default { auth: () => getAuth() }

@@ -19,7 +19,7 @@ import { ADMIN_ROLES } from '../lib/roleUtils'
  *   regular user / owner          → /hub
  */
 export default function AuthLayout() {
-  const { user, token, authReady } = useAuthStore()
+  const { user, authReady } = useAuthStore()
 
   // ── Still waiting for Firebase to resolve ───────────────────────────────
   if (!authReady) {
@@ -28,7 +28,7 @@ export default function AuthLayout() {
   }
 
   // ── Already authenticated — bounce the user to the right place ──────────
-  if (token && user) {
+  if (user) {
     const dest = ADMIN_ROLES.includes(user.role) ? '/admin' : '/hub'
     console.log(`[AuthLayout] ✅ Already authenticated (role=${user.role}) — redirecting to ${dest}`)
     return <Navigate to={dest} replace />

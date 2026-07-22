@@ -9,6 +9,8 @@ import {
 } from '../lib/roleUtils'
 
 const STORAGE_KEY = 'lupu-auth'
+import { auth } from '../config/firebase'
+import { signOut } from 'firebase/auth'
 
 /**
  * useAuthStore — Zustand auth store with Express/JWT-driven RBAC.
@@ -95,6 +97,12 @@ const useAuthStore = create(
           accountStatus: null,
           authReady:     true, // Auth resolved — answer is "no user"
         })
+
+        try {
+          if (auth.currentUser) await signOut(auth)
+        } catch (err) {
+          console.error('Firebase signOut error', err)
+        }
 
         localStorage.removeItem(STORAGE_KEY)
 

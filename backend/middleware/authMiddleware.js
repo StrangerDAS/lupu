@@ -1,4 +1,4 @@
-import admin from '../config/firebaseAdmin.js'
+import { adminAuth } from '../config/firebaseAdmin.js'
 import User from '../models/User.js'
 
 export const verifyFirebaseToken = async (req, res, next) => {
@@ -10,7 +10,7 @@ export const verifyFirebaseToken = async (req, res, next) => {
   const idToken = authHeader.split('Bearer ')[1]
 
   try {
-    const decodedToken = await admin.auth().verifyIdToken(idToken)
+    const decodedToken = await adminAuth.verifyIdToken(idToken)
     req.firebaseUser = decodedToken
     
     // Check if the Firebase UID already exists in MongoDB
