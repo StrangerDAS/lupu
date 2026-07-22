@@ -1,16 +1,16 @@
-import { initializeApp } from "firebase/app"
-import { getAuth, GoogleAuthProvider } from "firebase/auth"
+import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 
+// Firebase project: uniride-9be37
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
-}
+  apiKey: "AIzaSyApxoYeZTelEFfFs8c1F0eePCEimOPRK9o",
+  authDomain: "uniride-9be37.firebaseapp.com",
+  projectId: "uniride-9be37",
+  storageBucket: "uniride-9be37.firebasestorage.app",
+  messagingSenderId: "760677444428",
+  appId: "1:760677444428:web:a419f39fd2dc273cbbfde9",
+};
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig)
-export const auth = getAuth(app)
-export const googleProvider = new GoogleAuthProvider()
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();

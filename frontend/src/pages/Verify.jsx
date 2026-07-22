@@ -4,7 +4,6 @@ import { motion } from 'framer-motion'
 import { FiMail, FiCheckCircle, FiLoader } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
-import { authAPI } from '../api/endpoints'
 import { auth } from '../config/firebase'
 import { sendEmailVerification } from 'firebase/auth'
 
@@ -41,13 +40,9 @@ export default function Verify() {
     
     setChecking(true)
     try {
-      await auth.currentUser.reload() // Refresh Firebase user state
+      await auth.currentUser.reload()
       if (auth.currentUser.emailVerified) {
-        toast.success("Email verified successfully!")
-        
-        // The prompt asked to redirect to login if verified
-        toast.success("Email verified successfully! Please log in.")
-        // Optionally logout so they have to login again, but I'll just redirect to login
+        toast.success("Email verified! Redirecting to login…")
         navigate('/auth/login', { replace: true })
       } else {
         toast.error("Email not verified yet. Please check your inbox.")
