@@ -27,13 +27,18 @@ export default function Signup() {
     setLoading(true)
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+      console.log(`[Signup] Successfully created Firebase user with UID: ${userCredential.user.uid}`)
       
       // Send Verification Email
+      console.log(`[Signup] Attempting to send verification email to: ${userCredential.user.email}`)
       await sendEmailVerification(userCredential.user)
+      console.log('[Signup] Verification email sent successfully!')
+      
       toast.success("Verification email sent. Please verify your email before logging in.")
 
       navigate('/verify')
     } catch (error) {
+      console.error('[Signup] Error during signup flow:', error)
       toast.error(error.message || "Failed to create account")
     } finally {
       setLoading(false)
