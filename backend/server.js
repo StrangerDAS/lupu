@@ -9,7 +9,6 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
-import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
 import Razorpay from 'razorpay'
 import path from 'path'
@@ -29,12 +28,19 @@ import SOS from './models/SOS.js'
 import { seedDatabase } from './seed.js'
 import { attachVehicleAvailability, checkOverlap } from './utils/availability.js'
 import { kycUpload, vehicleUpload } from './middleware/uploadMiddleware.js'
-import { sendOTPEmail } from './utils/emailService.js'
-import { sendSMSOTP } from './utils/smsService.js'
-
 import { logger } from './utils/logger.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { rateLimiter } from './middleware/rateLimiter.js'
+import { verifyFirebaseToken, requireMongoUser } from './middleware/authMiddleware.js'
+
+// Role-based authorization helper
+function authorize(...roles) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized' })
+    if (!roles.includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+    next()
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -48,12 +54,6 @@ app.use('/api/payment', paymentRoutes)
 
 const PORT = process.env.PORT || 5001
 
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  console.error('❌ FATAL: JWT_SECRET environment variable is missing in production mode!')
-  process.exit(1)
-}
-
-const JWT_SECRET = process.env.JWT_SECRET || 'lupu-dev-fallback-secret'
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lupu'
 
 let razorpay = null
@@ -1424,7 +1424,7 @@ app.post('/api/payments/:id/refund', verifyFirebaseToken, requireMongoUser, asyn
   }
 })
 
-app.get('/api/payments/history', authMiddleware, async (req, res, next) => {
+app.get('/api/payments/history', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
     if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
@@ -1444,7 +1444,7 @@ app.get('/api/payments/history', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.get('/api/payments/:id/invoice', authMiddleware, async (req, res, next) => {
+app.get('/api/payments/:id/invoice', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const payment = await Payment.findById(req.params.id)
     if (!payment) {
@@ -1640,7 +1640,7 @@ setInterval(async () => {
   }
 }, 60000)
 
-app.get('/api/notifications', authMiddleware, async (req, res, next) => {
+app.get('/api/notifications', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const notifications = await Notification.find({ userId: req.user._id })
       .sort({ createdAt: -1 })
@@ -1651,7 +1651,7 @@ app.get('/api/notifications', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.patch('/api/notifications/:id/read', authMiddleware, async (req, res, next) => {
+app.patch('/api/notifications/:id/read', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Notification not found' })
@@ -1668,7 +1668,7 @@ app.patch('/api/notifications/:id/read', authMiddleware, async (req, res, next) 
   }
 })
 
-app.post('/api/notifications/read-all', authMiddleware, async (req, res, next) => {
+app.post('/api/notifications/read-all', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     await Notification.updateMany({ userId: req.user._id, read: false }, { read: true })
     res.json({ success: true, message: 'All notifications marked as read' })
@@ -1677,7 +1677,7 @@ app.post('/api/notifications/read-all', authMiddleware, async (req, res, next) =
   }
 })
 
-app.get('/api/emails/simulated', authMiddleware, async (req, res, next) => {
+app.get('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
     if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
@@ -1690,7 +1690,7 @@ app.get('/api/emails/simulated', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.delete('/api/emails/simulated', authMiddleware, async (req, res, next) => {
+app.delete('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
     if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
@@ -1705,7 +1705,7 @@ app.delete('/api/emails/simulated', authMiddleware, async (req, res, next) => {
 
 // ── Review System REST Endpoints ───────────────────────────
 
-app.post('/api/reviews', authMiddleware, async (req, res, next) => {
+app.post('/api/reviews', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   const { bookingId, rating, comment, reviewType } = req.body
   if (!bookingId || !rating || !reviewType) {
     return res.status(400).json({ message: 'bookingId, rating, and reviewType are required' })
@@ -1816,7 +1816,7 @@ app.get('/api/reviews/user/:userId', async (req, res, next) => {
   }
 })
 
-app.get('/api/reviews/eligible/:bookingId', authMiddleware, async (req, res, next) => {
+app.get('/api/reviews/eligible/:bookingId', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const reviews = await Review.find({
       bookingId: req.params.bookingId,
@@ -1837,7 +1837,7 @@ app.get('/api/reviews/eligible/:bookingId', authMiddleware, async (req, res, nex
 
 // ── Trust & Safety Endpoints ───────────────────────────────
 
-app.post('/api/safety/report', authMiddleware, async (req, res, next) => {
+app.post('/api/safety/report', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { targetType, targetId, reason, description } = req.body
     if (!['user', 'vehicle'].includes(targetType) || !targetId || !reason) {
@@ -1856,7 +1856,7 @@ app.post('/api/safety/report', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.post('/api/safety/dispute', authMiddleware, async (req, res, next) => {
+app.post('/api/safety/dispute', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { bookingId, reason, description } = req.body
     if (!bookingId || !reason) {
@@ -1874,7 +1874,7 @@ app.post('/api/safety/dispute', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.post('/api/safety/sos', authMiddleware, async (req, res, next) => {
+app.post('/api/safety/sos', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { bookingId, location } = req.body
     if (!bookingId) {
@@ -1893,7 +1893,7 @@ app.post('/api/safety/sos', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.put('/api/users/emergency-contacts', authMiddleware, async (req, res, next) => {
+app.put('/api/users/emergency-contacts', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { emergencyContacts } = req.body
     const user = await User.findByIdAndUpdate(
@@ -1909,7 +1909,7 @@ app.put('/api/users/emergency-contacts', authMiddleware, async (req, res, next) 
 
 // ── Admin Safety API ────────────────────────────────────────
 
-app.patch('/api/admin/users/:id/suspend', authMiddleware, async (req, res, next) => {
+app.patch('/api/admin/users/:id/suspend', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
   try {
     const { isSuspended } = req.body
@@ -1920,7 +1920,7 @@ app.patch('/api/admin/users/:id/suspend', authMiddleware, async (req, res, next)
   }
 })
 
-app.patch('/api/admin/users/:id/fraud', authMiddleware, async (req, res, next) => {
+app.patch('/api/admin/users/:id/fraud', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
   try {
     const { fraudScore } = req.body
@@ -1931,7 +1931,7 @@ app.patch('/api/admin/users/:id/fraud', authMiddleware, async (req, res, next) =
   }
 })
 
-app.get('/api/admin/safety/reports', authMiddleware, async (req, res, next) => {
+app.get('/api/admin/safety/reports', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
   try {
     const reports = await Report.find().sort({ createdAt: -1 }).populate('reporterId', 'name email').lean()
@@ -1941,7 +1941,7 @@ app.get('/api/admin/safety/reports', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.get('/api/admin/safety/disputes', authMiddleware, async (req, res, next) => {
+app.get('/api/admin/safety/disputes', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
   try {
     const disputes = await Dispute.find().sort({ createdAt: -1 }).populate('raisedBy', 'name email').lean()
@@ -1951,7 +1951,7 @@ app.get('/api/admin/safety/disputes', authMiddleware, async (req, res, next) => 
   }
 })
 
-app.get('/api/admin/safety/sos', authMiddleware, async (req, res, next) => {
+app.get('/api/admin/safety/sos', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
   try {
     const sosList = await SOS.find().sort({ createdAt: -1 }).populate('userId', 'name email phone').lean()
