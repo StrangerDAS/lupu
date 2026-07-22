@@ -16,9 +16,9 @@ export async function seedDatabase() {
 
     // Seed users (1 Admin, 1 Owner, 1 Renter)
     const [admin, owner, renter] = await User.insertMany([
-      { name: 'Admin User', email: 'admin@lupu.in', phone: '9876543210', role: 'admin', isRider: true, isOwner: true, otpVerified: true, kycStatus: 'verified' },
-      { name: 'Owner User', email: 'owner@lupu.in', phone: '9876543211', role: 'owner', isRider: true, isOwner: true, otpVerified: true, kycStatus: 'verified' },
-      { name: 'Renter User', email: 'renter@lupu.in', phone: '9876543212', role: 'user', isRider: true, isOwner: false, otpVerified: true, kycStatus: 'verified' },
+      { name: 'Admin User', email: 'admin@lupu.in', phone: '9876543210', role: 'admin', isRider: true, isOwner: true, kycStatus: 'verified' },
+      { name: 'Owner User', email: 'owner@lupu.in', phone: '9876543211', role: 'owner', isRider: true, isOwner: true, kycStatus: 'verified' },
+      { name: 'Renter User', email: 'renter@lupu.in', phone: '9876543212', role: 'user', isRider: true, isOwner: false, kycStatus: 'verified' },
     ])
 
     // Seed vehicles

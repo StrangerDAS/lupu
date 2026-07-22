@@ -98,63 +98,7 @@ app.use((req, _res, next) => {
   next()
 })
 
-// ── OTP Store (in-memory, expires after 5 min) ────────────
-// Acceptable for Phase 1.1 — Phase 1.2 can move this to Redis
-const otpStore = new Map()
-const OTP_EXPIRY_MS = 5 * 60 * 1000
-const MAX_OTP_ATTEMPTS = 5
-
-function generateOTP() {
-  return String(Math.floor(100000 + Math.random() * 900000))
-}
-
-function storeOTP(key, code) {
-  otpStore.set(key, { code, expiresAt: Date.now() + OTP_EXPIRY_MS, attempts: 0 })
-}
-
-function verifyOTP(key, code) {
-  const entry = otpStore.get(key)
-  if (!entry) return { valid: false, message: 'OTP not found. Please request a new one.' }
-  if (Date.now() > entry.expiresAt) {
-    otpStore.delete(key)
-    return { valid: false, message: 'OTP expired. Please request a new one.' }
-  }
-  entry.attempts++
-  if (entry.attempts > MAX_OTP_ATTEMPTS) {
-    otpStore.delete(key)
-    return { valid: false, message: 'Too many attempts. Please request a new OTP.' }
-  }
-  if (entry.code !== code) {
-    return { valid: false, message: 'Incorrect OTP. Please try again.' }
-  }
-  otpStore.delete(key)
-  return { valid: true }
-}
-
 // ── Auth Helpers ───────────────────────────────────────────
-function generateToken(user) {
-  return jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  })
-}
-
-async function authMiddleware(req, res, next) {
-  const header = req.headers.authorization
-  if (!header || !header.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Unauthorized' })
-  }
-  try {
-    const decoded = jwt.verify(header.split(' ')[1], JWT_SECRET)
-    const user = await User.findById(decoded.id).lean()
-    if (!user) return res.status(401).json({ message: 'User not found' })
-    if (user.isSuspended) return res.status(403).json({ message: 'Account suspended. Please contact support.' })
-    req.user = user
-    next()
-  } catch {
-    return res.status(401).json({ message: 'Invalid or expired token' })
-  }
-}
-
 function safeUser(u) {
   // eslint-disable-next-line no-unused-vars
   const { password, __v, ...rest } = u
@@ -168,133 +112,71 @@ function kycPlaceholder(_req, _res, next) {
 
 // ── Auth Routes ────────────────────────────────────────────
 
-app.post('/api/auth/send-otp', rateLimiter({ windowMs: 60000, max: 3, message: 'Too many OTP requests. Please wait 60 seconds.' }), async (req, res, next) => {
+// 1. Firebase Login / Sync Route
+// The frontend calls this AFTER successful Firebase authentication
+app.post('/api/auth/login', verifyFirebaseToken, async (req, res, next) => {
   try {
-    const { identifier } = req.body
-    if (!identifier || !identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
+    const firebaseUser = req.firebaseUser // Set by middleware
+    const { name, role } = req.body
 
-    const existing = otpStore.get(identifier)
-    if (existing && existing.expiresAt - OTP_EXPIRY_MS + 60000 > Date.now()) {
-      return res.status(429).json({ message: 'OTP already sent. Please wait 60 seconds.' })
-    }
+    // The user might already exist (we checked in middleware, req.user might be set)
+    let user = req.user
 
-    const code = generateOTP()
-    
-    // Check if identifier is an email
-    try {
-      await sendOTPEmail(identifier, code)
-    } catch (emailError) {
-      // Return 500 error, don't store OTP if it failed to send
-      return res.status(500).json({ message: 'Failed to send OTP email. Please try again later.' })
-    }
-    /* 
-    // FUTURE SMS INTEGRATION:
-    else {
-      try {
-        await sendSMSOTP(identifier, code)
-      } catch (smsError) {
-        return res.status(500).json({ message: smsError.message || 'Failed to send OTP SMS. Please try again later.' })
+    if (!user) {
+      // First time login - create the user profile in MongoDB
+      user = new User({
+        firebaseUid: firebaseUser.uid,
+        email: firebaseUser.email,
+        name: name || firebaseUser.name || 'LUPU User',
+        role: role || 'user',
+        isRider: true,
+        isOwner: role === 'owner',
+        emailVerified: firebaseUser.email_verified,
+        phone: firebaseUser.phone_number || '',
+        lastLogin: new Date()
+      })
+      await user.save()
+    } else {
+      // Sync email verification status, firebaseUid, and lastLogin
+      user.firebaseUid = firebaseUser.uid
+      user.lastLogin = new Date()
+      if (firebaseUser.email_verified && !user.emailVerified) {
+        user.emailVerified = true
       }
+      await user.save()
     }
-    */
-    
-    // Only store OTP if email/SMS succeeded
-    storeOTP(identifier, code)
-    
-    const response = { message: 'OTP sent successfully' }
-    res.json(response)
-  } catch (err) {
-    next(err)
-  }
-})
 
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { identifier, otp, name, role = 'user' } = req.body
-    if (!name || !identifier || !otp) {
-      return res.status(400).json({ message: 'Name, email, and OTP are required' })
-    }
-    if (!identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
-
-    const query = { email: identifier }
-    const exists = await User.findOne(query)
-    if (exists) return res.status(409).json({ message: 'Account already exists. Please log in.' })
-
-    const result = verifyOTP(identifier, otp)
-    if (!result.valid) return res.status(400).json({ message: result.message })
-
-    const newUser = await User.create({
-      name,
-      email: identifier,
-      role: ['user', 'owner'].includes(role) ? role : 'user',
-      isRider: true,
-      isOwner: role === 'owner',
-      otpVerified: true,
+    // Return the MongoDB user profile
+    res.json({
+      message: 'Login successful',
+      user: safeUser(user.toObject())
     })
-
-    const token = generateToken(newUser)
-    res.status(201).json({ user: safeUser(newUser.toObject()), token })
-  } catch (err) {
-    console.error('signup error:', err)
-    if (err.code === 11000) {
-      return res.status(409).json({ message: 'Account already exists. Please log in.' })
-    }
-    res.status(500).json({ message: 'Internal server error' })
-  }
-})
-
-app.post('/api/auth/login', rateLimiter({ windowMs: 60000, max: 5, message: 'Too many login attempts. Please try again later.' }), async (req, res, next) => {
-  try {
-    const { identifier, otp } = req.body
-    if (!identifier || !otp) {
-      return res.status(400).json({ message: 'Email and OTP are required' })
-    }
-    if (!identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
-
-    const query = { email: identifier }
-    const user = await User.findOne(query)
-    if (!user) return res.status(404).json({ message: 'User not found. Please sign up.' })
-
-    const result = verifyOTP(identifier, otp)
-    if (!result.valid) return res.status(400).json({ message: result.message })
-
-    await User.findByIdAndUpdate(user._id, { otpVerified: true })
-    const updatedUser = await User.findById(user._id).lean()
-
-    const token = generateToken(updatedUser)
-    res.json({ user: safeUser(updatedUser), token })
   } catch (err) {
     next(err)
   }
 })
 
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-  res.json(safeUser(req.user))
+// 2. Auth ME route (validate session)
+app.get('/api/auth/me', verifyFirebaseToken, requireMongoUser, (req, res) => {
+  res.json({ user: safeUser(req.user.toObject()) })
 })
 
-app.post('/api/auth/verify-contact', authMiddleware, async (req, res) => {
+// 3. Update Profile route
+app.put('/api/auth/profile', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const { identifier, otp } = req.body
-    if (!identifier || !otp) return res.status(400).json({ message: 'Identifier and OTP required' })
-    if (!identifier.includes('@')) return res.status(400).json({ message: 'Valid email required' })
-
-    // Use verifyOTP() to enforce attempt counting and expiry correctly
-    const result = verifyOTP(identifier, otp)
-    if (!result.valid) return res.status(400).json({ message: result.message })
-
-    const updates = { emailVerified: true }
-    
-    const updatedUser = await User.findByIdAndUpdate(req.user._id, updates, { new: true, lean: true })
-    res.json({ message: 'Contact verified successfully', user: safeUser(updatedUser) })
+    const { name, phone } = req.body
+    if (name) req.user.name = name
+    if (phone) req.user.phone = phone
+    await req.user.save()
+    res.json({ user: safeUser(req.user.toObject()) })
   } catch (err) {
-    console.error('Verify contact error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
 // ── Role Activation Routes ────────────────────────────────
 
-app.post('/api/user/activate-owner', authMiddleware, async (req, res) => {
+app.post('/api/user/activate-owner', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   try {
     const updated = await User.findByIdAndUpdate(
       req.user._id,
@@ -308,7 +190,7 @@ app.post('/api/user/activate-owner', authMiddleware, async (req, res) => {
   }
 })
 
-app.post('/api/user/activate-rider', authMiddleware, async (req, res) => {
+app.post('/api/user/activate-rider', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   try {
     const updated = await User.findByIdAndUpdate(
       req.user._id,
@@ -367,11 +249,8 @@ app.get('/api/items/:id', async (req, res) => {
   }
 })
 
-app.post('/api/items', authMiddleware, kycPlaceholder, async (req, res) => {
+app.post('/api/items', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin'), kycPlaceholder, async (req, res, next) => {
   try {
-    if (!req.user.isOwner) {
-      return res.status(403).json({ message: 'Activate owner role first.' })
-    }
     const { name, type, pricePerDay, description, location } = req.body
     if (type === 'accessory') {
       const item = await Accessory.create({
@@ -389,8 +268,7 @@ app.post('/api/items', authMiddleware, kycPlaceholder, async (req, res) => {
     }
     res.status(400).json({ message: 'Use /api/vehicles for vehicle listings.' })
   } catch (err) {
-    console.error('POST /api/items error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
@@ -428,7 +306,7 @@ app.get('/api/vehicles', async (req, res) => {
   }
 })
 
-app.get('/api/vehicles/my', authMiddleware, async (req, res) => {
+app.get('/api/vehicles/my', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   try {
     const vehicles = await Vehicle.find({ ownerId: req.user._id }).lean()
     res.json({ vehicles })
@@ -474,12 +352,8 @@ app.get('/api/vehicles/:id', async (req, res) => {
   }
 })
 
-app.post('/api/vehicles', authMiddleware, kycPlaceholder, vehicleUpload, async (req, res) => {
+app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin'), kycPlaceholder, vehicleUpload, async (req, res) => {
   try {
-    if (!req.user.isOwner) {
-      return res.status(403).json({ message: 'Activate owner role first.' })
-    }
-
     const {
       name, brand, model, type, pricePerHour, pricePerDay, securityDeposit,
       location, description, year, fuel, transmission, helmetAvailable,
@@ -556,7 +430,7 @@ app.post('/api/vehicles', authMiddleware, kycPlaceholder, vehicleUpload, async (
   }
 })
 
-app.put('/api/vehicles/:id', authMiddleware, vehicleUpload, async (req, res) => {
+app.put('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin'), vehicleUpload, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
@@ -660,15 +534,11 @@ app.put('/api/vehicles/:id', authMiddleware, vehicleUpload, async (req, res) => 
     )
     res.json(updated.toObject())
   } catch (err) {
-    console.error('PUT /api/vehicles/:id error:', err)
-    if (err.code === 11000) {
-      return res.status(409).json({ message: 'Vehicle registration number already registered' })
-    }
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
-app.patch('/api/vehicles/:id/toggle-status', authMiddleware, async (req, res) => {
+app.patch('/api/vehicles/:id/toggle-status', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
@@ -696,7 +566,7 @@ app.patch('/api/vehicles/:id/toggle-status', authMiddleware, async (req, res) =>
   }
 })
 
-app.delete('/api/vehicles/:id', authMiddleware, async (req, res) => {
+app.delete('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
@@ -736,7 +606,7 @@ app.get('/api/vehicles/:id/calendar', async (req, res, next) => {
   }
 })
 
-app.post('/api/bookings', authMiddleware, async (req, res, next) => {
+app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder, async (req, res, next) => {
   try {
     const { startTime, endTime, agreementAccepted, agreementVersion, agreementAcceptedAt, vehicleId, verificationDetails } = req.body
 
@@ -858,7 +728,7 @@ app.post('/api/bookings', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.get('/api/bookings/my', authMiddleware, async (req, res, next) => {
+app.get('/api/bookings/my', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const bookings = await Booking.find({ renterId: req.user._id })
       .sort({ createdAt: -1 })
@@ -869,7 +739,7 @@ app.get('/api/bookings/my', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.get('/api/bookings', authMiddleware, async (req, res, next) => {
+app.get('/api/bookings', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
     if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
@@ -890,7 +760,7 @@ app.get('/api/bookings', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.get('/api/bookings/:id', authMiddleware, async (req, res, next) => {
+app.get('/api/bookings/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Booking not found' })
@@ -912,7 +782,7 @@ app.get('/api/bookings/:id', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.put('/api/bookings/:id', authMiddleware, async (req, res, next) => {
+app.put('/api/bookings/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Booking not found' })
@@ -952,7 +822,7 @@ app.put('/api/bookings/:id', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.patch('/api/bookings/:id/status', authMiddleware, async (req, res, next) => {
+app.patch('/api/bookings/:id/status', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { status } = req.body
     const allowed = [
@@ -1054,7 +924,7 @@ app.patch('/api/bookings/:id/status', authMiddleware, async (req, res, next) => 
   }
 })
 
-app.patch('/api/bookings/:id/cancel', authMiddleware, async (req, res, next) => {
+app.patch('/api/bookings/:id/cancel', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Booking not found' })
@@ -1080,11 +950,11 @@ app.patch('/api/bookings/:id/cancel', authMiddleware, async (req, res, next) => 
 
 // ── User Routes ────────────────────────────────────────────
 
-app.get('/api/users/profile', authMiddleware, (req, res) => {
-  res.json(safeUser(req.user))
+app.get('/api/users/profile', verifyFirebaseToken, requireMongoUser, (req, res) => {
+  res.json(safeUser(req.user.toObject()))
 })
 
-app.put('/api/users/profile', authMiddleware, async (req, res) => {
+app.put('/api/users/profile', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   try {
     const { name, email, phone, avatar, college, address, notificationPreferences } = req.body
     const updates = {}
@@ -1111,7 +981,7 @@ app.put('/api/users/profile', authMiddleware, async (req, res) => {
   }
 })
 
-app.post('/api/users/kyc', authMiddleware, kycUpload, async (req, res) => {
+app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, kycUpload, async (req, res) => {
   try {
     const govFile = req.files?.['governmentIdUrl']?.[0]
     const collegeFile = req.files?.['collegeIdUrl']?.[0]
@@ -1145,20 +1015,17 @@ app.post('/api/users/kyc', authMiddleware, kycUpload, async (req, res) => {
   }
 })
 
-app.get('/api/users', authMiddleware, async (req, res) => {
+app.get('/api/users', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
-    const users = await User.find().lean()
-    res.json({ users: users.map(safeUser) })
+    const users = await User.find({}, '-password').sort({ createdAt: -1 })
+    res.json(users)
   } catch (err) {
-    console.error('GET /api/users error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    next(err)
   }
 })
 
-app.patch('/api/users/:id/role', authMiddleware, async (req, res) => {
+app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
     }
@@ -1175,9 +1042,8 @@ app.patch('/api/users/:id/role', authMiddleware, async (req, res) => {
   }
 })
 
-app.delete('/api/users/:id', authMiddleware, async (req, res) => {
+app.delete('/api/users/:id', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
     }
@@ -1190,9 +1056,8 @@ app.delete('/api/users/:id', authMiddleware, async (req, res) => {
   }
 })
 
-app.patch('/api/admin/users/:id/kyc', authMiddleware, async (req, res) => {
+app.patch('/api/admin/users/:id/kyc', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const { status, reason } = req.body
     if (!['verified', 'rejected'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' })
@@ -1212,9 +1077,8 @@ app.patch('/api/admin/users/:id/kyc', authMiddleware, async (req, res) => {
 
 // ── Admin Routes ───────────────────────────────────────────
 
-app.get('/api/admin/stats', authMiddleware, async (req, res) => {
+app.get('/api/admin/stats', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const [totalUsers, totalVehicles, totalBookings, pendingListings] = await Promise.all([
       User.countDocuments(),
       Vehicle.countDocuments({ verificationStatus: 'approved' }),
@@ -1228,9 +1092,8 @@ app.get('/api/admin/stats', authMiddleware, async (req, res) => {
   }
 })
 
-app.get('/api/admin/vehicles/pending', authMiddleware, async (req, res) => {
+app.get('/api/admin/vehicles/pending', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const vehicles = await Vehicle.find({
       verificationStatus: { $in: ['submitted', 'under_review'] }
     }).lean()
@@ -1241,9 +1104,8 @@ app.get('/api/admin/vehicles/pending', authMiddleware, async (req, res) => {
   }
 })
 
-app.get('/api/admin/vehicles', authMiddleware, async (req, res) => {
+app.get('/api/admin/vehicles', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     const vehicles = await Vehicle.find().lean()
     res.json({ vehicles })
   } catch (err) {
@@ -1252,9 +1114,8 @@ app.get('/api/admin/vehicles', authMiddleware, async (req, res) => {
   }
 })
 
-app.patch('/api/admin/vehicles/:id/approve', authMiddleware, async (req, res) => {
+app.patch('/api/admin/vehicles/:id/approve', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
@@ -1280,9 +1141,8 @@ app.patch('/api/admin/vehicles/:id/approve', authMiddleware, async (req, res) =>
   }
 })
 
-app.patch('/api/admin/vehicles/:id/reject', authMiddleware, async (req, res) => {
+app.patch('/api/admin/vehicles/:id/reject', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
@@ -1309,9 +1169,8 @@ app.patch('/api/admin/vehicles/:id/reject', authMiddleware, async (req, res) => 
   }
 })
 
-app.patch('/api/admin/vehicles/:id/request-changes', authMiddleware, async (req, res) => {
+app.patch('/api/admin/vehicles/:id/request-changes', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
     }
@@ -1343,7 +1202,7 @@ app.patch('/api/admin/vehicles/:id/request-changes', authMiddleware, async (req,
 
 import crypto from 'crypto'
 
-app.post('/api/payments/create-order', authMiddleware, async (req, res, next) => {
+app.post('/api/payments/create-order', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   const { bookingId, type } = req.body
   if (!bookingId || !type) {
     return res.status(400).json({ message: 'bookingId and type (advance or final) are required' })
@@ -1405,7 +1264,7 @@ app.post('/api/payments/create-order', authMiddleware, async (req, res, next) =>
   }
 })
 
-app.post('/api/payments/verify', authMiddleware, async (req, res, next) => {
+app.post('/api/payments/verify', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   const { bookingId, type, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body
   
   if (!bookingId || !type || !razorpayOrderId || !razorpayPaymentId) {
@@ -1517,7 +1376,7 @@ app.post('/api/payments/verify', authMiddleware, async (req, res, next) => {
   }
 })
 
-app.post('/api/payments/:id/refund', authMiddleware, async (req, res, next) => {
+app.post('/api/payments/:id/refund', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const payment = await Payment.findById(req.params.id)
     if (!payment) {

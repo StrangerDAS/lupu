@@ -20,6 +20,15 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+    firebaseUid: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    lastLogin: {
+      type: Date,
+      default: Date.now,
+    },
     phone: {
       type: String,
       unique: true,
@@ -36,10 +45,6 @@ const userSchema = new mongoose.Schema(
       default: true,
     },
     isOwner: {
-      type: Boolean,
-      default: false,
-    },
-    otpVerified: {
       type: Boolean,
       default: false,
     },
