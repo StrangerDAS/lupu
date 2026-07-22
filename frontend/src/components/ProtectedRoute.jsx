@@ -18,7 +18,7 @@ import PageLoader from './PageLoader'
  *   - After logout: authReady=true, token=null → redirect to login immediately.
  */
 export default function ProtectedRoute({ requireOwner = false, allowedRoles, children }) {
-  const { user, token, authReady, isAdmin } = useAuthStore()
+  const { user, authReady, isAdmin } = useAuthStore()
   const location = useLocation()
 
   // Wait for first auth resolution (only on fresh install with no cached session)
@@ -27,7 +27,7 @@ export default function ProtectedRoute({ requireOwner = false, allowedRoles, chi
   }
 
   // Not authenticated
-  if (!token || !user) {
+  if (!user) {
     return <Navigate to="/auth/login" state={{ from: location }} replace />
   }
 

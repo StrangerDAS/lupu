@@ -93,7 +93,7 @@ const useAuthStore = create(
           firebaseUser:  null,
           permissions:   [],
           accountStatus: null,
-          // Keep authReady = true — auth has resolved, answer is "no user"
+          authReady:     true, // Auth resolved — answer is "no user"
         })
 
         localStorage.removeItem(STORAGE_KEY)
