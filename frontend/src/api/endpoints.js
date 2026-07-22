@@ -3,10 +3,7 @@ import api from './axiosInstance'
 /* ── Auth ───────────────────────────────────────────────── */
 export const authAPI = {
   login: (data) => api.post('/auth/login', data),
-  signup: (data) => api.post('/auth/signup', data),
   me: () => api.get('/auth/me'),
-  sendOtp: (data) => api.post('/auth/send-otp', data),
-  verifyContact: (data) => api.post('/auth/verify-contact', data),
 }
 
 /* ── Vehicles ───────────────────────────────────────────── */

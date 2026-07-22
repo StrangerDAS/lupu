@@ -17,6 +17,8 @@ import { authAPI } from './api/endpoints'
 import useAuthStore from './store/authStore'
 import { ADMIN_ROLES } from './lib/roleUtils'
 import SOSButton from './components/SOSButton'
+import { auth } from './config/firebase'
+import { onAuthStateChanged } from 'firebase/auth'
 
 // ── Lazy-loaded pages ──────────────────────────────────────────────────────────
 const Home              = lazy(() => import('./pages/Home'))
@@ -37,6 +39,7 @@ const NotFound          = lazy(() => import('./pages/NotFound'))
 const About             = lazy(() => import('./pages/About'))
 const Handover          = lazy(() => import('./pages/Handover'))
 const LegalCenter       = lazy(() => import('./pages/LegalCenter'))
+const ForgotPassword  = lazy(() => import('./pages/ForgotPassword'))
 const PrivacyPolicy     = lazy(() => import('./pages/PrivacyPolicy'))
 const TermsOfService    = lazy(() => import('./pages/TermsOfService'))
 const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'))
@@ -58,28 +61,22 @@ export default function App() {
   const navigateRef = useRef(navigate)
   useEffect(() => { navigateRef.current = navigate }, [navigate])
 
-  /**
-   * tokenRefreshRef — tracks the setInterval id for the token refresh loop
-   * so we can clear it on both normal unmount and StrictMode double-invoke.
-   */
-  const tokenRefreshRef = useRef(null)
-
   useEffect(() => {
-    console.log('%c[Auth] 🔄 Initializing Auth verification', 'color:#6ee7b7;font-weight:bold')
+    console.log('%c[Auth] 🔄 Initializing Firebase Auth listener', 'color:#6ee7b7;font-weight:bold')
 
-    const verifySession = async () => {
-      const { token, setAuth, logout } = useAuthStore.getState()
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const { setAuth, logout } = useAuthStore.getState()
       
-      if (!token) {
-        console.log('[Auth] 🔴 No token found in store (signed out or not yet logged in)')
-        setAuth(null, null)
+      if (!firebaseUser) {
+        console.log('[Auth] 🔴 No Firebase user found (signed out)')
+        logout()
         return
       }
 
       try {
-        console.log('[Auth] 🔍 Verifying token with backend...')
+        console.log('[Auth] 🔍 Verifying session with backend...')
         const response = await authAPI.me()
-        const userObj = response.data
+        const userObj = response.data.user || response.data // Handle nested or flat response
 
         // Normalize roles and permissions
         userObj.role = userObj.role || 'user'
@@ -95,7 +92,7 @@ export default function App() {
         }
 
         console.log('[Auth] ✅ Session verified, user loaded:', { uid: userObj._id, role: userObj.role })
-        setAuth(userObj, token)
+        setAuth(userObj, firebaseUser)
         
         // Post-login redirect logic
         const currentPath = window.location.pathname
@@ -104,20 +101,21 @@ export default function App() {
         if (isOnAuthPage) {
           if (ADMIN_ROLES.includes(userObj.role)) {
             navigateRef.current('/admin', { replace: true })
-          } else if (userObj.email && !userObj.emailVerified && !userObj.otpVerified) {
+          } else if (userObj.email && !userObj.emailVerified) {
             navigateRef.current('/verify', { replace: true })
           } else {
             navigateRef.current('/hub', { replace: true })
           }
         }
       } catch (err) {
-        console.error('[Auth] ❌ Session verification failed (token expired/invalid). Logging out.', err)
+        console.error('[Auth] ❌ Session verification failed (backend error). Logging out.', err)
         logout()
       }
-    }
+    })
 
-    verifySession()
-  }, []) // Intentionally run once
+    return () => unsubscribe()
+  }, []) // Run once
+
 
   return (
     <Suspense fallback={<PageLoader />}>
@@ -175,8 +173,9 @@ export default function App() {
 
           {/* ── Auth pages (redirect out if already logged in) ───── */}
           <Route element={<AuthLayout />}>
-            <Route path="/auth/login"  element={<Login />} />
+            <Route path="/auth/login" element={<Login />} />
             <Route path="/auth/signup" element={<Signup />} />
+            <Route path="/auth/forgot-password" element={<ForgotPassword />} />
           </Route>
 
           {/* Catch-all */}

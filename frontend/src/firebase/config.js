@@ -9,7 +9,7 @@ import { getStorage } from "firebase/storage";
  * No hardcoded fallback values — the app will fail to start if env vars are missing
  * rather than silently exposing credentials in the JS bundle.
  *
- * Firebase Auth is NOT used — LUPU uses OTP → JWT via the Express backend.
+ * Firebase Auth is used for user authentication.
  * Firebase Firestore: used for real-time features (notifications, reviews, etc.)
  * Firebase Storage: used for user file uploads (avatars, KYC docs, vehicle photos)
  *
@@ -46,5 +46,4 @@ export const db = getFirestore(app);
 // Storage — user file uploads
 export const storage = getStorage(app);
 
-// NOTE: Firebase Auth is intentionally NOT exported.
-// Authentication is handled by OTP → JWT via the Express backend.
+// NOTE: Auth logic is in src/firebase.js

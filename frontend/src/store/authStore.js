@@ -33,7 +33,7 @@ const useAuthStore = create(
     (set, get) => ({
       // ── Persisted state ─────────────────────────────────────────────────
       user:          null,   // User object from Express API
-      token:         null,   // JWT token from Express backend
+      firebaseUser:  null,   // Firebase user object
       authReady:     false,  // Has auth been resolved at least once?
       permissions:   [],     // Explicit permission strings
       accountStatus: null,   // 'active' | 'suspended' | 'banned'
@@ -44,7 +44,7 @@ const useAuthStore = create(
        * setAuth — called exclusively by App.jsx's session verification.
        * This is the ONLY way user + token enter the store.
        */
-      setAuth: (user, token) => {
+      setAuth: (user, firebaseUser) => {
         if (import.meta.env.DEV) {
           const msg = user
             ? `[AuthStore] ✅ setAuth → uid=${user._id} | role=${user.role}`
@@ -54,7 +54,7 @@ const useAuthStore = create(
 
         set({
           user,
-          token,
+          firebaseUser,
           authReady:     true,
           permissions:   user?.permissions   ?? [],
           accountStatus: user?.status        ?? null,
@@ -90,7 +90,7 @@ const useAuthStore = create(
 
         set({
           user:          null,
-          token:         null,
+          firebaseUser:  null,
           permissions:   [],
           accountStatus: null,
           // Keep authReady = true — auth has resolved, answer is "no user"
@@ -107,8 +107,8 @@ const useAuthStore = create(
       // All delegate to roleUtils — no role logic lives here directly.
 
       isAuthenticated: () => {
-        const { token, user } = get()
-        return !!(token && user)
+        const { user } = get()
+        return !!user
       },
 
       isFounder:    () => _isFounder(get().user),
@@ -132,7 +132,7 @@ const useAuthStore = create(
       name: STORAGE_KEY,
       partialize: (state) => ({
         user:          state.user,
-        token:         state.token,
+        firebaseUser:  state.firebaseUser,
         authReady:     state.authReady,
         permissions:   state.permissions,
         accountStatus: state.accountStatus,

@@ -1,218 +1,106 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiUser, FiCheckCircle, FiPhone, FiMail, FiShield, FiAlertCircle, FiRefreshCw, FiLock } from 'react-icons/fi'
+import { FiMail, FiCheckCircle, FiLoader } from 'react-icons/fi'
 import toast from 'react-hot-toast'
-import PageWrapper from '../components/PageWrapper'
 import useAuthStore from '../store/authStore'
-import { authAPI, userAPI } from '../api/endpoints'
+import { authAPI } from '../api/endpoints'
+import { auth } from '../config/firebase'
+import { sendEmailVerification } from 'firebase/auth'
 
 export default function Verify() {
-  const { user, setAuth, token } = useAuthStore()
-  const [emailToVerify, setEmailToVerify] = useState(user?.email || '')
+  const navigate = useNavigate()
+  const { user, setAuth } = useAuthStore()
   
-  const [otpEmail, setOtpEmail] = useState('')
-  
-  const [emailOtpSent, setEmailOtpSent] = useState(false)
-  
-  const [loadingEmail, setLoadingEmail] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [checking, setChecking] = useState(false)
 
-  const handleReload = async () => {
+  // Redirect if already verified
+  useEffect(() => {
+    if (user?.emailVerified) {
+      navigate('/explore', { replace: true })
+    }
+  }, [user, navigate])
+
+  const handleResendVerification = async () => {
+    if (!auth.currentUser) return toast.error("You must be logged in to verify your email.")
+    
+    setLoading(true)
     try {
-      const { data } = await authAPI.me()
-      setAuth(data, token)
-      toast.success('Verification status refreshed!')
-    } catch (err) {
-      toast.error('Failed to refresh status')
+      await sendEmailVerification(auth.currentUser)
+      toast.success("Verification email sent! Please check your inbox.")
+    } catch (error) {
+      toast.error(error.message || "Failed to send verification email.")
+    } finally {
+      setLoading(false)
     }
   }
 
-  // --- Email Verification ---
-  const handleSendEmailOTP = async (e) => {
-    if (e) e.preventDefault()
-    if (!emailToVerify || !emailToVerify.includes('@')) {
-      toast.error('Please enter a valid email')
-      return
-    }
-    setLoadingEmail(true)
+  const handleCheckVerification = async () => {
+    if (!auth.currentUser) return
+    
+    setChecking(true)
     try {
-      const res = await authAPI.sendOtp({ identifier: emailToVerify })
-      if (res.data._dev_otp) console.log('DEV EMAIL OTP:', res.data._dev_otp)
-      setEmailOtpSent(true)
-      toast.success('OTP sent to your email!')
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to send OTP')
+      await auth.currentUser.reload() // Refresh Firebase user state
+      if (auth.currentUser.emailVerified) {
+        toast.success("Email verified successfully!")
+        
+        // The prompt asked to redirect to login if verified
+        toast.success("Email verified successfully! Please log in.")
+        // Optionally logout so they have to login again, but I'll just redirect to login
+        navigate('/auth/login', { replace: true })
+      } else {
+        toast.error("Email not verified yet. Please check your inbox.")
+      }
+    } catch (error) {
+      toast.error("Error checking verification status.")
+    } finally {
+      setChecking(false)
     }
-    setLoadingEmail(false)
   }
-
-  const handleVerifyEmailOTP = async (e) => {
-    e.preventDefault()
-    if (!otpEmail || otpEmail.length !== 6) {
-      toast.error('Please enter a 6-digit OTP')
-      return
-    }
-    setLoadingEmail(true)
-    try {
-      const { data } = await authAPI.verifyContact({ identifier: emailToVerify, otp: otpEmail })
-      toast.success('Email verified successfully!')
-      setAuth(data.user, token)
-      setEmailOtpSent(false)
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Invalid OTP')
-    }
-    setLoadingEmail(false)
-  }
-
 
   return (
-    <PageWrapper>
-      <div className="pt-24 pb-24 max-w-3xl mx-auto px-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-10 text-center sm:text-left">
-          <div>
-            <h1 className="text-3xl font-bold flex items-center justify-center sm:justify-start gap-2.5">
-              <FiShield className="text-brand" />
-              Verification Center
-            </h1>
-            <p className="text-white/50 text-sm mt-1">Verify your email to unlock booking and listing rides.</p>
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="w-full max-w-lg mx-auto"
+    >
+      <div className="card p-8 md:p-12 shadow-2xl relative overflow-hidden">
+        {/* Decorative background glow */}
+        <div className="absolute top-0 right-0 w-64 h-64 bg-brand/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
+        
+        <div className="text-center mb-8 relative z-10">
+          <div className="w-16 h-16 bg-brand/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-brand/30">
+            <FiMail className="text-2xl text-brand" />
           </div>
-          <button
-            onClick={handleReload}
-            className="btn-secondary text-xs flex items-center justify-center gap-1.5 py-2 px-4 border-white/10 w-fit mx-auto sm:mx-0 hover:bg-white/5"
+          <h1 className="text-3xl font-bold mb-2">Verify your email</h1>
+          <p className="text-white/60">
+            We've sent a verification link to <strong className="text-white">{user?.email || auth.currentUser?.email}</strong>. 
+            Please click the link in the email to verify your account.
+          </p>
+        </div>
+
+        <div className="space-y-4 relative z-10">
+          <motion.button
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={handleCheckVerification}
+            disabled={checking}
+            className="btn-primary w-full py-4 text-lg font-medium flex justify-center items-center gap-2"
           >
-            <FiRefreshCw className="animate-spin-slow" /> Refresh Status
+            {checking ? <FiLoader className="animate-spin" /> : <FiCheckCircle />}
+            {checking ? 'Checking...' : "I've Verified My Email"}
+          </motion.button>
+          
+          <button
+            onClick={handleResendVerification}
+            disabled={loading}
+            className="w-full py-4 text-white/60 hover:text-white hover:bg-white/5 border border-white/10 rounded-xl transition font-medium"
+          >
+            {loading ? 'Sending...' : 'Resend Verification Email'}
           </button>
         </div>
-
-        <div className="space-y-6">
-          {/* Email Verification Card */}
-          <div className="card p-6 border-white/5 relative overflow-hidden">
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-brand/10 flex items-center justify-center shrink-0">
-                  <FiMail className="text-brand text-lg" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-white">Email Verification</h3>
-                  <p className="text-white/40 text-xs mt-0.5">{user?.email || 'No email registered'}</p>
-                </div>
-              </div>
-              {user?.emailVerified ? (
-                <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-xs flex items-center gap-1.5 w-fit">
-                  <FiCheckCircle size={12} /> Verified
-                </span>
-              ) : null}
-            </div>
-
-            {!user?.emailVerified && (
-              <div className="border-t border-white/5 pt-4 mt-4">
-                {!emailOtpSent ? (
-                  <form onSubmit={handleSendEmailOTP} className="flex gap-2 max-w-md">
-                    <input
-                      type="email"
-                      placeholder="Enter email address"
-                      value={emailToVerify}
-                      onChange={(e) => setEmailToVerify(e.target.value)}
-                      className="input-field py-2 text-sm flex-1"
-                    />
-                    <button type="submit" disabled={loadingEmail} className="btn-primary text-xs px-4 py-2 shrink-0">
-                      {loadingEmail ? 'Sending…' : 'Send OTP'}
-                    </button>
-                  </form>
-                ) : (
-                  <form onSubmit={handleVerifyEmailOTP} className="flex gap-2 max-w-md">
-                    <input
-                      type="text"
-                      placeholder="Enter 6-digit OTP"
-                      value={otpEmail}
-                      onChange={(e) => setOtpEmail(e.target.value)}
-                      className="input-field py-2 text-sm flex-1 tracking-widest text-center"
-                      maxLength={6}
-                    />
-                    <button type="submit" disabled={loadingEmail} className="btn-primary text-xs px-4 py-2 shrink-0">
-                      {loadingEmail ? 'Verifying…' : 'Verify OTP'}
-                    </button>
-                    <button type="button" onClick={() => setEmailOtpSent(false)} className="text-xs text-brand ml-2">
-                      Cancel
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
-          </div>
-
-
-
-          {/* KYC Document Upload Card */}
-          <div className="card p-6 border-white/5">
-            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center shrink-0">
-                  <FiUser className="text-purple-400 text-lg" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-white">KYC Documents</h3>
-                  <p className="text-white/40 text-xs mt-0.5">
-                    {user?.kycStatus === 'verified' ? 'Documents verified' :
-                     user?.kycStatus === 'pending' ? 'Verification in progress' :
-                     user?.kycStatus === 'rejected' ? 'Documents rejected - Action Required' : 'Please upload your ID'}
-                  </p>
-                </div>
-              </div>
-              {user?.kycStatus === 'verified' ? (
-                <span className="badge bg-green-500/10 text-green-400 border border-green-500/20 text-xs flex items-center gap-1.5 w-fit">
-                  <FiCheckCircle size={12} /> Verified
-                </span>
-              ) : user?.kycStatus === 'pending' ? (
-                <span className="badge bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 text-xs flex items-center gap-1.5 w-fit">
-                  <FiAlertCircle size={12} /> Pending Review
-                </span>
-              ) : user?.kycStatus === 'rejected' ? (
-                <span className="badge bg-red-500/10 text-red-400 border border-red-500/20 text-xs flex items-center gap-1.5 w-fit">
-                  <FiAlertCircle size={12} /> Rejected
-                </span>
-              ) : null}
-            </div>
-
-            {user?.kycStatus === 'rejected' && user?.kycRejectionReason && (
-              <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-4">
-                <p className="text-red-400 text-sm font-medium">Rejection Reason:</p>
-                <p className="text-red-300 text-sm mt-1">{user.kycRejectionReason}</p>
-              </div>
-            )}
-
-            {user?.kycStatus !== 'verified' && user?.kycStatus !== 'pending' && (
-              <div className="border-t border-white/5 pt-4">
-                <form className="space-y-4" onSubmit={async (e) => {
-                  e.preventDefault()
-                  const formData = new FormData(e.target)
-                  try {
-                    const { data } = await userAPI.submitKyc(formData)
-                    toast.success('KYC documents submitted!')
-                    setAuth(data.user, token)
-                  } catch (err) {
-                    toast.error(err.response?.data?.message || 'Failed to submit KYC')
-                  }
-                }}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="label text-xs mb-1.5 block">Government ID (Aadhar/PAN)</label>
-                      <input type="file" name="governmentIdUrl" required accept="image/*,.pdf" className="input-field text-sm p-2" />
-                    </div>
-                    <div>
-                      <label className="label text-xs mb-1.5 block">College ID</label>
-                      <input type="file" name="collegeIdUrl" required accept="image/*,.pdf" className="input-field text-sm p-2" />
-                    </div>
-                  </div>
-                  <button type="submit" className="btn-primary text-sm px-4 py-2 w-full mt-2">
-                    Submit Documents
-                  </button>
-                </form>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
-    </PageWrapper>
+    </motion.div>
   )
 }

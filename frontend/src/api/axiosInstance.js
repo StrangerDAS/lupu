@@ -7,11 +7,17 @@ const api = axios.create({
   timeout: 10000,
 })
 
-// Attach JWT token to every request
-api.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+import { auth } from '../config/firebase'
+
+// Attach Firebase ID token to every request
+api.interceptors.request.use(async (config) => {
+  if (auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken()
+      config.headers.Authorization = `Bearer ${token}`
+    } catch (err) {
+      console.error('Error fetching Firebase ID token:', err)
+    }
   }
   return config
 })

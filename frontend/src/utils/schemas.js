@@ -7,9 +7,6 @@ export const loginSchema = z.object({
   identifier: z.string().min(1, 'Email is required').email('Invalid email address'),
 })
 
-export const verifySchema = z.object({
-  otp: z.string().length(6, 'OTP must be 6 digits'),
-})
 
 export const signupSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
