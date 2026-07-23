@@ -132,7 +132,7 @@ app.post('/api/auth/login', verifyFirebaseToken, async (req, res, next) => {
         isRider: true,
         isOwner: role === 'owner',
         emailVerified: firebaseUser.email_verified,
-        phone: firebaseUser.phone_number || '',
+        ...(firebaseUser.phone_number && { phone: firebaseUser.phone_number }),
         lastLogin: new Date()
       })
       await user.save()
