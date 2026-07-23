@@ -1979,7 +1979,16 @@ app.use((req, res) => {
 })
 
 // ── Global error handler ───────────────────────────────────
-app.use(errorHandler)
+app.use((err, req, res, next) => {
+  console.error("========== SERVER ERROR ==========");
+  console.error(err);
+  console.error(err.stack);
+
+  res.status(err.status || 500).json({
+    message: err.message,
+    stack: process.env.NODE_ENV !== "production" ? err.stack : undefined
+  });
+});
 
 // ── Start ──────────────────────────────────────────────────
 async function start() {

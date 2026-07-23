@@ -1,14 +1,14 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 
-// Firebase project: uniride-9be37
+// Firebase project: lupu-9fbcd
 const firebaseConfig = {
-  apiKey: "AIzaSyApxoYeZTelEFfFs8c1F0eePCEimOPRK9o",
-  authDomain: "uniride-9be37.firebaseapp.com",
-  projectId: "uniride-9be37",
-  storageBucket: "uniride-9be37.firebasestorage.app",
-  messagingSenderId: "760677444428",
-  appId: "1:760677444428:web:a419f39fd2dc273cbbfde9",
+  apiKey: "AIzaSyC6SGYmPBYZ2tEsYLRTwmAYPSDP5h9qLOM",
+  authDomain: "lupu-9fbcd.firebaseapp.com",
+  projectId: "lupu-9fbcd",
+  storageBucket: "lupu-9fbcd.firebasestorage.app",
+  messagingSenderId: "540230115580",
+  appId: "1:540230115580:web:c2f73c8893edc39284f779",
 };
 
 const app = initializeApp(firebaseConfig);
