@@ -115,6 +115,10 @@ function kycPlaceholder(_req, _res, next) {
 // 1. Firebase Login / Sync Route
 // The frontend calls this AFTER successful Firebase authentication
 app.post('/api/auth/login', verifyFirebaseToken, async (req, res, next) => {
+  console.log("🔥 /api/auth/login HIT");
+  console.log("Body:", req.body);
+  console.log("User:", req.firebaseUser);
+
   try {
     const firebaseUser = req.firebaseUser // Set by middleware
     const { name, role } = req.body
