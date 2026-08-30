@@ -95,11 +95,7 @@ export default function Login() {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="w-full max-w-md mx-auto"
-    >
+    <div className="w-full max-w-md mx-auto">
       <div className="text-center mb-8">
         <h1 className="text-3xl font-bold">Welcome Back</h1>
         <p className="text-white/40 mt-2">Log in to your LUPU account</p>
@@ -219,6 +215,6 @@ export default function Login() {
           </Link>
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }

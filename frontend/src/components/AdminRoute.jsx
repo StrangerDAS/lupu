@@ -26,17 +26,18 @@ export default function AdminRoute() {
     return <Navigate to="/auth/login" state={{ from: location }} replace />
   }
 
+  // Admin role check — ONLY dasstranger421@gmail.com with admin role
+  const isSoleAdmin = user.email?.toLowerCase() === 'dasstranger421@gmail.com' && ADMIN_ROLES.includes(user.role)
+  if (isSoleAdmin) {
+    return <Outlet />
+  }
+
   // Suspended or banned account
   const status = user.accountStatus || user.status
   if (status === 'suspended' || status === 'banned') {
+    useAuthStore.getState().logout()
     return <Navigate to="/auth/login" replace />
   }
 
-  // Admin role check — ONLY dasstranger421@gmail.com with admin role
-  const isSoleAdmin = user.email?.toLowerCase() === 'dasstranger421@gmail.com' && ADMIN_ROLES.includes(user.role)
-  if (!isSoleAdmin) {
-    return <Navigate to="/hub" replace />
-  }
-
-  return <Outlet />
+  return <Navigate to="/hub" replace />
 }

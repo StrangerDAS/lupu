@@ -28,11 +28,7 @@ export default function ForgotPassword() {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="w-full max-w-md mx-auto"
-    >
+    <div className="w-full max-w-md mx-auto">
       <div className="mb-6">
         <Link to="/auth/login" className="text-white/40 hover:text-white flex items-center gap-2 transition text-sm">
           <FiArrowLeft /> Back to Login
@@ -89,6 +85,6 @@ export default function ForgotPassword() {
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
   )
 }

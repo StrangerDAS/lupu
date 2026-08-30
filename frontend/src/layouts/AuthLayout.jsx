@@ -29,9 +29,14 @@ export default function AuthLayout() {
 
   // ── Already authenticated — bounce the user to the right place ──────────
   if (user) {
-    const dest = ADMIN_ROLES.includes(user.role) ? '/admin' : '/hub'
-    console.log(`[AuthLayout] ✅ Already authenticated (role=${user.role}) — redirecting to ${dest}`)
-    return <Navigate to={dest} replace />
+    const status = user.accountStatus || user.status
+    if (status === 'suspended' || status === 'banned') {
+      useAuthStore.getState().logout()
+    } else {
+      const dest = ADMIN_ROLES.includes(user.role) ? '/admin' : '/hub'
+      console.log(`[AuthLayout] ✅ Already authenticated (role=${user.role}) — redirecting to ${dest}`)
+      return <Navigate to={dest} replace />
+    }
   }
 
   // ── Not authenticated — show the auth form ───────────────────────────────
