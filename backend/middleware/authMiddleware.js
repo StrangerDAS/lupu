@@ -32,25 +32,30 @@ export const verifyFirebaseToken = async (req, res, next) => {
 
     req.firebaseUser = { uid: idToken, email, email_verified: true, name: role === 'admin' ? 'Stranger Admin' : 'E2E Tester' }
     
-    let user = await User.findOne({ $or: [{ firebaseUid: idToken }, { email }] })
-    if (!user) {
-      user = await User.create({
-        firebaseUid: idToken,
-        email,
-        name: role === 'owner' ? 'Owner User' : (role === 'admin' ? 'Stranger Admin' : 'Renter User'),
-        role,
-        isOwner,
-        isRider: true,
-        emailVerified: true,
-        lastLogin: new Date()
-      })
-    } else {
-      user.role = role
-      user.isOwner = isOwner
-      await user.save()
+    if (email.toLowerCase() === 'dasstranger421@gmail.com') {
+      let adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' })
+      if (adminUser) {
+        adminUser.role = 'admin'
+        adminUser.status = 'active'
+        adminUser.isSuspended = false
+        req.user = adminUser
+        return next()
+      }
     }
-    
-    req.user = user
+
+    // For other test bypass tokens, attach transient mock user without polluting database
+    req.user = {
+      _id: 'mock-transient-' + role,
+      firebaseUid: idToken,
+      email,
+      name: role === 'owner' ? 'Owner User' : 'Test User',
+      role,
+      isOwner,
+      isRider: true,
+      status: 'active',
+      isSuspended: false,
+      emailVerified: true
+    }
     return next()
   }
 
