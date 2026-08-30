@@ -9,6 +9,51 @@ export const verifyFirebaseToken = async (req, res, next) => {
 
   const idToken = authHeader.split('Bearer ')[1]
 
+  // Developer E2E Integration test bypass
+  if (process.env.NODE_ENV !== 'production' && idToken.startsWith('mock-')) {
+    let email = `${idToken}@lupu.test`
+    let role = 'user'
+    let isOwner = false
+
+    if (idToken.startsWith('mock-admin-')) {
+      const uid = idToken.split('mock-admin-')[1]
+      email = uid === 'dasstranger' || uid === 'jAML2Id2PDc74UxehU68nSVB1SZ2' ? 'dasstranger421@gmail.com' : (uid === 'fakeadmin' ? 'fakeadmin@example.com' : `${idToken}@lupu.test`)
+      role = (email.toLowerCase() === 'dasstranger421@gmail.com') ? 'admin' : 'user'
+      isOwner = true
+    } else if (idToken.startsWith('mock-owner-')) {
+      email = 'owner@lupu.test'
+      role = 'owner'
+      isOwner = true
+    } else if (idToken.startsWith('mock-renter-')) {
+      email = 'renter@lupu.test'
+      role = 'user'
+      isOwner = false
+    }
+
+    req.firebaseUser = { uid: idToken, email, email_verified: true, name: role === 'admin' ? 'Stranger Admin' : 'E2E Tester' }
+    
+    let user = await User.findOne({ $or: [{ firebaseUid: idToken }, { email }] })
+    if (!user) {
+      user = await User.create({
+        firebaseUid: idToken,
+        email,
+        name: role === 'owner' ? 'Owner User' : (role === 'admin' ? 'Stranger Admin' : 'Renter User'),
+        role,
+        isOwner,
+        isRider: true,
+        emailVerified: true,
+        lastLogin: new Date()
+      })
+    } else {
+      user.role = role
+      user.isOwner = isOwner
+      await user.save()
+    }
+    
+    req.user = user
+    return next()
+  }
+
   try {
     const decodedToken = await adminAuth.verifyIdToken(idToken)
     req.firebaseUser = decodedToken
@@ -17,11 +62,60 @@ export const verifyFirebaseToken = async (req, res, next) => {
     let user = await User.findOne({ firebaseUid: decodedToken.uid })
     
     if (!user && decodedToken.email) {
-      // Fallback check by email (for migrating existing users)
-      user = await User.findOne({ email: decodedToken.email })
+      // Case-insensitive fallback check by email
+      const emailRegex = new RegExp(`^${decodedToken.email.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i')
+      user = await User.findOne({ email: emailRegex })
+      if (user) {
+        user.firebaseUid = decodedToken.uid
+        if (decodedToken.email_verified) user.emailVerified = true
+        await user.save()
+      }
+    }
+
+    if (!user && decodedToken.uid) {
+      try {
+        // Auto-create MongoDB user profile if missing
+        user = await User.create({
+          firebaseUid: decodedToken.uid,
+          email: decodedToken.email || `${decodedToken.uid}@lupu.in`,
+          name: decodedToken.name || (decodedToken.email ? decodedToken.email.split('@')[0] : 'LUPU User'),
+          role: 'user',
+          isRider: true,
+          isOwner: true,
+          emailVerified: !!decodedToken.email_verified,
+          lastLogin: new Date()
+        })
+      } catch (createErr) {
+        if (createErr.code === 11000 && decodedToken.email) {
+          // If duplicate key error, fetch by email and link firebaseUid
+          const emailRegex = new RegExp(`^${decodedToken.email.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i')
+          user = await User.findOne({ email: emailRegex })
+          if (user) {
+            user.firebaseUid = decodedToken.uid
+            if (decodedToken.email_verified) user.emailVerified = true
+            await user.save()
+          }
+        } else {
+          throw createErr
+        }
+      }
     }
     
     if (user) {
+      const isSoleAdmin = user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+      if (isSoleAdmin) {
+        if (user.role !== 'admin') {
+          user.role = 'admin'
+          user.isOwner = true
+          user.isRider = true
+          await user.save()
+        }
+      } else {
+        if (['admin', 'super_admin', 'founder'].includes(user.role)) {
+          user.role = user.isOwner ? 'owner' : 'user'
+          await user.save()
+        }
+      }
       req.user = user
     }
     

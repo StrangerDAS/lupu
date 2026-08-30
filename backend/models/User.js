@@ -70,6 +70,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    status: {
+      type: String,
+      enum: ['active', 'suspended', 'banned'],
+      default: 'active',
+    },
     fraudScore: {
       type: Number,
       default: 0,
@@ -90,6 +95,15 @@ const userSchema = new mongoose.Schema(
       default: 'unsubmitted',
     },
     kycRejectionReason: { type: String, default: null },
+    // Owner Payout Information
+    payoutDetails: {
+      upiId: { type: String, trim: true, default: null },
+      accountHolderName: { type: String, trim: true, default: null },
+      accountNumber: { type: String, trim: true, default: null },
+      ifscCode: { type: String, trim: true, default: null },
+      bankName: { type: String, trim: true, default: null },
+      isVerified: { type: Boolean, default: false }
+    },
   },
   { timestamps: true }
 )
@@ -97,5 +111,13 @@ const userSchema = new mongoose.Schema(
 // Indexes for common queries
 userSchema.index({ role: 1 })
 userSchema.index({ kycStatus: 1 })
+
+// Pre-validate middleware to ensure name is populated
+userSchema.pre('validate', function (next) {
+  if (!this.name || this.name.trim().length < 2) {
+    this.name = this.email ? this.email.split('@')[0] : 'LUPU User'
+  }
+  next()
+})
 
 export default mongoose.model('User', userSchema)

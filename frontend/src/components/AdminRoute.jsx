@@ -13,7 +13,7 @@ import { ADMIN_ROLES } from '../lib/roleUtils'
  * authReady flow mirrors ProtectedRoute (see that file for explanation).
  */
 export default function AdminRoute() {
-  const { user, token, authReady } = useAuthStore()
+  const { user, authReady } = useAuthStore()
   const location = useLocation()
 
   // Wait for first auth resolution
@@ -22,7 +22,7 @@ export default function AdminRoute() {
   }
 
   // Must be authenticated
-  if (!token || !user) {
+  if (!user) {
     return <Navigate to="/auth/login" state={{ from: location }} replace />
   }
 
@@ -32,8 +32,9 @@ export default function AdminRoute() {
     return <Navigate to="/auth/login" replace />
   }
 
-  // Admin role check
-  if (!ADMIN_ROLES.includes(user.role)) {
+  // Admin role check — ONLY dasstranger421@gmail.com with admin role
+  const isSoleAdmin = user.email?.toLowerCase() === 'dasstranger421@gmail.com' && ADMIN_ROLES.includes(user.role)
+  if (!isSoleAdmin) {
     return <Navigate to="/hub" replace />
   }
 

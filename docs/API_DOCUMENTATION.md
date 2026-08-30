@@ -178,26 +178,21 @@ Secure endpoints require a bearer JWT token: `Authorization: Bearer <token>`.
 
 ---
 
-## 💳 Payments Endpoints
+## 💳 Payments Endpoints (Future Integration)
+*Note: Online payment gateway (Razorpay) is temporarily disabled and will be re-enabled after full project completion. Bookings are confirmed directly with payment settlement upon pickup.*
 
-### 1. Create Razorpay Payment Order
+### 1. Payment Order Creation (Future Integration)
 * **URL**: `/api/payments/create-order`
 * **Method**: `POST`
 * **Auth Required**: Yes
-* **Request Body**:
-```json
-{
-  "amount": 500, // Amount in INR
-  "receipt": "receipt_1234"
-}
-```
-* **Success Response (200 OK)**:
-```json
-{
-  "id": "order_mock_1700000000000",
-  "amount": 50000, // Amount in paise
-  "currency": "INR",
-  "status": "created",
-  "isMock": true // Included if mock order created
-}
-```
+
+### 2. Payment Verification (Future Integration)
+* **URL**: `/api/payments/verify`
+* **Method**: `POST`
+* **Auth Required**: Yes
+
+### 3. Payment History
+* **URL**: `/api/payments/history`
+* **Method**: `GET`
+* **Auth Required**: Yes
+

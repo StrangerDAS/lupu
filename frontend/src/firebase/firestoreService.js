@@ -117,11 +117,17 @@ export async function toggleVehicleLive(vehicleId) {
   return !current
 }
 
+import { vehicleAPI } from '../api/endpoints'
+
 /** Get single vehicle by ID */
 export async function getVehicleById(vehicleId) {
-  const snap = await getDoc(doc(db, 'vehicles', vehicleId))
-  if (!snap.exists()) return null
-  return { _id: snap.id, ...snap.data() }
+  try {
+    const res = await vehicleAPI.getById(vehicleId)
+    return res.data
+  } catch (err) {
+    console.error('Error fetching vehicle by ID:', err)
+    return null
+  }
 }
 
 /** Get all vehicles for a specific owner */

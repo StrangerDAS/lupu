@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -17,9 +17,10 @@ import { addVehicleSchema } from '../utils/schemas'
 import useAuthStore from '../store/authStore'
 import { StatCardSkeleton, BookingCardSkeleton } from '../components/Skeletons'
 import {
-  subscribeToUserNotifications, markNotificationRead, markAllNotificationsRead
+  uploadVehicleImages
 } from '../firebase/firestoreService'
-import { vehicleAPI, bookingAPI } from '../api/endpoints'
+import { vehicleAPI, bookingAPI, notificationAPI } from '../api/endpoints'
+import { auth } from '../config/firebase'
 import ReviewModal from '../components/ReviewModal'
 import EditVehicleModal from '../components/EditVehicleModal'
 import DisputeModal from '../components/DisputeModal'
@@ -152,28 +153,42 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
   const [insFile, setInsFile] = useState(null)
   const [pucFile, setPucFile] = useState(null)
   const [photoFiles, setPhotoFiles] = useState([])
+  const [photoPreviews, setPhotoPreviews] = useState([])
+  const [submitStep, setSubmitStep] = useState('') // 'uploading' | 'saving' | ''
+
+  // Generate previews when photos are selected
+  const handlePhotoChange = (e) => {
+    const files = Array.from(e.target.files)
+    setPhotoFiles(files)
+    const previews = files.map(f => URL.createObjectURL(f))
+    setPhotoPreviews(previews)
+  }
 
   const onSubmit = async (data) => {
-    if (!rcFile) {
-      toast.error('Registration Certificate (RC) document file is required')
-      return
-    }
-    if (!insFile) {
-      toast.error('Insurance document file is required')
-      return
-    }
-    if (!pucFile) {
-      toast.error('Pollution Certificate (PUC) document file is required')
-      return
-    }
-    if (photoFiles.length < 3) {
-      toast.error('At least 3 vehicle photos are required')
+    if (!rcFile) { toast.error('Registration Certificate (RC) is required'); return }
+    if (!insFile) { toast.error('Insurance document is required'); return }
+    if (!pucFile) { toast.error('Pollution Certificate (PUC) is required'); return }
+    if (!auth.currentUser) {
+      toast.error('Authentication session expired. Please refresh or log in again.')
       return
     }
 
     setSubmitting(true)
-    const toastId = toast.loading('Listing vehicle for verification...')
+    const toastId = toast.loading('Uploading vehicle photos...')
     try {
+      // Step 1: Upload photos to Firebase Storage first
+      setSubmitStep('uploading')
+      let photoUrls = []
+      try {
+        photoUrls = await uploadVehicleImages(`veh_${Date.now()}`, photoFiles)
+        toast.loading(`Photos uploaded (${photoUrls.length}). Saving vehicle...`, { id: toastId })
+      } catch (uploadErr) {
+        console.warn('[AddVehicle] Firebase Storage upload failed, using local upload:', uploadErr.message)
+        // Fall through — local disk upload will happen via FormData binary
+      }
+
+      // Step 2: Build FormData and submit to backend
+      setSubmitStep('saving')
       const formData = new FormData()
       formData.append('name', data.name)
       formData.append('brand', data.brand)
@@ -191,28 +206,36 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
       formData.append('helmetAvailable', data.helmetAvailable ? 'true' : 'false')
       formData.append('verificationStatus', 'submitted')
 
+      // Documents (binary files)
       formData.append('RC', rcFile)
       formData.append('Insurance', insFile)
       formData.append('PUC', pucFile)
 
-      photoFiles.forEach(file => {
-        formData.append('photos', file)
-      })
+      if (photoUrls.length >= 3) {
+        // Firebase Storage URLs — append as strings to body
+        photoUrls.forEach(url => formData.append('photos', url))
+      } else {
+        // Fallback: send binary files so multer saves them to disk
+        photoFiles.forEach(file => formData.append('photos', file))
+      }
 
       await vehicleAPI.create(formData)
       toast.success(
         <div>
-          <p className="font-bold">Vehicle Submitted Successfully</p>
+          <p className="font-bold">Vehicle Submitted Successfully! 🎉</p>
           <p className="text-xs opacity-90">Status: Pending Verification</p>
         </div>,
-        { id: toastId, duration: 5000 }
+        { id: toastId, duration: 6000 }
       )
       onSuccess()
       onClose()
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to list vehicle. Please try again.', { id: toastId })
+      const msg = err.response?.data?.message || err.message || 'Failed to list vehicle. Please try again.'
+      console.error('[AddVehicle] Submission error:', err.response?.data || err.message)
+      toast.error(msg, { id: toastId })
     } finally {
       setSubmitting(false)
+      setSubmitStep('')
     }
   }
 
@@ -347,16 +370,24 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
             >
               <FiUpload className="text-white/30 text-lg" />
               <span className="text-xs text-white/40">
-                {photoFiles.length > 0 ? `${photoFiles.length} file(s) selected` : 'Select vehicle photos'}
+                {photoFiles.length > 0 ? `${photoFiles.length} photo(s) selected` : 'Click to select vehicle photos (min 3)'}
               </span>
-              <input id="veh-images" type="file" accept="image/*" multiple required className="hidden" onChange={(e) => setPhotoFiles(Array.from(e.target.files))} />
+              <input id="veh-images" type="file" accept="image/*" multiple className="hidden" onChange={handlePhotoChange} />
             </label>
+            {/* Photo previews */}
+            {photoPreviews.length > 0 && (
+              <div className="flex gap-2 mt-2 flex-wrap">
+                {photoPreviews.map((src, i) => (
+                  <img key={i} src={src} alt={`preview-${i}`} className="w-14 h-14 object-cover rounded-lg border border-white/10" />
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary flex-1 py-2.5">Cancel</button>
             <button type="submit" disabled={submitting} className="btn-primary flex-1 py-2.5 font-semibold">
-              {submitting ? 'Submitting…' : 'Submit for Verification'}
+              {submitting ? (submitStep === 'uploading' ? 'Uploading Photos…' : 'Saving Vehicle…') : 'Submit for Verification'}
             </button>
           </div>
         </form>
@@ -411,7 +442,9 @@ function DeleteConfirmModal({ vehicleName, onConfirm, onCancel }) {
    ═══════════════════════════════════════════════════════════ */
 
 export default function OwnerDashboard() {
+  const navigate = useNavigate()
   const { user, isKycComplete } = useAuthStore()
+  const [searchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState('overview')
   const [vehicles, setVehicles] = useState([])
   const [bookings, setBookings] = useState([])
@@ -442,6 +475,12 @@ export default function OwnerDashboard() {
   }
 
   useEffect(() => {
+    if (searchParams.get('addVehicle') === 'true') {
+      setShowAddModal(true)
+    }
+  }, [searchParams])
+
+  useEffect(() => {
     if (!user?._id) {
       setLoading(false)
       return
@@ -454,19 +493,24 @@ export default function OwnerDashboard() {
     })
 
     const adaptBooking = (b) => {
+      const s = (b.status || '').toLowerCase().trim()
       const statusMap = {
+        pending: 'under_review',
         requested: 'under_review',
         accepted: 'accepted',
-        confirmed: 'advance_paid',
-        ready_for_pickup: 'ready_for_pickup',
+        approved: 'accepted',
+        active: 'ongoing',
         ongoing: 'ongoing',
+        ready_for_pickup: 'ready_for_pickup',
+        confirmed: 'accepted',
         completed: 'completed',
+        returned: 'completed',
         cancelled: 'cancelled',
         rejected: 'rejected'
       }
       return {
         ...b,
-        bookingStatus: statusMap[b.status] || b.status
+        bookingStatus: statusMap[s] || s || 'under_review'
       }
     }
 
@@ -485,23 +529,31 @@ export default function OwnerDashboard() {
       }
     }
 
-    fetchBookings()
-    const intervalBookings = setInterval(fetchBookings, 5000)
+    const fetchNotifications = async () => {
+      try {
+        const { data } = await notificationAPI.getAll()
+        setNotifications(data.notifications || [])
+      } catch (err) {
+        console.error('Error fetching owner notifications:', err)
+      }
+    }
 
-    const unsubNotifs = subscribeToUserNotifications(user._id, (data) => {
-      setNotifications(data)
-    })
+    fetchBookings()
+    fetchNotifications()
+    const interval = setInterval(() => {
+      fetchBookings()
+      fetchNotifications()
+    }, 5000)
 
     return () => {
-      clearInterval(intervalBookings)
-      unsubNotifs()
+      clearInterval(interval)
     }
   }, [user?._id])
 
-  const liveCount = vehicles.filter(v => v.isLive !== false && v.status === 'approved').length
-  const pendingVerifyCount = vehicles.filter(v => v.status === 'pending_verification' || v.status === 'under_review').length
+  const liveCount = vehicles.filter(v => v.isLive !== false && (v.status === 'approved' || v.verificationStatus === 'approved')).length
+  const pendingVerifyCount = vehicles.filter(v => v.status === 'pending_verification' || v.status === 'under_review' || v.verificationStatus === 'submitted' || v.verificationStatus === 'under_review').length
   const currentlyRentedCount = bookings.filter(b => b.bookingStatus === 'ongoing').length
-  const offlineCount = vehicles.filter(v => v.isLive === false || v.status !== 'approved').length
+  const offlineCount = vehicles.filter(v => v.isLive === false || (v.status !== 'approved' && v.verificationStatus !== 'approved')).length
   const totalBookingRequests = bookings.length
   const totalEarnings = completedBookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0)
   const pendingEarnings = bookings
@@ -594,7 +646,8 @@ export default function OwnerDashboard() {
 
   const handleMarkAllRead = async () => {
     try {
-      await markAllNotificationsRead(user._id)
+      await notificationAPI.markAllRead()
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })))
       toast.success('All notifications marked as read')
     } catch {
       toast.error('Failed to mark notifications as read')
@@ -603,9 +656,21 @@ export default function OwnerDashboard() {
 
   const handleMarkRead = async (notifId) => {
     try {
-      await markNotificationRead(notifId)
+      await notificationAPI.markRead(notifId)
+      setNotifications(prev => prev.map(n => n._id === notifId ? { ...n, read: true } : n))
     } catch {
       // silent fail
+    }
+  }
+
+  const handleNotificationClick = async (n) => {
+    if (!n.read) {
+      await handleMarkRead(n._id)
+    }
+    if (n.link) {
+      navigate(n.link)
+    } else {
+      navigate('/dashboard')
     }
   }
 
@@ -628,14 +693,16 @@ export default function OwnerDashboard() {
 
   const getVehicleDisplayStatus = (v) => {
     if (v.deleted) return 'deleted'
-    if (v.status === 'rejected') return 'rejected'
-    if (v.status === 'pending_verification' || v.status === 'under_review') return 'pending_verification'
+    const status = v.status || v.verificationStatus
+    if (status === 'rejected' || v.verificationStatus === 'rejected') return 'rejected'
+    if (status === 'pending_verification' || status === 'under_review' || v.verificationStatus === 'submitted' || v.verificationStatus === 'under_review') return 'pending_verification'
     // Check if currently booked
     const hasOngoing = bookings.some(b => b.vehicleId === v._id && b.bookingStatus === 'ongoing')
     if (hasOngoing) return 'booked'
-    if (v.status === 'approved' && v.isLive !== false) return 'live'
-    if (v.status === 'approved' && v.isLive === false) return 'offline'
-    return v.status
+    const isApproved = status === 'approved' || v.verificationStatus === 'approved'
+    if (isApproved && v.isLive !== false) return 'live'
+    if (isApproved && v.isLive === false) return 'offline'
+    return status || 'pending_verification'
   }
 
   const formatDate = (ts) => {
@@ -657,29 +724,10 @@ export default function OwnerDashboard() {
             <h1 className="text-2xl md:text-3xl font-bold">Owner Dashboard</h1>
             <p className="text-white/40 text-sm mt-1">Welcome back, {user?.name || user?.displayName || 'Owner'}</p>
           </div>
-          {isKycComplete() ? (
-            <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center justify-center gap-2 text-sm sm:w-auto w-full py-3 sm:py-2.5 shadow-lg shadow-brand/20">
-              <FiPlus className="text-lg" /> List Your Vehicle
-            </button>
-          ) : (
-            <Link to="/verify" className="btn-primary flex items-center justify-center gap-2 text-sm sm:w-auto w-full py-3 sm:py-2.5 shadow-lg shadow-brand/20">
-              <FiAlertCircle className="text-lg" /> Verify to List Vehicle
-            </Link>
-          )}
+          <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center justify-center gap-2 text-sm sm:w-auto w-full py-3 sm:py-2.5 shadow-lg shadow-brand/20">
+            <FiPlus className="text-lg" /> List Your Vehicle
+          </button>
         </div>
-
-        {/* Verification banner */}
-        {!isKycComplete() && (
-          <div className="mb-6 card p-4 bg-yellow-500/5 border-yellow-500/20 text-yellow-400 text-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <FiAlertCircle size={18} className="shrink-0" />
-              <span>Verify your email or phone number to list vehicles and unlock all features.</span>
-            </div>
-            <Link to="/verify" className="btn-primary text-xs px-4 py-2 shrink-0 w-fit">
-              Verify Now
-            </Link>
-          </div>
-        )}
 
         <div className="flex flex-col md:flex-row gap-6 md:gap-8">
           {/* Mobile horizontal tabs */}
@@ -817,15 +865,9 @@ export default function OwnerDashboard() {
                 >
                   <div className="flex items-center justify-between mb-6">
                     <h2 className="text-lg font-semibold">My Vehicles</h2>
-                    {isKycComplete() ? (
-                      <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center gap-2 text-sm">
-                        <FiPlus /> List a Vehicle
-                      </button>
-                    ) : (
-                      <Link to="/verify" className="btn-secondary text-xs text-yellow-400 border-yellow-500/20 bg-yellow-500/5 hover:bg-yellow-500/10 flex items-center gap-2">
-                        <FiAlertCircle /> Get Verified to List Vehicles
-                      </Link>
-                    )}
+                    <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center gap-2 text-sm">
+                      <FiPlus /> List a Vehicle
+                    </button>
                   </div>
 
                   <div className="space-y-5">
@@ -838,15 +880,9 @@ export default function OwnerDashboard() {
                         </div>
                         <h3 className="text-xl font-bold text-white mb-2">You haven't listed any vehicles yet.</h3>
                         <p className="text-white/60 mb-6 max-w-sm">Start earning by renting out your bike or car.</p>
-                        {isKycComplete() ? (
-                          <button onClick={() => setShowAddModal(true)} className="btn-primary text-base px-6 py-3.5 font-bold shadow-lg shadow-brand/20 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2">
-                            <FiPlus size={20} /> List Your First Vehicle
-                          </button>
-                        ) : (
-                          <Link to="/verify" className="btn-primary text-base px-6 py-3.5 font-bold shadow-lg shadow-brand/20 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2">
-                            <FiAlertCircle size={20} /> Verify to List Vehicle
-                          </Link>
-                        )}
+                        <button onClick={() => setShowAddModal(true)} className="btn-primary text-base px-6 py-3.5 font-bold shadow-lg shadow-brand/20 transition-transform hover:scale-105 active:scale-95 flex items-center gap-2">
+                          <FiPlus size={20} /> List Your First Vehicle
+                        </button>
                       </div>
                     ) : (
                       vehicles.map((v, i) => {
@@ -868,8 +904,16 @@ export default function OwnerDashboard() {
                             <div className="flex flex-col sm:flex-row">
                               {/* Vehicle Photo */}
                               <div className="sm:w-48 h-40 sm:h-auto bg-surface-2 relative shrink-0">
-                                {v.images?.[0] ? (
-                                  <img src={getImageUrl(v.images[0])} alt={v.name} className="w-full h-full object-cover" />
+                                {(v.photos?.[0] || v.images?.[0]) ? (
+                                  <img
+                                    src={getImageUrl(v.photos?.[0] || v.images?.[0])}
+                                    alt={v.name}
+                                    onError={(e) => {
+                                      e.target.onerror = null;
+                                      e.target.src = 'https://images.unsplash.com/photo-1558981403-c5f9899a28bc?w=800&auto=format&fit=crop&q=60';
+                                    }}
+                                    className="w-full h-full object-cover"
+                                  />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center">
                                     <Icon className="text-white/10 text-6xl" />
@@ -1217,7 +1261,7 @@ export default function OwnerDashboard() {
                             initial={{ opacity: 0, x: -8 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: i * 0.03 }}
-                            onClick={() => !n.read && handleMarkRead(n._id)}
+                            onClick={() => handleNotificationClick(n)}
                             className={`card p-4 flex items-start gap-3 cursor-pointer transition-all ${
                               !n.read ? 'border-brand/20 bg-brand/5' : 'hover:bg-surface-2'
                             }`}

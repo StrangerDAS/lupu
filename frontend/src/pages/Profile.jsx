@@ -20,15 +20,19 @@ import { userAPI, bookingAPI, vehicleAPI, roleAPI, authAPI } from '../api/endpoi
 function StatusBadge({ status }) {
   const map = {
     confirmed: 'bg-blue-500/10 text-blue-400 border border-blue-500/20',
+    accepted: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+    active: 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20',
     completed: 'bg-green-500/10 text-green-400 border border-green-500/20',
     cancelled: 'bg-surface-3 text-white/30',
+    rejected: 'bg-red-500/10 text-red-400 border border-red-500/20',
     pending: 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20',
+    requested: 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20',
   }
   return <span className={`badge capitalize text-xs ${map[status] || 'bg-surface-3 text-white/30'}`}>{status}</span>
 }
 
 export default function Profile() {
-  const { user, token, setAuth, updateUser, isKycComplete } = useAuthStore()
+  const { user, updateUser, isKycComplete } = useAuthStore()
   const [editing, setEditing] = useState(false)
   const [bookings, setBookings] = useState([])
   const [loadingBookings, setLoadingBookings] = useState(true)
@@ -41,18 +45,30 @@ export default function Profile() {
     defaultValues: { name: user?.displayName || user?.name || '', email: user?.email || '', phone: user?.phone || '' },
   })
 
+  // Keep form values in sync when user data loads
+  useEffect(() => {
+    if (user) {
+      reset({
+        name: user.name || user.displayName || '',
+        email: user.email || '',
+        phone: user.phone || ''
+      })
+    }
+  }, [user, reset])
+
   // 1. Sync user profile data from backend on mount
   useEffect(() => {
     const syncProfile = async () => {
       try {
         const { data } = await authAPI.me()
-        setAuth(data, token)
+        const userObj = data.user || data
+        updateUser(userObj)
       } catch (err) {
         console.error('Failed to sync profile:', err)
       }
     }
     syncProfile()
-  }, [])
+  }, [updateUser])
 
   // 2. Fetch owner's vehicle count if Owner
   useEffect(() => {
@@ -93,7 +109,8 @@ export default function Profile() {
         phone: data.phone || ''
       })
       
-      setAuth(res.data.user, token)
+      const updatedUser = res.data.user || res.data
+      updateUser(updatedUser)
       toast.success('Profile updated successfully!')
       setEditing(false)
     } catch (err) {
@@ -102,7 +119,7 @@ export default function Profile() {
     }
   }
 
-  // 5. Handle profile image file upload to Firebase Storage, then API
+  // 5. Handle profile image file upload (Firebase Storage + backend fallback)
   const handleImageUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
@@ -110,23 +127,35 @@ export default function Profile() {
       toast.error('Please upload an image file')
       return
     }
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error('Image size must be less than 2MB')
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image size must be less than 5MB')
       return
     }
 
     setUploading(true)
     const toastId = toast.loading('Uploading profile image...')
     try {
-      const filePath = `profiles/${user._id}/avatar`
-      const fileRef = ref(storage, filePath)
-      await uploadBytes(fileRef, file)
-      const downloadURL = await getDownloadURL(fileRef)
+      let downloadURL = null
+      try {
+        const filePath = `profiles/${user?._id || 'user'}/avatar`
+        const fileRef = ref(storage, filePath)
+        await uploadBytes(fileRef, file)
+        downloadURL = await getDownloadURL(fileRef)
+      } catch (storageErr) {
+        console.warn('Firebase storage upload fallback to backend:', storageErr)
+      }
 
-      // Update Express Backend
-      const res = await userAPI.updateProfile({ avatar: downloadURL })
+      let res
+      if (downloadURL) {
+        res = await userAPI.updateProfile({ avatar: downloadURL })
+      } else {
+        const formData = new FormData()
+        formData.append('avatar', file)
+        res = await userAPI.updateProfile(formData)
+      }
       
-      setAuth(res.data.user, token)
+      const updatedUser = res.data.user || res.data
+      updateUser(updatedUser)
       toast.success('Profile image updated successfully!', { id: toastId })
     } catch (err) {
       console.error(err)
@@ -140,7 +169,8 @@ export default function Profile() {
     setActivatingOwner(true)
     try {
       const res = await roleAPI.activateOwner()
-      setAuth(res.data.user, token)
+      const updatedUser = res.data.user || res.data
+      updateUser(updatedUser)
       toast.success('Owner role activated! 🎉')
     } catch (err) {
       console.error(err)
@@ -401,7 +431,7 @@ export default function Profile() {
                 <motion.div key={b._id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="card p-5 flex flex-col sm:flex-row sm:items-center gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">
-                      {b.items ? b.items.map(item => item.name).join(', ') : b.vehicleId?.name || 'Vehicle'}
+                      {b.vehicleName || (b.items ? b.items.map(item => item.name).join(', ') : b.vehicleId?.name) || 'Vehicle'}
                     </div>
                     <div className="text-white/40 text-xs mt-1">
                       {b.startTime ? new Date(b.startTime).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
@@ -411,7 +441,7 @@ export default function Profile() {
                     {b.totalAmount && <div className="text-brand text-xs mt-0.5 font-medium">₹{b.totalAmount}</div>}
                   </div>
                   <StatusBadge status={b.status} />
-                  {b.status === 'confirmed' && (
+                  {['pending', 'requested', 'accepted', 'confirmed'].includes(b.status) && (
                     <button onClick={() => handleCancel(b._id)} className="btn-ghost text-xs text-red-400 hover:text-red-300 shrink-0">
                       Cancel
                     </button>
@@ -458,8 +488,144 @@ export default function Profile() {
         {/* Emergency Contacts */}
         <EmergencyContacts />
 
+        {/* Owner Payout Settings */}
+        {(user?.role === 'owner' || user?.isOwner) && (
+          <OwnerPayoutSection />
+        )}
+
       </div>
     </PageWrapper>
   )
 }
+
+function OwnerPayoutSection() {
+  const [payout, setPayout] = useState({
+    upiId: '',
+    accountHolderName: '',
+    accountNumber: '',
+    ifscCode: '',
+    bankName: ''
+  })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    paymentAPI.getPayoutDetails()
+      .then(res => {
+        if (res.data?.payoutDetails) {
+          setPayout({
+            upiId: res.data.payoutDetails.upiId || '',
+            accountHolderName: res.data.payoutDetails.accountHolderName || '',
+            accountNumber: res.data.payoutDetails.accountNumber || '',
+            ifscCode: res.data.payoutDetails.ifscCode || '',
+            bankName: res.data.payoutDetails.bankName || ''
+          })
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      const res = await paymentAPI.updatePayoutDetails(payout)
+      if (res.data?.payoutDetails) {
+        setPayout(prev => ({
+          ...prev,
+          accountNumber: res.data.payoutDetails.accountNumber || prev.accountNumber
+        }))
+      }
+      toast.success('Payout details saved securely! 💰')
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save payout details')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-12">
+      <h2 className="font-semibold mb-5 flex items-center gap-2">
+        <FiDollarSign className="text-brand" /> Owner Payout Settings
+      </h2>
+      <div className="card p-6">
+        <p className="text-xs text-white/50 mb-6">
+          Provide your bank or UPI details to receive weekly rental payouts. Financial details are securely encrypted and masked.
+        </p>
+
+        {loading ? (
+          <div className="text-white/40 text-xs py-4 text-center">Loading payout preferences...</div>
+        ) : (
+          <form onSubmit={handleSave} className="space-y-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-white/50 text-[10px] uppercase font-semibold mb-1.5">UPI ID (VPA)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. name@okhdfcbank"
+                  className="input-field w-full py-2 px-3 text-xs"
+                  value={payout.upiId}
+                  onChange={e => setPayout({ ...payout, upiId: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-white/50 text-[10px] uppercase font-semibold mb-1.5">Account Holder Name</label>
+                <input
+                  type="text"
+                  placeholder="Full name as per passbook"
+                  className="input-field w-full py-2 px-3 text-xs"
+                  value={payout.accountHolderName}
+                  onChange={e => setPayout({ ...payout, accountHolderName: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2">
+                <label className="block text-white/50 text-[10px] uppercase font-semibold mb-1.5">Bank Account Number</label>
+                <input
+                  type="text"
+                  placeholder="Account number"
+                  className="input-field w-full py-2 px-3 text-xs font-mono"
+                  value={payout.accountNumber}
+                  onChange={e => setPayout({ ...payout, accountNumber: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-white/50 text-[10px] uppercase font-semibold mb-1.5">IFSC Code</label>
+                <input
+                  type="text"
+                  placeholder="e.g. SBIN0001234"
+                  className="input-field w-full py-2 px-3 text-xs font-mono uppercase"
+                  value={payout.ifscCode}
+                  onChange={e => setPayout({ ...payout, ifscCode: e.target.value.toUpperCase() })}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-white/50 text-[10px] uppercase font-semibold mb-1.5">Bank Name (Optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. State Bank of India"
+                className="input-field w-full py-2 px-3 text-xs"
+                value={payout.bankName}
+                onChange={e => setPayout({ ...payout, bankName: e.target.value })}
+              />
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button type="submit" disabled={saving} className="btn-primary py-2 px-5 text-xs font-semibold">
+                {saving ? 'Saving...' : 'Save Payout Details'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
 

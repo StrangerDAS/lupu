@@ -17,11 +17,10 @@ import {
   createPaymentRecord,
   addNotification
 } from '../firebase/firestoreService'
-import { bookingAPI, paymentAPI } from '../api/endpoints'
+import { bookingAPI } from '../api/endpoints'
 import BookingAgreementModal from '../components/BookingAgreementModal'
-import { loadRazorpayScript } from '../utils/paymentUtils'
 
-const STEPS = ['Select Time', 'Verify Identity', 'Sign Agreement', 'Advance Payment']
+const STEPS = ['Select Time', 'Verify Identity', 'Sign Agreement', 'Confirm Booking']
 
 const nowLocal = () => {
   const d = new Date()
@@ -58,7 +57,7 @@ export default function BookingFlow() {
   const { user } = useAuthStore()
 
   const { vehicle, loading } = useVehicle(id)
-  const isBookable = vehicle?.status === 'approved' && vehicle?.isLive !== false
+  const isBookable = (vehicle?.status === 'approved' || vehicle?.verificationStatus === 'approved') && vehicle?.isLive !== false
 
   // Step 1: Time Selection
   const [startTime, setStartTime] = useState(nowLocal())
@@ -253,12 +252,12 @@ export default function BookingFlow() {
         return false
       }
 
-      // KYC check
-      const kycStatus = (user?.kycStatus || '').toLowerCase()
-      if (kycStatus !== 'verified') {
-        toast.error('Only KYC-verified riders can request bookings. Please complete verification on your profile page.')
-        return false
-      }
+      // KYC check removed in Step 3 to allow booking before KYC completion
+      // const kycStatus = (user?.kycStatus || '').toLowerCase()
+      // if (kycStatus !== 'verified') {
+      //   toast.error('Only KYC-verified riders can request bookings. Please complete verification on your profile page.')
+      //   return false
+      // }
 
       return true
     }
@@ -462,46 +461,51 @@ export default function BookingFlow() {
       let actualBookingId = createdBookingId
 
       if (!actualBookingId) {
-        setStatusMessage('Uploading secure documents...')
+        setStatusMessage('Preparing documents...')
         
         let selfieUrl = ''
         let frontUrl = ''
         let backUrl = ''
         let collegeUrl = ''
+        let signatureUrl = ''
+        let pdfUrl = ''
 
-        if (user?.kycStatus === 'Verified') {
-          selfieUrl = user.kycDetails?.selfieUrl || ''
-          collegeUrl = user.kycDetails?.collegeIdUrl || ''
-          frontUrl = user.kycDetails?.aadhaarFrontUrl || ''
-          backUrl = user.kycDetails?.aadhaarBackUrl || ''
-        } else {
-          if (files.selfie) {
-            selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie)
-          }
-          if (kycOption === 'college_id') {
-            if (files.collegeId) {
-              collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId)
-            }
+        try {
+          if (user?.kycStatus === 'Verified') {
+            selfieUrl = user.kycDetails?.selfieUrl || ''
+            collegeUrl = user.kycDetails?.collegeIdUrl || ''
+            frontUrl = user.kycDetails?.aadhaarFrontUrl || ''
+            backUrl = user.kycDetails?.aadhaarBackUrl || ''
           } else {
-            if (files.aadhaarFront) {
-              frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront)
+            if (files.selfie) {
+              selfieUrl = await uploadBookingFile(`bookings/selfie/${tempId}_selfie.jpg`, files.selfie).catch(() => '')
             }
-            if (files.aadhaarBack) {
-              backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack)
+            if (kycOption === 'college_id') {
+              if (files.collegeId) {
+                collegeUrl = await uploadBookingFile(`bookings/college-id/${tempId}_college.jpg`, files.collegeId).catch(() => '')
+              }
+            } else {
+              if (files.aadhaarFront) {
+                frontUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_front.jpg`, files.aadhaarFront).catch(() => '')
+              }
+              if (files.aadhaarBack) {
+                backUrl = await uploadBookingFile(`bookings/aadhaar/${tempId}_back.jpg`, files.aadhaarBack).catch(() => '')
+              }
             }
           }
+
+          // Upload Signature
+          if (signatureData) {
+            const sigRes = await fetch(signatureData)
+            const sigBlob = await sigRes.blob()
+            const sigFile = new File([sigBlob], `signature_${tempId}.png`, { type: 'image/png' })
+            signatureUrl = await uploadBookingFile(`bookings/signatures/${tempId}_sig.png`, sigFile).catch(() => signatureData)
+          }
+
+          pdfUrl = await compilePDF(tempId).catch(() => '')
+        } catch (uploadErr) {
+          console.warn('Document storage upload notice (continuing with booking):', uploadErr)
         }
-
-        // Upload Signature
-        setStatusMessage('Uploading signature...')
-        // Convert signature base64 back to Blob file
-        const sigRes = await fetch(signatureData)
-        const sigBlob = await sigRes.blob()
-        const sigFile = new File([sigBlob], `signature_${tempId}.png`, { type: 'image/png' })
-        const signatureUrl = await uploadBookingFile(`bookings/signatures/${tempId}_sig.png`, sigFile)
-
-        setStatusMessage('Compiling Verification Agreement PDF...')
-        const pdfUrl = await compilePDF(tempId)
 
         setStatusMessage('Creating booking in system...')
         // Submit Booking details via Express MongoDB REST API first
@@ -538,76 +542,16 @@ export default function BookingFlow() {
         })
       }
 
-      setStatusMessage('Initializing Secure Checkout...')
-      
-      const isRazorpayLoaded = await loadRazorpayScript()
-      if (!isRazorpayLoaded) {
-        throw new Error('Razorpay SDK failed to load. Are you online?')
-      }
+      setStatusMessage('Booking request confirmed!')
+      toast.success('Booking request submitted successfully!')
+      setSubmitting(false)
 
-      // Create Order on Backend using real booking ID
-      const orderRes = await paymentAPI.createOrder({
-        bookingId: actualBookingId
-      })
-
-      const { order_id, amount, currency, key_id } = orderRes.data
-
-      const options = {
-        key: key_id,
-        amount: amount,
-        currency: currency,
-        name: 'LUPU Rentals',
-        description: `Booking for ${vehicle?.name}`,
-        order_id: order_id,
-        handler: async function (response) {
-          try {
-            setStatusMessage('Verifying payment...')
-            setSubmitting(true) // Re-enable loading state
-            
-            await paymentAPI.verify({
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature: response.razorpay_signature,
-              bookingId: actualBookingId
-            })
-            
-            // Navigate to Success Page
-            navigate('/payment-success', {
-              state: {
-                bookingId: actualBookingId,
-                vehicleName: vehicle?.name,
-                amount: advanceAmount,
-                transactionId: response.razorpay_payment_id
-              }
-            })
-          } catch (verifyErr) {
-            console.error('Verification Error:', verifyErr)
-            toast.error('Payment verification failed. If money was deducted, it will be refunded.')
-            setSubmitting(false)
-          }
-        },
-        prefill: {
-          name: user?.name,
-          email: user?.email,
-          contact: user?.phone || ''
-        },
-        theme: {
-          color: '#ff6b00'
+      // Navigate to My Bookings
+      navigate('/my-bookings', {
+        state: {
+          highlightBookingId: actualBookingId
         }
-      }
-
-      const rzp = new window.Razorpay(options)
-      rzp.on('payment.failed', function (response) {
-        console.error('Payment Failed:', response.error)
-        toast.error(`Payment failed: ${response.error.description}. Please try again.`)
-        setSubmitting(false)
-        setStatusMessage('')
       })
-      
-      // Open the Razorpay checkout overlay
-      rzp.open()
-      
-      // We don't navigate away or hide submitting until payment is done or closed
     } catch (err) {
       console.error(err)
       toast.error(err.response?.data?.message || err.message || 'Something went wrong. Please check your network and try again.')
@@ -1024,13 +968,13 @@ export default function BookingFlow() {
                   disabled={!termsAccepted || !authorizeVerification || !signatureData}
                   className="btn-primary w-2/3 flex items-center justify-center gap-2 py-3.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Continue to Payment <FiArrowRight />
+                  Continue to Confirmation <FiArrowRight />
                 </button>
               </div>
             </motion.div>
           )}
 
-          {/* STEP 4: ADVANCE PAYMENT & UPLOADS */}
+          {/* STEP 4: CONFIRMATION & SUBMIT */}
           {currentStep === 3 && (
             <motion.div
               key="step3"
@@ -1040,8 +984,8 @@ export default function BookingFlow() {
               transition={{ duration: 0.2 }}
               className="space-y-6"
             >
-              <h2 className="text-xl font-bold flex items-center gap-2"><FiFileText className="text-brand" /> Confirm Booking & Pay Advance</h2>
-              <p className="text-xs text-white/40">Verify the checkout details. Clicking "Pay" compiles your agreement, uploads files to storage, and notifies the owner.</p>
+              <h2 className="text-xl font-bold flex items-center gap-2"><FiFileText className="text-brand" /> Confirm Booking Request</h2>
+              <p className="text-xs text-white/40">Review the rental details. Clicking "Confirm" compiles your agreement, uploads files to storage, and notifies the vehicle owner.</p>
 
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between items-center">
@@ -1053,11 +997,11 @@ export default function BookingFlow() {
                   <span className="font-bold text-white">₹{totalAmount}</span>
                 </div>
                 <div className="flex justify-between items-center border-t border-brand/20 pt-3">
-                  <span className="text-brand font-semibold">Pay Now (30%)</span>
+                  <span className="text-brand font-semibold">Advance (30%)</span>
                   <span className="text-xl font-extrabold text-brand">₹{advanceAmount}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-white/40">Pay at Pickup (70%)</span>
+                  <span className="text-white/40">Due at Pickup (70%)</span>
                   <span className="font-medium text-white/80">₹{remainingAmount}</span>
                 </div>
               </div>
@@ -1065,7 +1009,7 @@ export default function BookingFlow() {
               <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-xs text-white/60 leading-relaxed mb-8 flex gap-3 items-start">
                 <FiAlertCircle className="text-brand text-lg shrink-0 mt-0.5" />
                 <p>
-                  The booking advance is refundable up to 24 hours before your booking start time (if booked 2+ days early). The remaining 70% payment (₹{remainingAmount}) is due at vehicle pickup directly to the owner.
+                  Online payment gateway is temporarily disabled. Your booking request will be sent directly to the vehicle owner for confirmation. Rental dues and deposits will be settled directly upon handover.
                 </p>
               </div>
 
@@ -1084,7 +1028,7 @@ export default function BookingFlow() {
                   disabled={submitting}
                   className="btn-primary w-2/3 py-3.5 flex items-center justify-center gap-2 text-base font-bold disabled:opacity-50"
                 >
-                  {submitting ? 'Processing...' : `Pay ₹${advanceAmount} & Confirm`}
+                  {submitting ? 'Processing...' : 'Confirm Booking Request'}
                 </button>
               </div>
 

@@ -1,17 +1,11 @@
-export const loadRazorpayScript = () => {
-  return new Promise((resolve) => {
-    if (window.Razorpay) {
-      resolve(true)
-      return
-    }
-    const script = document.createElement('script')
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
-    script.onload = () => {
-      resolve(true)
-    }
-    script.onerror = () => {
-      resolve(false)
-    }
-    document.body.appendChild(script)
-  })
+/**
+ * Payment Utilities
+ * Note: Payment Gateway integration (Razorpay) is temporarily disabled.
+ * To be reintegrated after project completion.
+ */
+
+export const isPaymentGatewayEnabled = false
+
+export const formatCurrency = (amount) => {
+  return `₹${Number(amount || 0).toLocaleString('en-IN')}`
 }

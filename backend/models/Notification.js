@@ -17,7 +17,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['booking', 'payment', 'vehicle', 'review', 'general'],
+      enum: ['booking', 'payment', 'vehicle', 'review', 'admin', 'reminder', 'system', 'general'],
       default: 'general',
     },
     bookingId: {
@@ -27,6 +27,10 @@ const notificationSchema = new mongoose.Schema(
     vehicleId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vehicle',
+    },
+    link: {
+      type: String,
+      default: '',
     },
     read: {
       type: Boolean,
@@ -40,3 +44,4 @@ notificationSchema.index({ userId: 1, read: 1 })
 notificationSchema.index({ createdAt: -1 })
 
 export default mongoose.model('Notification', notificationSchema)
+

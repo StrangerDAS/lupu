@@ -48,3 +48,6 @@ export const kycUpload = upload.fields([
   { name: 'governmentIdUrl', maxCount: 1 },
   { name: 'collegeIdUrl', maxCount: 1 }
 ])
+
+export const avatarUpload = upload.single('avatar')
+

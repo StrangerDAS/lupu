@@ -10,7 +10,6 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import mongoose from 'mongoose'
-import Razorpay from 'razorpay'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -25,9 +24,11 @@ import Review from './models/Review.js'
 import Report from './models/Report.js'
 import Dispute from './models/Dispute.js'
 import SOS from './models/SOS.js'
+import AuditLog from './models/AuditLog.js'
+import Ticket from './models/Ticket.js'
 import { seedDatabase } from './seed.js'
 import { attachVehicleAvailability, checkOverlap } from './utils/availability.js'
-import { kycUpload, vehicleUpload } from './middleware/uploadMiddleware.js'
+import { kycUpload, vehicleUpload, avatarUpload } from './middleware/uploadMiddleware.js'
 import { logger } from './utils/logger.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { rateLimiter } from './middleware/rateLimiter.js'
@@ -38,6 +39,16 @@ function authorize(...roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' })
     if (!roles.includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+    
+    // Strict Admin Constraint: If caller has admin role or endpoint is admin-exclusive, enforce sole admin identity
+    const isAdminRole = ['admin', 'super_admin', 'founder'].includes(req.user.role)
+    const requiresAdminOnly = roles.every(r => ['admin', 'super_admin', 'founder'].includes(r))
+    
+    if (isAdminRole || requiresAdminOnly) {
+      if (req.user.email?.toLowerCase() !== 'dasstranger421@gmail.com' || req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Forbidden: Admin access strictly restricted to platform administrator' })
+      }
+    }
     next()
   }
 }
@@ -55,16 +66,6 @@ app.use('/api/payment', paymentRoutes)
 const PORT = process.env.PORT || 5001
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lupu'
-
-let razorpay = null
-try {
-  razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID',
-    key_secret: process.env.RAZORPAY_KEY_SECRET || 'YOUR_RAZORPAY_KEY_SECRET',
-  })
-} catch (err) {
-  console.error('Failed to initialize Razorpay SDK:', err.message)
-}
 
 // ── Middleware ──────────────────────────────────────────────
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -99,9 +100,19 @@ app.use((req, _res, next) => {
 })
 
 // ── Auth Helpers ───────────────────────────────────────────
-function safeUser(u) {
+function safeUser(u, callerId = null, isAdmin = false) {
   // eslint-disable-next-line no-unused-vars
   const { password, __v, ...rest } = u
+  if (rest.payoutDetails && rest.payoutDetails.accountNumber) {
+    const rawAcc = String(rest.payoutDetails.accountNumber)
+    const isSelf = callerId && (rest._id?.toString() === callerId.toString())
+    if (!isSelf && !isAdmin) {
+      rest.payoutDetails = {
+        ...rest.payoutDetails,
+        accountNumber: `**** **** ${rawAcc.slice(-4)}`
+      }
+    }
+  }
   return rest
 }
 
@@ -140,17 +151,13 @@ app.post('/api/auth/login', verifyFirebaseToken, async (req, res, next) => {
         lastLogin: new Date()
       })
       await user.save()
+      logger.info('New user registered via Firebase sync', { userId: user._id, email: user.email })
     } else {
-      // Sync email verification status, firebaseUid, and lastLogin
-      user.firebaseUid = firebaseUser.uid
+      // Existing user: bump lastLogin
       user.lastLogin = new Date()
-      if (firebaseUser.email_verified && !user.emailVerified) {
-        user.emailVerified = true
-      }
       await user.save()
     }
 
-    // Return the MongoDB user profile
     res.json({
       message: 'Login successful',
       user: safeUser(user.toObject())
@@ -160,9 +167,18 @@ app.post('/api/auth/login', verifyFirebaseToken, async (req, res, next) => {
   }
 })
 
-// 2. Auth ME route (validate session)
-app.get('/api/auth/me', verifyFirebaseToken, requireMongoUser, (req, res) => {
-  res.json({ user: safeUser(req.user.toObject()) })
+// 2. Auth ME route (validate session & sync email verification)
+app.get('/api/auth/me', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    if (req.firebaseUser?.email_verified && !req.user.emailVerified) {
+      req.user.emailVerified = true
+      await req.user.save()
+    }
+    res.json({ user: safeUser(req.user.toObject()) })
+  } catch (err) {
+    console.error('GET /api/auth/me error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
 })
 
 // 3. Update Profile route
@@ -213,22 +229,53 @@ app.post('/api/user/activate-rider', verifyFirebaseToken, requireMongoUser, asyn
 app.get('/api/items', async (req, res) => {
   try {
     const { type } = req.query
-    if (type === 'vehicle') {
-      const vehicles = await Vehicle.find({ status: 'approved' }).lean()
-      return res.json({ items: vehicles.map(v => ({ ...v, category: 'vehicle' })) })
-    }
-    if (type === 'accessory') {
-      const accessories = await Accessory.find({ availability: true }).lean()
-      return res.json({ items: accessories.map(a => ({ ...a, category: 'accessory' })) })
-    }
-    const [vehicles, accessories] = await Promise.all([
-      Vehicle.find({ status: 'approved' }).lean(),
-      Accessory.find({ availability: true }).lean(),
-    ])
-    const items = [
-      ...vehicles.map(v => ({ ...v, category: 'vehicle' })),
-      ...accessories.map(a => ({ ...a, category: 'accessory' })),
+    const vehiclePipeline = [
+      { 
+        $match: { 
+          $or: [
+            { verificationStatus: 'approved' },
+            { status: 'approved' }
+          ],
+          isLive: true 
+        } 
+      },
+      { 
+        $lookup: {
+          from: 'bookings',
+          let: { vId: '$_id' },
+          pipeline: [
+            { 
+              $match: {
+                $expr: { $eq: ['$vehicleId', '$$vId'] },
+                status: { $in: ['pending', 'requested', 'accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed'] },
+                endTime: { $gt: new Date() }
+              }
+            },
+            { $sort: { startTime: 1 } }
+          ],
+          as: 'activeBookings'
+        }
+      }
     ]
+
+    let vehicles = []
+    let accessories = []
+
+    if (type === 'vehicle' || !type) {
+      const rawVehicles = await Vehicle.aggregate(vehiclePipeline)
+      vehicles = rawVehicles.map(v => {
+        const { activeBookings, ...vehicleData } = v
+        const withAvail = attachVehicleAvailability(vehicleData, activeBookings)
+        return { ...withAvail, category: 'vehicle' }
+      })
+    }
+
+    if (type === 'accessory' || !type) {
+      const rawAccessories = await Accessory.find({ availability: true }).lean()
+      accessories = rawAccessories.map(a => ({ ...a, category: 'accessory', currentStatus: 'Available' }))
+    }
+
+    const items = [...vehicles, ...accessories]
     res.json({ items })
   } catch (err) {
     console.error('GET /api/items error:', err)
@@ -239,10 +286,29 @@ app.get('/api/items', async (req, res) => {
 app.get('/api/items/:id', async (req, res) => {
   try {
     const { id } = req.params
-    // Try Vehicle first, then Accessory
     if (mongoose.Types.ObjectId.isValid(id)) {
-      const v = await Vehicle.findById(id).lean()
-      if (v) return res.json({ ...v, category: 'vehicle' })
+      const vehicles = await Vehicle.aggregate([
+        { $match: { _id: new mongoose.Types.ObjectId(id) } },
+        { $lookup: {
+            from: 'bookings',
+            let: { vId: '$_id' },
+            pipeline: [
+              { $match: {
+                  $expr: { $eq: ['$vehicleId', '$$vId'] },
+                  status: { $in: ['pending', 'requested', 'accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed'] },
+                  endTime: { $gt: new Date() }
+                }
+              },
+              { $sort: { startTime: 1 } }
+            ],
+            as: 'activeBookings'
+        }}
+      ])
+      if (vehicles && vehicles.length > 0) {
+        const { activeBookings, ...vehicleData } = vehicles[0]
+        const vWithAvail = attachVehicleAvailability(vehicleData, activeBookings)
+        return res.json({ ...vWithAvail, category: 'vehicle' })
+      }
       const a = await Accessory.findById(id).lean()
       if (a) return res.json({ ...a, category: 'accessory' })
     }
@@ -281,14 +347,22 @@ app.post('/api/items', verifyFirebaseToken, requireMongoUser, authorize('owner',
 app.get('/api/vehicles', async (req, res) => {
   try {
     const vehicles = await Vehicle.aggregate([
-      { $match: { verificationStatus: 'approved', isLive: true } },
+      { 
+        $match: { 
+          $or: [
+            { verificationStatus: 'approved' },
+            { status: 'approved' }
+          ],
+          isLive: true 
+        } 
+      },
       { $lookup: {
           from: 'bookings',
           let: { vId: '$_id' },
           pipeline: [
             { $match: {
                 $expr: { $eq: ['$vehicleId', '$$vId'] },
-                status: { $in: ['confirmed', 'ongoing', 'ready_for_pickup'] },
+                status: { $in: ['pending', 'requested', 'accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed'] },
                 endTime: { $gt: new Date() }
               }
             },
@@ -333,7 +407,7 @@ app.get('/api/vehicles/:id', async (req, res) => {
           pipeline: [
             { $match: {
                 $expr: { $eq: ['$vehicleId', '$$vId'] },
-                status: { $in: ['confirmed', 'ongoing', 'ready_for_pickup'] },
+                status: { $in: ['pending', 'requested', 'accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed'] },
                 endTime: { $gt: new Date() }
               }
             },
@@ -356,13 +430,20 @@ app.get('/api/vehicles/:id', async (req, res) => {
   }
 })
 
-app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin'), kycPlaceholder, vehicleUpload, async (req, res) => {
+app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin', 'user'), kycPlaceholder, vehicleUpload, async (req, res) => {
   try {
     const {
       name, brand, model, type, pricePerHour, pricePerDay, securityDeposit,
       location, description, year, fuel, transmission, helmetAvailable,
       verificationStatus
     } = req.body
+
+    // Ensure listing user is marked as owner
+    if (!req.user.isOwner || req.user.role === 'user') {
+      req.user.isOwner = true
+      if (req.user.role === 'user') req.user.role = 'owner'
+      await req.user.save()
+    }
 
     const rcFile = req.files?.['RC']?.[0]
     const insFile = req.files?.['Insurance']?.[0]
@@ -372,9 +453,14 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
     const rcUrl = rcFile ? `/uploads/${rcFile.filename}` : (req.body.RC || req.body.documents?.RC)
     const insUrl = insFile ? `/uploads/${insFile.filename}` : (req.body.Insurance || req.body.documents?.Insurance)
     const pucUrl = pucFile ? `/uploads/${pucFile.filename}` : (req.body.PUC || req.body.documents?.PUC)
-    const photoUrls = photoFiles.length > 0
-      ? photoFiles.map(f => `/uploads/${f.filename}`)
-      : (Array.isArray(req.body.photos) ? req.body.photos : (req.body.photos ? [req.body.photos] : []))
+
+    const uploadedFileUrls = photoFiles.map(f => `/uploads/${f.filename}`)
+    // bodyPhotos are the Firebase Storage https:// URLs sent as strings
+    const bodyPhotos = Array.isArray(req.body.photos)
+      ? req.body.photos.filter(p => typeof p === 'string' && p.startsWith('http'))
+      : (req.body.photos && typeof req.body.photos === 'string' && req.body.photos.startsWith('http') ? [req.body.photos] : [])
+    // Merge: prefer Firebase Storage URLs (permanent), fall back to local disk paths
+    const photoUrls = Array.from(new Set([...bodyPhotos, ...uploadedFileUrls])).filter(p => typeof p === 'string' && p.trim())
 
     const isSubmitting = verificationStatus === 'submitted' || !verificationStatus || verificationStatus === 'pending_verification'
 
@@ -389,10 +475,11 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
       if (!pucUrl) return res.status(400).json({ message: 'Pollution certificate (PUC) is required' })
       if (!pricePerHour || Number(pricePerHour) <= 0) return res.status(400).json({ message: 'Price per hour must be positive' })
       if (!description) return res.status(400).json({ message: 'Description is required' })
-      if (photoUrls.length < 3) return res.status(400).json({ message: 'Minimum 3 photos are required' })
+      if (photoUrls.length < 3) return res.status(400).json({ message: `Minimum 3 photos required (received ${photoUrls.length})` })
     }
 
     const vStatus = isSubmitting ? 'submitted' : 'draft'
+    const statusSync = isSubmitting ? 'pending_verification' : 'draft'
 
     const newVehicle = await Vehicle.create({
       name,
@@ -419,11 +506,35 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
       photos: photoUrls,
       images: photoUrls,
       verificationStatus: vStatus,
+      status: statusSync,
       submittedAt: isSubmitting ? new Date() : null,
       isLive: false,
       ownerId: req.user._id,
       owner: { name: req.user.name, rating: 0, totalTrips: 0 },
     })
+    console.log(`✅ Vehicle created: ${newVehicle._id} | owner: ${req.user.email} | photos: ${photoUrls.length}`)
+
+    // Notify owner
+    await sendNotification(req.user._id, {
+      type: 'vehicle',
+      title: 'Vehicle Submitted for Verification 📋',
+      message: `Your vehicle ${newVehicle.name} has been submitted for admin verification.`,
+      vehicleId: newVehicle._id,
+      link: '/dashboard'
+    })
+
+    // Notify admins
+    const admins = await User.find({ role: { $in: ['admin', 'super_admin', 'founder'] } })
+    for (const adm of admins) {
+      await sendNotification(adm._id, {
+        type: 'admin',
+        title: 'New Vehicle Pending Verification 🛡️',
+        message: `Vehicle ${newVehicle.name} (${newVehicle.registrationNumber}) was submitted by ${req.user.name} for verification.`,
+        vehicleId: newVehicle._id,
+        link: '/admin'
+      })
+    }
+
     res.status(201).json(newVehicle.toObject())
   } catch (err) {
     console.error('POST /api/vehicles error:', err)
@@ -434,7 +545,7 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
   }
 })
 
-app.put('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin'), vehicleUpload, async (req, res, next) => {
+app.put('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin', 'user'), vehicleUpload, async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'Vehicle not found' })
@@ -462,12 +573,9 @@ app.put('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, authorize('o
     const insUrl = insFile ? `/uploads/${insFile.filename}` : (req.body.Insurance || req.body.documents?.Insurance || vehicle.documents?.Insurance)
     const pucUrl = pucFile ? `/uploads/${pucFile.filename}` : (req.body.PUC || req.body.documents?.PUC || vehicle.documents?.PUC)
     
-    let photoUrls = []
-    if (photoFiles.length > 0) {
-      photoUrls = photoFiles.map(f => `/uploads/${f.filename}`)
-    } else {
-      photoUrls = Array.isArray(req.body.photos) ? req.body.photos : (req.body.photos ? [req.body.photos] : (vehicle.photos || []))
-    }
+    const uploadedFileUrls = photoFiles.map(f => `/uploads/${f.filename}`)
+    const bodyPhotos = Array.isArray(req.body.photos) ? req.body.photos : (req.body.photos ? [req.body.photos] : [])
+    const photoUrls = Array.from(new Set([...uploadedFileUrls, ...bodyPhotos, ...(vehicle.photos || [])])).filter(p => typeof p === 'string' && p.trim())
 
     const isSubmitting = verificationStatus === 'submitted' || (vehicle.verificationStatus === 'rejected' && verificationStatus === 'submitted')
 
@@ -637,29 +745,25 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
       return res.status(400).json({ message: 'Pickup date cannot be in the past.' })
     }
 
-    // 1. Only Approved Vehicles can be booked
+    // 1. Only Approved & LIVE Vehicles can be booked
     const vehicle = await Vehicle.findById(vehicleId)
     if (!vehicle) {
       return res.status(404).json({ message: 'Vehicle not found.' })
     }
-    if (vehicle.verificationStatus !== 'approved' || vehicle.isLive === false) {
+    const isApproved = vehicle.verificationStatus === 'approved' || vehicle.status === 'approved'
+    if (!isApproved || vehicle.isLive === false) {
       return res.status(400).json({ message: 'This vehicle is currently offline or unapproved.' })
     }
 
-    // 2. Only Verified Users can book
-    if (req.user.kycStatus !== 'verified') {
-      return res.status(400).json({ message: 'Only KYC-verified riders can request bookings. Please complete verification.' })
-    }
-
-    // 3. Owner cannot book own vehicle
+    // 2. Owner cannot book own vehicle
     if (vehicle.ownerId.toString() === req.user._id.toString()) {
       return res.status(400).json({ message: 'Owners cannot book their own vehicles.' })
     }
 
-    // 4. Overlapping Dates Check
+    // 3. Overlapping Dates Check (prevent double booking)
     const overlapping = await Booking.findOne({
       vehicleId,
-      status: { $in: ['confirmed', 'ongoing', 'ready_for_pickup'] },
+      status: { $in: ['pending', 'requested', 'accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed'] },
       startTime: { $lt: end },
       endTime: { $gt: start }
     })
@@ -680,7 +784,7 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
       renterId: req.user._id,
       startTime: start,
       endTime: end,
-      status: 'Requested',
+      status: 'pending',
       price: totalAmount,
       deposit: vehicle.securityDeposit || 0,
       duration: hours,
@@ -716,14 +820,16 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
       title: 'New Booking Request! 📅',
       message: `You have received a booking request for ${vehicle.name}.`,
       bookingId: newBooking._id,
-      vehicleId: vehicle._id
+      vehicleId: vehicle._id,
+      link: '/dashboard'
     })
     await sendNotification(req.user._id, {
       type: 'booking',
       title: 'Booking Request Submitted 🚀',
       message: `Your request for ${vehicle.name} has been sent to the owner.`,
       bookingId: newBooking._id,
-      vehicleId: vehicle._id
+      vehicleId: vehicle._id,
+      link: '/my-bookings'
     })
 
     res.status(201).json(newBooking.toObject())
@@ -805,21 +911,82 @@ app.put('/api/bookings/:id', verifyFirebaseToken, requireMongoUser, async (req, 
     // Allow partial updates of nested objects (handoverDetails, verificationDetails)
     if (req.body.handoverDetails) {
       booking.handoverDetails = {
-        ...booking.handoverDetails?.toObject(),
+        ...(booking.handoverDetails || {}),
         ...req.body.handoverDetails
       }
     }
     if (req.body.verificationDetails) {
       booking.verificationDetails = {
-        ...booking.verificationDetails?.toObject(),
+        ...(booking.verificationDetails || {}),
         ...req.body.verificationDetails
       }
     }
+
+    const previousStatus = booking.status
     if (req.body.status) {
-      booking.status = req.body.status
+      const raw = (req.body.status || '').toLowerCase().trim()
+      const statusMap = {
+        pending: 'pending',
+        requested: 'pending',
+        accepted: 'accepted',
+        approved: 'accepted',
+        active: 'active',
+        ongoing: 'active',
+        ready_for_pickup: 'active',
+        confirmed: 'active',
+        completed: 'completed',
+        returned: 'completed',
+        rejected: 'rejected',
+        cancelled: 'cancelled',
+      }
+      const targetStatus = statusMap[raw] || raw
+      if (['accepted', 'rejected', 'completed'].includes(targetStatus) && !isOwner && !isAdmin) {
+        return res.status(403).json({ message: 'Only the vehicle owner or admin can update to this status.' })
+      }
+      booking.status = targetStatus
     }
 
     await booking.save()
+
+    // Trigger status transition notifications if status changed
+    if (booking.status !== previousStatus) {
+      if (booking.status === 'active') {
+        await sendNotification(booking.renterId, {
+          type: 'booking',
+          title: 'Rental Active! 🏍️',
+          message: `Your rental for ${booking.vehicleName} is now active. Enjoy your ride!`,
+          bookingId: booking._id,
+          vehicleId: booking.vehicleId,
+          link: '/my-bookings'
+        })
+        await sendNotification(booking.ownerId, {
+          type: 'booking',
+          title: 'Rental Started 🟢',
+          message: `Booking for ${booking.vehicleName} is now active and ongoing.`,
+          bookingId: booking._id,
+          vehicleId: booking.vehicleId,
+          link: '/dashboard'
+        })
+      } else if (booking.status === 'completed') {
+        await sendNotification(booking.renterId, {
+          type: 'booking',
+          title: 'Rental Completed! ✅',
+          message: `Your rental for ${booking.vehicleName} is marked complete. Thank you for riding with LUPU!`,
+          bookingId: booking._id,
+          vehicleId: booking.vehicleId,
+          link: '/my-bookings'
+        })
+        await sendNotification(booking.ownerId, {
+          type: 'booking',
+          title: 'Vehicle Returned & Completed! 💰',
+          message: `Rental for ${booking.vehicleName} has been completed and returned.`,
+          bookingId: booking._id,
+          vehicleId: booking.vehicleId,
+          link: '/dashboard'
+        })
+      }
+    }
+
     res.json(booking.toObject())
   } catch (err) {
     next(err)
@@ -828,20 +995,24 @@ app.put('/api/bookings/:id', verifyFirebaseToken, requireMongoUser, async (req, 
 
 app.patch('/api/bookings/:id/status', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const { status } = req.body
-    const allowed = [
-      'Requested',
-      'Accepted',
-      'Rejected',
-      'Confirmed',
-      'Picked Up',
-      'In Progress',
-      'Returned',
-      'Completed',
-      'Cancelled'
-    ]
+    const rawStatus = (req.body.status || '').toLowerCase().trim()
+    const statusMap = {
+      pending: 'pending',
+      requested: 'pending',
+      accepted: 'accepted',
+      approved: 'accepted',
+      active: 'active',
+      ongoing: 'active',
+      ready_for_pickup: 'active',
+      confirmed: 'active',
+      completed: 'completed',
+      returned: 'completed',
+      rejected: 'rejected',
+      cancelled: 'cancelled',
+    }
 
-    if (!status || !allowed.includes(status)) {
+    const status = statusMap[rawStatus]
+    if (!status) {
       return res.status(400).json({ message: 'Invalid or missing status' })
     }
 
@@ -854,41 +1025,35 @@ app.patch('/api/bookings/:id/status', verifyFirebaseToken, requireMongoUser, asy
 
     const isRenter = booking.renterId?.toString() === req.user._id.toString()
     const isOwner = booking.ownerId?.toString() === req.user._id.toString()
-    const isAdmin = req.user.role === 'admin'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
 
     // Status transition gates and authorization rules
-    if (status === 'Accepted' || status === 'Rejected') {
+    if (['accepted', 'rejected', 'active', 'completed'].includes(status)) {
       if (!isOwner && !isAdmin) {
-        return res.status(403).json({ message: 'Only the vehicle owner can accept or reject booking requests.' })
+        return res.status(403).json({ message: 'Only the vehicle owner or admin can update this booking status.' })
       }
     }
 
-    if (status === 'Cancelled') {
+    if (status === 'cancelled') {
       if (!isRenter && !isOwner && !isAdmin) {
         return res.status(403).json({ message: 'You are not authorized to cancel this booking.' })
       }
     }
 
     // Late Return Calculation
-    if (status === 'Returned' || status === 'Completed') {
+    if (status === 'completed') {
       const now = new Date()
       const end = new Date(booking.endTime)
       const diffMs = now - end
       if (diffMs > 0) {
         const diffMins = Math.floor(diffMs / (1000 * 60))
         if (diffMins > 15) { // past 15 min grace period
-          let lateHours = 0
-          if (diffMins <= 60) {
-            lateHours = 1
-          } else {
-            lateHours = Math.ceil(diffMins / 60)
-          }
-          
+          const lateHours = diffMins <= 60 ? 1 : Math.ceil(diffMins / 60)
           const vehicle = await Vehicle.findById(booking.vehicleId)
           if (vehicle) {
             const lateCharge = lateHours * vehicle.pricePerHour
             booking.lateReturnInfo = { lateHours, lateCharge }
-            booking.remainingAmount += lateCharge // Owner receives late charge directly
+            booking.remainingAmount += lateCharge
           }
         }
       }
@@ -898,27 +1063,60 @@ app.patch('/api/bookings/:id/status', verifyFirebaseToken, requireMongoUser, asy
     await booking.save()
 
     // Trigger status transition notifications
-    if (status === 'Accepted') {
+    if (status === 'accepted') {
       await sendNotification(booking.renterId, {
         type: 'booking',
         title: 'Booking Accepted! 🎉',
-        message: `Your request for ${booking.vehicleName} has been approved by the owner. Please complete the advance payment.`,
-        bookingId: booking._id
+        message: `Your booking request for ${booking.vehicleName} has been accepted by the owner.`,
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        link: '/my-bookings'
       })
-    } else if (status === 'Rejected') {
+    } else if (status === 'rejected') {
       await sendNotification(booking.renterId, {
         type: 'booking',
         title: 'Booking Request Rejected ❌',
-        message: `Your request for ${booking.vehicleName} was rejected.`,
-        bookingId: booking._id
+        message: `Your booking request for ${booking.vehicleName} was rejected by the owner.`,
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        link: '/my-bookings'
       })
     } else if (status === 'cancelled') {
       const recipientId = req.user._id.toString() === booking.renterId.toString() ? booking.ownerId : booking.renterId
+      const targetLink = req.user._id.toString() === booking.renterId.toString() ? '/dashboard' : '/my-bookings'
       await sendNotification(recipientId, {
         type: 'booking',
         title: 'Booking Cancelled ⚠️',
         message: `The booking for ${booking.vehicleName} has been cancelled.`,
-        bookingId: booking._id
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        link: targetLink
+      })
+    } else if (status === 'active') {
+      await sendNotification(booking.renterId, {
+        type: 'booking',
+        title: 'Rental Active! 🏍️',
+        message: `Your rental for ${booking.vehicleName} is now active. Enjoy your ride!`,
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        link: '/my-bookings'
+      })
+    } else if (status === 'completed') {
+      await sendNotification(booking.renterId, {
+        type: 'booking',
+        title: 'Rental Completed! ✅',
+        message: `Your rental for ${booking.vehicleName} is marked complete. Thank you for riding with LUPU!`,
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        link: '/my-bookings'
+      })
+      await sendNotification(booking.ownerId, {
+        type: 'booking',
+        title: 'Vehicle Returned & Completed! 💰',
+        message: `Rental for ${booking.vehicleName} has been completed and returned.`,
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        link: '/dashboard'
       })
     }
 
@@ -946,6 +1144,18 @@ app.patch('/api/bookings/:id/cancel', verifyFirebaseToken, requireMongoUser, asy
 
     booking.status = 'cancelled'
     await booking.save()
+
+    const recipientId = req.user._id.toString() === booking.renterId.toString() ? booking.ownerId : booking.renterId
+    const targetLink = req.user._id.toString() === booking.renterId.toString() ? '/dashboard' : '/my-bookings'
+    await sendNotification(recipientId, {
+      type: 'booking',
+      title: 'Booking Cancelled ⚠️',
+      message: `The booking for ${booking.vehicleName} has been cancelled.`,
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      link: targetLink
+    })
+
     res.json(booking.toObject())
   } catch (err) {
     next(err)
@@ -955,20 +1165,36 @@ app.patch('/api/bookings/:id/cancel', verifyFirebaseToken, requireMongoUser, asy
 // ── User Routes ────────────────────────────────────────────
 
 app.get('/api/users/profile', verifyFirebaseToken, requireMongoUser, (req, res) => {
-  res.json(safeUser(req.user.toObject()))
+  res.json({ user: safeUser(req.user.toObject()) })
 })
 
-app.put('/api/users/profile', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+app.put('/api/users/profile', verifyFirebaseToken, requireMongoUser, avatarUpload, async (req, res) => {
   try {
-    const { name, email, phone, avatar, college, address, notificationPreferences } = req.body
+    const { name, email, phone, college, address } = req.body
+    let { avatar, notificationPreferences } = req.body
+
+    if (req.file) {
+      avatar = `/uploads/${req.file.filename}`
+    }
+
+    if (typeof notificationPreferences === 'string') {
+      try {
+        notificationPreferences = JSON.parse(notificationPreferences)
+      } catch (e) {
+        // ignore invalid JSON
+      }
+    }
+
     const updates = {}
-    if (name !== undefined) updates.name = name
-    if (email !== undefined) updates.email = email
-    if (phone !== undefined) updates.phone = phone
+    if (name !== undefined && name.trim()) updates.name = name.trim()
+    if (email !== undefined && email.trim()) updates.email = email.trim()
+    if (phone !== undefined) updates.phone = phone.trim()
     if (avatar !== undefined) updates.avatar = avatar
     if (college !== undefined) updates.college = college
     if (address !== undefined) updates.address = address
-    if (notificationPreferences !== undefined) updates.notificationPreferences = notificationPreferences
+    if (notificationPreferences !== undefined && typeof notificationPreferences === 'object') {
+      updates.notificationPreferences = notificationPreferences
+    }
 
     const updated = await User.findByIdAndUpdate(req.user._id, updates, {
       new: true,
@@ -1028,18 +1254,53 @@ app.get('/api/users', verifyFirebaseToken, requireMongoUser, authorize('admin', 
   }
 })
 
+// Helper to record administrative actions into immutable AuditLog
+async function logAdminAction(adminUser, actionType, affectedRecord, notes = '', details = {}) {
+  try {
+    if (!adminUser) return null
+    return await AuditLog.create({
+      adminId: adminUser._id,
+      adminName: adminUser.name || 'Platform Administrator',
+      adminEmail: adminUser.email || '',
+      actionType,
+      affectedRecord,
+      notes,
+      details
+    })
+  } catch (err) {
+    console.error('Failed to write audit log:', err)
+    return null
+  }
+}
+
 app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
     }
-    const updated = await User.findByIdAndUpdate(
-      req.params.id,
-      { role: req.body.role },
-      { new: true, runValidators: true, lean: true }
+    const targetUser = await User.findById(req.params.id)
+    if (!targetUser) return res.status(404).json({ message: 'User not found' })
+
+    const newRole = req.body.role
+    // Enforce Admin Invariant: NO other email can be promoted to admin/super_admin/founder
+    if (['admin', 'super_admin', 'founder'].includes(newRole)) {
+      if (targetUser.email?.toLowerCase() !== 'dasstranger421@gmail.com') {
+        return res.status(403).json({ message: 'Forbidden: Cannot promote user to admin. Admin privileges are strictly restricted.' })
+      }
+    }
+
+    targetUser.role = newRole
+    if (newRole === 'owner') targetUser.isOwner = true
+    await targetUser.save()
+
+    await logAdminAction(
+      req.user,
+      'update_role',
+      { collectionName: 'users', docId: targetUser._id.toString(), name: targetUser.name },
+      `Changed role to ${newRole}`
     )
-    if (!updated) return res.status(404).json({ message: 'User not found' })
-    res.json(safeUser(updated))
+
+    res.json(safeUser(targetUser.toObject()))
   } catch (err) {
     console.error('PATCH /api/users/:id/role error:', err)
     res.status(500).json({ message: 'Internal server error' })
@@ -1051,8 +1312,22 @@ app.delete('/api/users/:id', verifyFirebaseToken, requireMongoUser, authorize('a
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
     }
-    const deleted = await User.findByIdAndDelete(req.params.id)
-    if (!deleted) return res.status(404).json({ message: 'User not found' })
+    const targetUser = await User.findById(req.params.id)
+    if (!targetUser) return res.status(404).json({ message: 'User not found' })
+
+    if (targetUser.email?.toLowerCase() === 'dasstranger421@gmail.com') {
+      return res.status(403).json({ message: 'Cannot delete primary platform administrator' })
+    }
+
+    await User.findByIdAndDelete(req.params.id)
+
+    await logAdminAction(
+      req.user,
+      'delete_user',
+      { collectionName: 'users', docId: targetUser._id.toString(), name: targetUser.name },
+      `Deleted user account ${targetUser.email}`
+    )
+
     res.json({ message: 'User deleted' })
   } catch (err) {
     console.error('DELETE /api/users/:id error:', err)
@@ -1072,6 +1347,22 @@ app.patch('/api/admin/users/:id/kyc', verifyFirebaseToken, requireMongoUser, aut
     
     const updated = await User.findByIdAndUpdate(req.params.id, updates, { new: true, lean: true })
     if (!updated) return res.status(404).json({ message: 'User not found' })
+
+    await logAdminAction(
+      req.user,
+      `kyc_${status}`,
+      { collectionName: 'users', docId: updated._id.toString(), name: updated.name },
+      status === 'rejected' ? `Rejected KYC: ${reason}` : 'Approved KYC verification'
+    )
+
+    // Notify user of KYC decision
+    await sendNotification(updated._id, {
+      type: 'general',
+      title: status === 'verified' ? 'KYC Verified! ✅' : 'KYC Verification Update ⚠️',
+      message: status === 'verified' ? 'Your identity verification has been approved.' : `Your KYC was rejected. Reason: ${reason || 'Document mismatch'}`,
+      link: '/profile'
+    })
+
     res.json({ message: `KYC ${status}`, user: safeUser(updated) })
   } catch (err) {
     console.error('Admin KYC update error:', err)
@@ -1085,9 +1376,19 @@ app.get('/api/admin/stats', verifyFirebaseToken, requireMongoUser, authorize('ad
   try {
     const [totalUsers, totalVehicles, totalBookings, pendingListings] = await Promise.all([
       User.countDocuments(),
-      Vehicle.countDocuments({ verificationStatus: 'approved' }),
+      Vehicle.countDocuments({
+        $or: [
+          { verificationStatus: 'approved' },
+          { status: 'approved' }
+        ]
+      }),
       Booking.countDocuments(),
-      Vehicle.countDocuments({ verificationStatus: { $in: ['submitted', 'under_review'] } }),
+      Vehicle.countDocuments({
+        $or: [
+          { verificationStatus: { $in: ['submitted', 'under_review', 'pending_verification'] } },
+          { status: { $in: ['pending_verification', 'under_review', 'submitted'] } }
+        ]
+      }),
     ])
     res.json({ users: totalUsers, vehicles: totalVehicles, bookings: totalBookings, pendingListings })
   } catch (err) {
@@ -1099,8 +1400,11 @@ app.get('/api/admin/stats', verifyFirebaseToken, requireMongoUser, authorize('ad
 app.get('/api/admin/vehicles/pending', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
     const vehicles = await Vehicle.find({
-      verificationStatus: { $in: ['submitted', 'under_review'] }
-    }).lean()
+      $or: [
+        { verificationStatus: { $in: ['submitted', 'under_review', 'pending_verification'] } },
+        { status: { $in: ['pending_verification', 'under_review', 'submitted'] } }
+      ]
+    }).sort({ createdAt: -1 }).lean()
     res.json({ vehicles })
   } catch (err) {
     console.error('GET /api/admin/vehicles/pending error:', err)
@@ -1110,7 +1414,7 @@ app.get('/api/admin/vehicles/pending', verifyFirebaseToken, requireMongoUser, au
 
 app.get('/api/admin/vehicles', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
-    const vehicles = await Vehicle.find().lean()
+    const vehicles = await Vehicle.find().sort({ createdAt: -1 }).lean()
     res.json({ vehicles })
   } catch (err) {
     console.error('GET /api/admin/vehicles error:', err)
@@ -1127,17 +1431,37 @@ app.patch('/api/admin/vehicles/:id/approve', verifyFirebaseToken, requireMongoUs
     const v = await Vehicle.findByIdAndUpdate(
       req.params.id,
       {
-        verificationStatus: 'approved',
-        status: 'approved',
-        verifiedBy: req.user._id,
-        verifiedAt: new Date(),
-        adminNotes: adminNotes || '',
-        rejectionReason: null,
-        isLive: true
+        $set: {
+          verificationStatus: 'approved',
+          status: 'approved',
+          verifiedBy: req.user._id,
+          verifiedAt: new Date(),
+          adminNotes: adminNotes || '',
+          rejectionReason: null,
+          isLive: true
+        }
       },
       { new: true, lean: true }
     )
     if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+    console.log(`✅ Admin approved vehicle: ${v.name} (${v._id}) -> LIVE`)
+
+    await logAdminAction(
+      req.user,
+      'approve_vehicle',
+      { collectionName: 'vehicles', docId: v._id.toString(), name: v.name },
+      adminNotes || 'Vehicle listing approved and published live'
+    )
+
+    // Notify vehicle owner
+    await sendNotification(v.ownerId, {
+      type: 'vehicle',
+      title: 'Vehicle Approved & Live! 🎉',
+      message: `Your vehicle ${v.name} has been approved by admin and is now live in Explore Rentals.`,
+      vehicleId: v._id,
+      link: '/dashboard'
+    })
+
     res.json(v)
   } catch (err) {
     console.error('PATCH approve error:', err)
@@ -1166,6 +1490,23 @@ app.patch('/api/admin/vehicles/:id/reject', verifyFirebaseToken, requireMongoUse
       { new: true, lean: true }
     )
     if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+
+    await logAdminAction(
+      req.user,
+      'reject_vehicle',
+      { collectionName: 'vehicles', docId: v._id.toString(), name: v.name },
+      `Reason: ${reason}. Notes: ${adminNotes || 'None'}`
+    )
+
+    // Notify vehicle owner
+    await sendNotification(v.ownerId, {
+      type: 'vehicle',
+      title: 'Vehicle Listing Rejected ❌',
+      message: `Your vehicle ${v.name} was rejected by admin. Reason: ${reason}`,
+      vehicleId: v._id,
+      link: '/dashboard'
+    })
+
     res.json(v)
   } catch (err) {
     console.error('PATCH reject error:', err)
@@ -1193,6 +1534,23 @@ app.patch('/api/admin/vehicles/:id/request-changes', verifyFirebaseToken, requir
       { new: true, lean: true }
     )
     if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+
+    await logAdminAction(
+      req.user,
+      'request_changes',
+      { collectionName: 'vehicles', docId: v._id.toString(), name: v.name },
+      `Changes requested: ${adminNotes}`
+    )
+
+    // Notify vehicle owner
+    await sendNotification(v.ownerId, {
+      type: 'vehicle',
+      title: 'Action Required on Vehicle ⚠️',
+      message: `Admin requested changes for ${v.name}: ${adminNotes}`,
+      vehicleId: v._id,
+      link: '/dashboard'
+    })
+
     res.json(v)
   } catch (err) {
     console.error('PATCH request-changes error:', err)
@@ -1200,238 +1558,181 @@ app.patch('/api/admin/vehicles/:id/request-changes', verifyFirebaseToken, requir
   }
 })
 
-// ── Razorpay Payment Order Creation ────────────────────────
+// ── Owner Payout Details (Get & Update) ─────────────────────
 
-// ── Payment & Escrow Routes ─────────────────────────────────
-
-import crypto from 'crypto'
-
-app.post('/api/payments/create-order', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  const { bookingId, type } = req.body
-  if (!bookingId || !type) {
-    return res.status(400).json({ message: 'bookingId and type (advance or final) are required' })
-  }
+app.get('/api/user/payout-details', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const booking = await Booking.findById(bookingId)
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' })
-    }
-
-    // Verify requester matches renter on booking record
-    if (booking.renterId.toString() !== req.user._id.toString() && !['admin', 'super_admin', 'founder'].includes(req.user.role)) {
-      return res.status(403).json({ message: 'Forbidden: not your booking' })
-    }
-
-    const rentalAmount = booking.rentalAmount || booking.price
-    const advanceAmount = booking.advanceAmount
-    const remainingAmount = booking.remainingAmount
-    
-    let amount = 0
-    if (type === 'advance') {
-      amount = advanceAmount // Contains 30% advance + 100% booking fee
-    } else if (type === 'final') {
-      amount = remainingAmount
-    } else {
-      return res.status(400).json({ message: 'Invalid payment type. Must be advance or final.' })
-    }
-
-    const keyId = process.env.RAZORPAY_KEY_ID || ''
-    if (!razorpay || !keyId || keyId.startsWith('YOUR_') || keyId === '') {
-      // Mock order generation for local development/testing
-      const mockOrder = {
-        id: `order_mock_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-        entity: 'order',
-        amount: Math.round(amount * 100),
-        amount_paid: 0,
-        amount_due: Math.round(amount * 100),
-        currency: 'INR',
-        receipt: `rcpt_${bookingId}_${type}`,
-        status: 'created',
-        attempts: 0,
-        notes: { bookingId, type },
-        created_at: Math.floor(Date.now() / 1000),
-        isMock: true,
+    const user = await User.findById(req.user._id).select('payoutDetails isOwner').lean()
+    if (!user) return res.status(404).json({ message: 'User not found' })
+    const details = user.payoutDetails || {}
+    res.json({
+      success: true,
+      payoutDetails: {
+        ...details,
+        accountNumber: details.accountNumber ? `**** **** ${String(details.accountNumber).slice(-4)}` : null,
+        isVerified: details.isVerified || false
       }
-      return res.status(200).json(mockOrder)
-    }
-
-    const options = {
-      amount: Math.round(amount * 100), // convert to paise
-      currency: 'INR',
-      receipt: `rcpt_${bookingId}_${type}`,
-      notes: { bookingId, type },
-    }
-    const order = await razorpay.orders.create(options)
-    res.status(200).json(order)
+    })
   } catch (err) {
     next(err)
   }
 })
 
-app.post('/api/payments/verify', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  const { bookingId, type, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body
-  
-  if (!bookingId || !type || !razorpayOrderId || !razorpayPaymentId) {
-    return res.status(400).json({ message: 'Missing payment signature verification details' })
-  }
-
+app.put('/api/user/payout-details', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
+    const { upiId, accountHolderName, accountNumber, ifscCode, bankName } = req.body
+
+    const user = await User.findById(req.user._id)
+    if (!user) return res.status(404).json({ message: 'User not found' })
+
+    const updatedPayout = {
+      upiId: upiId ? upiId.trim() : (user.payoutDetails?.upiId || null),
+      accountHolderName: accountHolderName ? accountHolderName.trim() : (user.payoutDetails?.accountHolderName || null),
+      accountNumber: accountNumber ? accountNumber.trim() : (user.payoutDetails?.accountNumber || null),
+      ifscCode: ifscCode ? ifscCode.trim().toUpperCase() : (user.payoutDetails?.ifscCode || null),
+      bankName: bankName ? bankName.trim() : (user.payoutDetails?.bankName || null),
+      isVerified: user.payoutDetails?.isVerified || false
+    }
+
+    user.payoutDetails = updatedPayout
+    await user.save()
+
+    res.json({
+      success: true,
+      message: 'Payout details saved securely',
+      payoutDetails: {
+        ...updatedPayout,
+        accountNumber: updatedPayout.accountNumber ? `**** **** ${String(updatedPayout.accountNumber).slice(-4)}` : null
+      }
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Owner Earnings & Financial Analytics ────────────────────
+
+app.get('/api/payments/owner/earnings', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const completedBookings = await Booking.find({
+      ownerId: req.user._id,
+      status: 'completed'
+    }).lean()
+
+    const totalEarnings = completedBookings.reduce((sum, b) => sum + (b.rentalAmount || b.price || 0), 0)
+    const completedTrips = completedBookings.length
+
+    const paymentRecords = await Payment.find({
+      ownerId: req.user._id
+    }).sort({ createdAt: -1 }).lean()
+
+    res.json({
+      success: true,
+      totalEarnings,
+      completedTrips,
+      pendingPayouts: totalEarnings, // automatic payout is OFF for now
+      platformCommission: 0, // commission = 0 for now
+      paymentRecords
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Payment & Financial Records Endpoints ───────────────────
+
+// Gateway status placeholder (Gateway is OFF; bookings confirm directly)
+app.post('/api/payments/create-order', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  return res.status(200).json({
+    message: 'Online payment gateway is temporarily disabled. Bookings are confirmed directly with zero commission.',
+    status: 'not_integrated'
+  })
+})
+
+app.post('/api/payments/verify', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  return res.status(200).json({
+    message: 'Online payment gateway verification is temporarily disabled.',
+    status: 'not_integrated'
+  })
+})
+
+// Create financial payment record in pending state
+app.post('/api/payments/records', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { bookingId, rentalAmount, securityDeposit } = req.body
+    if (!bookingId) {
+      return res.status(400).json({ message: 'bookingId is required' })
+    }
+
     const booking = await Booking.findById(bookingId)
     if (!booking) {
       return res.status(404).json({ message: 'Booking not found' })
     }
 
-    // 1. Signature Verification
-    const keyId = process.env.RAZORPAY_KEY_ID || ''
-    const isMock = razorpayOrderId.startsWith('order_mock_') || !keyId || keyId.startsWith('YOUR_')
+    const isRenter = (booking.userId || booking.renterId)?.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
 
-    if (!isMock) {
-      if (!razorpaySignature) {
-        return res.status(400).json({ message: 'razorpaySignature is required' })
-      }
-      const generated = crypto
-        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-        .update(`${razorpayOrderId}|${razorpayPaymentId}`)
-        .digest('hex')
-
-      if (generated !== razorpaySignature) {
-        await sendNotification(booking.renterId, {
-          type: 'payment',
-          title: 'Payment Verification Failed ❌',
-          message: `Your payment verification for ${booking.vehicleName} failed due to signature mismatch.`,
-          bookingId: booking._id
-        })
-        return res.status(400).json({ message: 'Payment verification failed: Signature mismatch' })
-      }
+    if (!isRenter && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: You cannot create financial records for this booking' })
     }
 
-    // 2. Compute final amount allocations
-    const rentalAmount = booking.rentalAmount || booking.price
-    const advanceAmount = booking.advanceAmount
-    const remainingAmount = booking.remainingAmount
+    const rentAmt = Number(rentalAmount !== undefined ? rentalAmount : (booking.rentalAmount || booking.price || 0))
+    const secDep = Number(securityDeposit !== undefined ? securityDeposit : (booking.deposit || 0))
+    const totalAmt = rentAmt + secDep
+    const txId = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
-    let finalAmount = 0
-    let platformFee = 0
-    let ownerShare = 0
-
-    if (type === 'advance') {
-      finalAmount = advanceAmount
-      platformFee = 0 // Removed for Beta
-      ownerShare = advanceAmount
-    } else {
-      finalAmount = remainingAmount
-      platformFee = 0
-      ownerShare = remainingAmount
-    }
-
-    // 3. Prevent duplicate payment recordings
-    const existing = await Payment.findOne({ transactionId: razorpayPaymentId })
-    if (existing) {
-      return res.status(200).json({ success: true, message: 'Payment already verified and registered', payment: existing })
-    }
-
-    // 4. Create Payment Record
+    // Payment record is ALWAYS created as pending — cannot be marked as paid by client
     const payment = await Payment.create({
       bookingId: booking._id,
-      renterId: booking.renterId,
+      vehicleId: booking.vehicleId,
+      renterId: booking.userId || booking.renterId,
       ownerId: booking.ownerId,
-      amount: finalAmount,
-      type,
-      status: 'success',
-      razorpayOrderId,
-      razorpayPaymentId,
-      razorpaySignature,
-      platformFee,
-      ownerShare,
-      transactionId: razorpayPaymentId
+      rentalAmount: rentAmt,
+      securityDeposit: secDep,
+      platformFee: 0, // Commission = 0 for now
+      ownerPayoutAmount: rentAmt,
+      amount: totalAmt,
+      currency: 'INR',
+      status: 'pending',
+      paymentMethod: 'none',
+      transactionId: txId,
+      payoutStatus: 'unsettled'
     })
 
-    // 5. Update Booking Status
-    if (type === 'advance') {
-      booking.status = 'Confirmed'
-      booking.paymentStatus = 'Paid'
-      // By default, ownerPaymentStatus is 'Pending Pickup'
-    } else if (type === 'final') {
-      booking.status = 'Completed'
-    }
-    await booking.save()
-
-    // Trigger payment success notifications
-    await sendNotification(booking.renterId, {
-      type: 'payment',
-      title: 'Payment Successful! ✅',
-      message: `Your ${type} payment of ₹${finalAmount} for ${booking.vehicleName} was verified.`,
-      bookingId: booking._id
-    })
-    await sendNotification(booking.ownerId, {
-      type: 'payment',
-      title: 'Payment Received! 💰',
-      message: `Payment of ₹${finalAmount} for ${booking.vehicleName} was credited to platform escrow.`,
-      bookingId: booking._id
-    })
-
-    res.status(200).json({
-      success: true,
-      message: 'Payment verified and captured successfully',
-      payment
-    })
+    res.status(201).json({ success: true, payment })
   } catch (err) {
     next(err)
   }
 })
 
-app.post('/api/payments/:id/refund', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+// Booking payments inquiry
+app.get('/api/payments/booking/:bookingId', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const payment = await Payment.findById(req.params.id)
-    if (!payment) {
-      return res.status(404).json({ message: 'Payment not found' })
+    const booking = await Booking.findById(req.params.bookingId)
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
+
+    const isRenter = (booking.userId || booking.renterId)?.toString() === req.user._id.toString()
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+
+    if (!isRenter && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: You cannot access payment details for this booking' })
     }
 
-    // Verify authorized user (only owner or admin can trigger refunds)
-    const isOwner = payment.ownerId.toString() === req.user._id.toString()
-    const isAdmin = req.user.role === 'admin'
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Only owner or admin can initiate refunds' })
-    }
-
-    if (payment.status === 'refunded') {
-      return res.status(400).json({ message: 'Payment is already refunded' })
-    }
-
-    // Create refund transaction log
-    const refundTxId = `ref_mock_${Date.now()}`
-    await Payment.create({
-      bookingId: payment.bookingId,
-      renterId: payment.renterId,
-      ownerId: payment.ownerId,
-      amount: payment.amount,
-      type: 'refund',
-      status: 'success',
-      transactionId: refundTxId,
-      platformFee: 0,
-      ownerShare: 0
-    })
-
-    payment.status = 'refunded'
-    await payment.save()
-
-    // Cancel the booking status
-    const booking = await Booking.findById(payment.bookingId)
-    if (booking) {
-      booking.status = 'cancelled'
-      await booking.save()
-    }
-
-    res.json({ success: true, message: 'Refund processed successfully', payment })
+    const payments = await Payment.find({ bookingId: req.params.bookingId }).sort({ createdAt: -1 }).lean()
+    res.json({ success: true, payments })
   } catch (err) {
     next(err)
   }
 })
 
+// Payment history (Caller's transactions or all if admin)
 app.get('/api/payments/history', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
     let query = {}
-    if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+    if (!isAdmin) {
       query = {
         $or: [
           { renterId: req.user._id },
@@ -1441,8 +1742,53 @@ app.get('/api/payments/history', verifyFirebaseToken, requireMongoUser, async (r
     }
     const history = await Payment.find(query)
       .sort({ createdAt: -1 })
+      .populate('bookingId', 'vehicleName startTime endTime status')
       .lean()
     res.json({ history })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Admin Financial Endpoints ───────────────────────────────
+
+app.get('/api/admin/financials/stats', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const allBookings = await Booking.find({ status: { $ne: 'cancelled' } }).lean()
+    const allPayments = await Payment.find().lean()
+
+    const totalVolume = allBookings.reduce((sum, b) => sum + (b.price || b.rentalAmount || 0) + (b.deposit || 0), 0)
+    const totalRentalAmount = allBookings.reduce((sum, b) => sum + (b.price || b.rentalAmount || 0), 0)
+    const totalSecurityDeposits = allBookings.reduce((sum, b) => sum + (b.deposit || 0), 0)
+    const totalPlatformCommission = 0 // Commission is 0 for now
+    const totalOwnerPayouts = totalRentalAmount
+
+    res.json({
+      success: true,
+      stats: {
+        totalVolume,
+        totalRentalAmount,
+        totalSecurityDeposits,
+        totalPlatformCommission,
+        totalOwnerPayouts,
+        totalTransactions: allPayments.length,
+        pendingSettlementsCount: allPayments.filter(p => p.payoutStatus === 'unsettled').length
+      }
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/financials/transactions', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const transactions = await Payment.find()
+      .sort({ createdAt: -1 })
+      .populate('renterId', 'name email')
+      .populate('ownerId', 'name email')
+      .populate('vehicleId', 'name brand model')
+      .lean()
+    res.json({ success: true, transactions })
   } catch (err) {
     next(err)
   }
@@ -1554,30 +1900,30 @@ async function sendEmailBackend(to, subject, content) {
   }
 }
 
-async function sendNotification(userId, { type, title, message, bookingId, vehicleId }) {
+async function sendNotification(userId, { type, title, message, bookingId, vehicleId, link }) {
   try {
-    await Notification.create({
+    if (!userId) return null
+    const notif = await Notification.create({
       userId,
       title,
       message,
-      type,
-      bookingId,
-      vehicleId
+      type: type || 'general',
+      bookingId: bookingId || undefined,
+      vehicleId: vehicleId || undefined,
+      link: link || ''
     })
 
     const user = await User.findById(userId)
-    if (user) {
-      // 1. In-App: Stored above in MongoDB
-      // 2. Email: simulated email collection
+    if (user && user.email) {
       await sendEmailBackend(user.email, title, message)
-
-      // 3. SMS & WhatsApp stubs (Design for future SMS/WhatsApp support)
       if (user.phone) {
         console.log(`[SMS/WhatsApp STUB] Phone: ${user.phone} | Content: ${title} - ${message}`)
       }
     }
+    return notif
   } catch (err) {
     console.error('Failed to dispatch notification:', err)
+    return null
   }
 }
 
@@ -1586,37 +1932,41 @@ setInterval(async () => {
   try {
     const now = new Date()
 
-    // 1. Pickup Reminders (status is confirmed and starts in <= 2 hours)
+    // 1. Pickup Reminders (status is active or accepted and starts in <= 2 hours)
     const pickupWindow = new Date(now.getTime() + 2 * 60 * 60 * 1000)
     const bookingsForPickup = await Booking.find({
-      status: 'confirmed',
+      status: { $in: ['accepted', 'confirmed'] },
       startTime: { $gte: now, $lte: pickupWindow },
       pickupReminderSent: { $ne: true }
     })
     for (const b of bookingsForPickup) {
       await sendNotification(b.renterId, {
-        type: 'booking',
+        type: 'reminder',
         title: 'Pickup Reminder 🔑',
         message: `Your ride for ${b.vehicleName} starts soon. Please prepare for pickup check.`,
-        bookingId: b._id
+        bookingId: b._id,
+        vehicleId: b.vehicleId,
+        link: '/my-bookings'
       })
       b.pickupReminderSent = true
       await b.save()
     }
 
-    // 2. Return Reminders (status is ongoing and ends in <= 1 hour)
+    // 2. Return Reminders (status is active or ongoing and ends in <= 1 hour)
     const returnWindow = new Date(now.getTime() + 1 * 60 * 60 * 1000)
     const bookingsForReturn = await Booking.find({
-      status: 'ongoing',
+      status: { $in: ['active', 'ongoing'] },
       endTime: { $gte: now, $lte: returnWindow },
       returnReminderSent: { $ne: true }
     })
     for (const b of bookingsForReturn) {
       await sendNotification(b.renterId, {
-        type: 'booking',
+        type: 'reminder',
         title: 'Return Reminder ⏰',
         message: `Your ride for ${b.vehicleName} ends soon. Please return vehicle before deadline.`,
-        bookingId: b._id
+        bookingId: b._id,
+        vehicleId: b.vehicleId,
+        link: '/my-bookings'
       })
       b.returnReminderSent = true
       await b.save()
@@ -1634,7 +1984,9 @@ setInterval(async () => {
         type: 'review',
         title: 'Share Your Experience! ⭐',
         message: `We hope you enjoyed renting ${b.vehicleName}! Please leave a rating and comment on the hub.`,
-        bookingId: b._id
+        bookingId: b._id,
+        vehicleId: b.vehicleId,
+        link: '/my-bookings'
       })
       b.reviewReminderSent = true
       await b.save()
@@ -1681,6 +2033,31 @@ app.post('/api/notifications/read-all', verifyFirebaseToken, requireMongoUser, a
   }
 })
 
+app.delete('/api/notifications/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Notification not found' })
+    }
+    const notif = await Notification.findOneAndDelete({
+      _id: req.params.id,
+      userId: req.user._id
+    })
+    if (!notif) return res.status(404).json({ message: 'Notification not found' })
+    res.json({ success: true, message: 'Notification deleted' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.delete('/api/notifications', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    await Notification.deleteMany({ userId: req.user._id })
+    res.json({ success: true, message: 'All notifications deleted' })
+  } catch (err) {
+    next(err)
+  }
+})
+
 app.get('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
@@ -1709,10 +2086,47 @@ app.delete('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async
 
 // ── Review System REST Endpoints ───────────────────────────
 
+async function recalculateVehicleRating(vehicleId) {
+  if (!vehicleId) return
+  try {
+    const vId = typeof vehicleId === 'string' ? new mongoose.Types.ObjectId(vehicleId) : vehicleId
+    const stats = await Review.aggregate([
+      { $match: { vehicleId: vId, reviewType: 'vehicle' } },
+      { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
+    ])
+    const rating = stats.length > 0 ? Math.round(stats[0].avgRating * 10) / 10 : 0
+    const totalReviews = stats.length > 0 ? stats[0].count : 0
+    await Vehicle.findByIdAndUpdate(vId, { rating, totalReviews })
+  } catch (err) {
+    console.error('Error recalculating vehicle rating:', err)
+  }
+}
+
+async function recalculateUserRating(userId) {
+  if (!userId) return
+  try {
+    const uId = typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId
+    const stats = await Review.aggregate([
+      { $match: { reviewedUserId: uId } },
+      { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
+    ])
+    const rating = stats.length > 0 ? Math.round(stats[0].avgRating * 10) / 10 : 0
+    const totalReviews = stats.length > 0 ? stats[0].count : 0
+    await User.findByIdAndUpdate(uId, { rating, totalReviews })
+  } catch (err) {
+    console.error('Error recalculating user rating:', err)
+  }
+}
+
 app.post('/api/reviews', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   const { bookingId, rating, comment, reviewType } = req.body
   if (!bookingId || !rating || !reviewType) {
     return res.status(400).json({ message: 'bookingId, rating, and reviewType are required' })
+  }
+
+  const numRating = Number(rating)
+  if (isNaN(numRating) || numRating < 1 || numRating > 5) {
+    return res.status(400).json({ message: 'Rating must be a number between 1 and 5' })
   }
 
   try {
@@ -1723,11 +2137,15 @@ app.post('/api/reviews', verifyFirebaseToken, requireMongoUser, async (req, res,
 
     // Only completed bookings can leave reviews
     if (booking.status !== 'completed') {
-      return res.status(400).json({ message: 'Reviews can only be submitted after the ride is completed' })
+      return res.status(400).json({ message: 'Reviews can only be submitted after the rental is completed' })
     }
 
-    const isRenter = booking.renterId.toString() === req.user._id.toString()
-    const isOwner = booking.ownerId.toString() === req.user._id.toString()
+    const renterIdStr = (booking.userId || booking.renterId)?.toString()
+    const ownerIdStr = booking.ownerId?.toString()
+    const callerIdStr = req.user._id.toString()
+
+    const isRenter = renterIdStr === callerIdStr
+    const isOwner = ownerIdStr === callerIdStr
 
     // Validate reviewer authorization
     if (reviewType === 'vehicle' || reviewType === 'owner') {
@@ -1739,7 +2157,7 @@ app.post('/api/reviews', verifyFirebaseToken, requireMongoUser, async (req, res,
         return res.status(403).json({ message: 'Only the vehicle owner can review the customer' })
       }
     } else {
-      return res.status(400).json({ message: 'Invalid reviewType' })
+      return res.status(400).json({ message: 'Invalid reviewType (must be vehicle, owner, or customer)' })
     }
 
     // Check for duplicate review in DB
@@ -1749,10 +2167,10 @@ app.post('/api/reviews', verifyFirebaseToken, requireMongoUser, async (req, res,
       reviewType
     })
     if (existing) {
-      return res.status(400).json({ message: 'You have already submitted a review for this booking' })
+      return res.status(400).json({ message: 'You have already submitted a review for this completed booking' })
     }
 
-    const reviewedUserId = reviewType === 'customer' ? booking.renterId : booking.ownerId
+    const reviewedUserId = reviewType === 'customer' ? (booking.userId || booking.renterId) : booking.ownerId
 
     // Create review
     const review = await Review.create({
@@ -1761,35 +2179,17 @@ app.post('/api/reviews', verifyFirebaseToken, requireMongoUser, async (req, res,
       reviewerName: req.user.name || 'User',
       reviewedUserId,
       vehicleId: booking.vehicleId,
-      vehicleName: booking.vehicleName,
-      rating,
-      comment: comment || '',
+      vehicleName: booking.vehicleName || (booking.vehicleSnapshot?.name || 'Vehicle'),
+      rating: numRating,
+      comment: comment ? comment.trim() : '',
       reviewType
     })
 
     // Recalculate average ratings
     if (reviewType === 'vehicle' && booking.vehicleId) {
-      const stats = await Review.aggregate([
-        { $match: { vehicleId: booking.vehicleId, reviewType: 'vehicle' } },
-        { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
-      ])
-      if (stats.length > 0) {
-        await Vehicle.findByIdAndUpdate(booking.vehicleId, {
-          rating: Math.round(stats[0].avgRating * 10) / 10,
-          totalReviews: stats[0].count
-        })
-      }
-    } else if (reviewType === 'owner' || reviewType === 'customer') {
-      const stats = await Review.aggregate([
-        { $match: { reviewedUserId } },
-        { $group: { _id: null, avgRating: { $avg: '$rating' }, count: { $sum: 1 } } }
-      ])
-      if (stats.length > 0) {
-        await User.findByIdAndUpdate(reviewedUserId, {
-          rating: Math.round(stats[0].avgRating * 10) / 10,
-          totalReviews: stats[0].count
-        })
-      }
+      await recalculateVehicleRating(booking.vehicleId)
+    } else if (reviewedUserId) {
+      await recalculateUserRating(reviewedUserId)
     }
 
     res.status(201).json({ success: true, review })
@@ -1802,6 +2202,7 @@ app.get('/api/reviews/vehicle/:vehicleId', async (req, res, next) => {
   try {
     const reviews = await Review.find({ vehicleId: req.params.vehicleId, reviewType: 'vehicle' })
       .sort({ createdAt: -1 })
+      .populate('reviewerId', 'name avatar')
       .lean()
     res.json({ reviews })
   } catch (err) {
@@ -1812,6 +2213,18 @@ app.get('/api/reviews/vehicle/:vehicleId', async (req, res, next) => {
 app.get('/api/reviews/user/:userId', async (req, res, next) => {
   try {
     const reviews = await Review.find({ reviewedUserId: req.params.userId })
+      .sort({ createdAt: -1 })
+      .populate('reviewerId', 'name avatar')
+      .lean()
+    res.json({ reviews })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/reviews/my', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const reviews = await Review.find({ reviewerId: req.user._id })
       .sort({ createdAt: -1 })
       .lean()
     res.json({ reviews })
@@ -1839,45 +2252,291 @@ app.get('/api/reviews/eligible/:bookingId', verifyFirebaseToken, requireMongoUse
   }
 })
 
+app.patch('/api/reviews/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { rating, comment } = req.body
+    const review = await Review.findById(req.params.id)
+    if (!review) return res.status(404).json({ message: 'Review not found' })
+
+    const isAuthor = review.reviewerId?.toString() === req.user._id.toString()
+    if (!isAuthor) {
+      return res.status(403).json({ message: 'Forbidden: You cannot modify another user\'s review' })
+    }
+
+    if (rating !== undefined) {
+      const num = Number(rating)
+      if (isNaN(num) || num < 1 || num > 5) {
+        return res.status(400).json({ message: 'Rating must be between 1 and 5' })
+      }
+      review.rating = num
+    }
+    if (comment !== undefined) {
+      review.comment = comment.trim()
+    }
+
+    await review.save()
+
+    if (review.reviewType === 'vehicle' && review.vehicleId) {
+      await recalculateVehicleRating(review.vehicleId)
+    } else if (review.reviewedUserId) {
+      await recalculateUserRating(review.reviewedUserId)
+    }
+
+    res.json({ success: true, review })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.delete('/api/reviews/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const review = await Review.findById(req.params.id)
+    if (!review) return res.status(404).json({ message: 'Review not found' })
+
+    const isAuthor = review.reviewerId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+
+    if (!isAuthor && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: You cannot delete another user\'s review' })
+    }
+
+    await Review.findByIdAndDelete(req.params.id)
+
+    if (isAdmin && !isAuthor) {
+      await logAdminAction(
+        req.user,
+        'moderate_review',
+        { collectionName: 'reviews', docId: review._id.toString(), name: `Review by ${review.reviewerName}` },
+        req.body?.reason || 'Review moderated/removed by admin'
+      )
+    }
+
+    if (review.reviewType === 'vehicle' && review.vehicleId) {
+      await recalculateVehicleRating(review.vehicleId)
+    } else if (review.reviewedUserId) {
+      await recalculateUserRating(review.reviewedUserId)
+    }
+
+    res.json({ success: true, message: 'Review deleted successfully' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/reviews', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const reviews = await Review.find()
+      .sort({ createdAt: -1 })
+      .populate('reviewerId', 'name email avatar')
+      .populate('vehicleId', 'name brand model')
+      .lean()
+    res.json({ reviews })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ── Trust & Safety Endpoints ───────────────────────────────
 
+// ── Trust & Safety Endpoints ───────────────────────────────
+
+// 1. Reports
 app.post('/api/safety/report', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const { targetType, targetId, reason, description } = req.body
-    if (!['user', 'vehicle'].includes(targetType) || !targetId || !reason) {
-      return res.status(400).json({ message: 'Missing required report fields' })
+    const { targetType, targetId, reason, description, evidence } = req.body
+    if (!['user', 'vehicle', 'booking'].includes(targetType) || !targetId || !reason) {
+      return res.status(400).json({ message: 'Missing required report fields (targetType, targetId, reason)' })
     }
+
+    const formattedEvidence = Array.isArray(evidence)
+      ? evidence.map(e => typeof e === 'string' ? { url: e } : e)
+      : (evidence ? [{ url: typeof evidence === 'string' ? evidence : evidence.url }] : [])
+
     const report = await Report.create({
       reporterId: req.user._id,
       targetType,
       targetId,
       reason,
-      description
+      description: description || '',
+      evidence: formattedEvidence,
+      status: 'open'
     })
+
+    // Notify primary admin
+    const adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' })
+    if (adminUser) {
+      await sendNotification(adminUser._id, {
+        type: 'general',
+        title: 'New User/Vehicle Report Filed 🛡️',
+        message: `Report filed for ${targetType} (ID: ${targetId}): ${reason}`,
+        link: '/admin/safety'
+      })
+    }
+
     res.status(201).json({ success: true, report })
   } catch (err) {
     next(err)
   }
 })
 
+app.get('/api/safety/my-reports', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const reports = await Report.find({ reporterId: req.user._id }).sort({ createdAt: -1 }).lean()
+    res.json({ reports })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/safety/reports/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Report not found' })
+    }
+    const report = await Report.findById(req.params.id).populate('reporterId', 'name email').lean()
+    if (!report) return res.status(404).json({ message: 'Report not found' })
+
+    const isCreator = report.reporterId?._id?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: You cannot access another user\'s report' })
+    }
+
+    res.json({ report })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 2. Disputes
 app.post('/api/safety/dispute', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const { bookingId, reason, description } = req.body
+    const { bookingId, reason, description, evidence } = req.body
     if (!bookingId || !reason) {
-      return res.status(400).json({ message: 'Missing required dispute fields' })
+      return res.status(400).json({ message: 'Missing required dispute fields (bookingId, reason)' })
     }
+
+    const formattedEvidence = Array.isArray(evidence)
+      ? evidence.map(e => typeof e === 'string' ? { url: e } : e)
+      : (evidence ? [{ url: typeof evidence === 'string' ? evidence : evidence.url }] : [])
+
+    const initialMessage = description ? [{
+      senderId: req.user._id,
+      senderName: req.user.name || 'User',
+      message: description,
+      isAdmin: false,
+      timestamp: new Date()
+    }] : []
+
     const dispute = await Dispute.create({
       raisedBy: req.user._id,
       bookingId,
       reason,
-      description
+      description: description || '',
+      evidence: formattedEvidence,
+      messages: initialMessage,
+      status: 'open'
     })
+
+    // Notify primary admin
+    const adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' })
+    if (adminUser) {
+      await sendNotification(adminUser._id, {
+        type: 'general',
+        title: 'New Booking Dispute Raised ⚠️',
+        message: `Dispute raised on booking ${bookingId}: ${reason}`,
+        bookingId,
+        link: '/admin/safety'
+      })
+    }
+
     res.status(201).json({ success: true, dispute })
   } catch (err) {
     next(err)
   }
 })
 
+app.get('/api/safety/my-disputes', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const disputes = await Dispute.find({ raisedBy: req.user._id }).sort({ createdAt: -1 }).lean()
+    res.json({ disputes })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/safety/disputes/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Dispute not found' })
+    }
+    const dispute = await Dispute.findById(req.params.id).populate('raisedBy', 'name email').lean()
+    if (!dispute) return res.status(404).json({ message: 'Dispute not found' })
+
+    const isCreator = dispute.raisedBy?._id?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: You cannot access another user\'s dispute' })
+    }
+
+    res.json({ dispute })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/safety/disputes/:id/messages', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { message } = req.body
+    if (!message || !message.trim()) {
+      return res.status(400).json({ message: 'Message content is required' })
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Dispute not found' })
+    }
+
+    const dispute = await Dispute.findById(req.params.id)
+    if (!dispute) return res.status(404).json({ message: 'Dispute not found' })
+
+    const isCreator = dispute.raisedBy?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden' })
+    }
+
+    dispute.messages.push({
+      senderId: req.user._id,
+      senderName: req.user.name || (isAdmin ? 'Admin' : 'User'),
+      message: message.trim(),
+      isAdmin,
+      timestamp: new Date()
+    })
+
+    if (isAdmin && dispute.status === 'open') {
+      dispute.status = 'under_review'
+    }
+
+    await dispute.save()
+
+    // Notify the other party
+    if (isAdmin) {
+      await sendNotification(dispute.raisedBy, {
+        type: 'general',
+        title: 'New Message on Dispute 💬',
+        message: `Admin replied on your dispute: "${message.slice(0, 80)}..."`,
+        bookingId: dispute.bookingId,
+        link: '/my-bookings'
+      })
+    }
+
+    res.json({ success: true, dispute: dispute.toObject() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 3. SOS Emergency
 app.post('/api/safety/sos', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { bookingId, location } = req.body
@@ -1887,9 +2546,8 @@ app.post('/api/safety/sos', verifyFirebaseToken, requireMongoUser, async (req, r
     const sos = await SOS.create({
       userId: req.user._id,
       bookingId,
-      location
+      location: location || 'Unknown Location'
     })
-    // In a real app, this would also trigger immediate SMS/push notifications to emergency contacts and admins
     console.error(`🚨 [SOS TRIGGERED] User ${req.user._id} | Booking ${bookingId} | Location ${location}`)
     res.status(201).json({ success: true, sos })
   } catch (err) {
@@ -1911,32 +2569,182 @@ app.put('/api/users/emergency-contacts', verifyFirebaseToken, requireMongoUser, 
   }
 })
 
-// ── Admin Safety API ────────────────────────────────────────
+// ── Support Tickets User Endpoints ──────────────────────────
 
-app.patch('/api/admin/users/:id/suspend', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+app.post('/api/support/tickets', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const { isSuspended } = req.body
-    const user = await User.findByIdAndUpdate(req.params.id, { isSuspended }, { new: true })
-    res.json({ success: true, user })
+    const { subject, category, message, priority, evidence } = req.body
+    if (!subject || !message) {
+      return res.status(400).json({ message: 'Subject and message are required' })
+    }
+
+    const formattedEvidence = Array.isArray(evidence)
+      ? evidence.map(e => typeof e === 'string' ? { url: e } : e)
+      : (evidence ? [{ url: typeof evidence === 'string' ? evidence : evidence.url }] : [])
+
+    const ticket = await Ticket.create({
+      userId: req.user._id,
+      userName: req.user.name || 'User',
+      userEmail: req.user.email,
+      subject,
+      category: category || 'General',
+      priority: priority || 'medium',
+      status: 'open',
+      evidence: formattedEvidence,
+      messages: [{
+        senderId: req.user._id,
+        senderName: req.user.name || 'User',
+        message,
+        isAdmin: false,
+        timestamp: new Date()
+      }]
+    })
+
+    // Notify primary admin
+    const adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' })
+    if (adminUser) {
+      await sendNotification(adminUser._id, {
+        type: 'general',
+        title: 'New Support Ticket Created 🎫',
+        message: `${ticket.userName} opened ticket: ${ticket.subject}`,
+        link: '/admin/support'
+      })
+    }
+
+    res.status(201).json({ success: true, ticket })
   } catch (err) {
     next(err)
   }
 })
 
-app.patch('/api/admin/users/:id/fraud', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+app.get('/api/support/my-tickets', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const tickets = await Ticket.find({ userId: req.user._id }).sort({ updatedAt: -1 }).lean()
+    res.json({ tickets })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/support/tickets/:id', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Ticket not found' })
+    }
+    const ticket = await Ticket.findById(req.params.id).lean()
+    if (!ticket) return res.status(404).json({ message: 'Ticket not found' })
+
+    const isCreator = ticket.userId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: You cannot access another user\'s support ticket' })
+    }
+
+    res.json({ ticket })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/support/tickets/:id/reply', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { message } = req.body
+    if (!message || !message.trim()) return res.status(400).json({ message: 'Message is required' })
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Ticket not found' })
+    }
+
+    const ticket = await Ticket.findById(req.params.id)
+    if (!ticket) return res.status(404).json({ message: 'Ticket not found' })
+
+    const isCreator = ticket.userId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden' })
+    }
+
+    ticket.messages.push({
+      senderId: req.user._id,
+      senderName: req.user.name || (isAdmin ? 'Admin' : 'User'),
+      message: message.trim(),
+      isAdmin,
+      timestamp: new Date()
+    })
+    if (isAdmin) ticket.status = 'in_progress'
+    await ticket.save()
+
+    // Notify other party
+    if (isAdmin) {
+      await sendNotification(ticket.userId, {
+        type: 'general',
+        title: `Support Reply: ${ticket.subject} 💬`,
+        message: `Support team replied: "${message.slice(0, 80)}..."`,
+        link: '/hub'
+      })
+    } else {
+      const adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' })
+      if (adminUser) {
+        await sendNotification(adminUser._id, {
+          type: 'general',
+          title: `User Replied on Ticket: ${ticket.subject} 💬`,
+          message: `${ticket.userName}: "${message.slice(0, 80)}..."`,
+          link: '/admin/support'
+        })
+      }
+    }
+
+    res.json({ success: true, ticket: ticket.toObject() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Admin Safety & Support Management API ───────────────────
+
+app.patch('/api/admin/users/:id/suspend', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const { isSuspended, reason } = req.body
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { isSuspended: !!isSuspended, status: isSuspended ? 'suspended' : 'active' },
+      { new: true }
+    )
+    if (!user) return res.status(404).json({ message: 'User not found' })
+
+    await logAdminAction(
+      req.user,
+      isSuspended ? 'suspend_user' : 'restore_user',
+      { collectionName: 'users', docId: user._id.toString(), name: user.name },
+      reason || (isSuspended ? 'User account suspended' : 'User account restored')
+    )
+
+    res.json({ success: true, user: safeUser(user.toObject()) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.patch('/api/admin/users/:id/fraud', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
   try {
     const { fraudScore } = req.body
     const user = await User.findByIdAndUpdate(req.params.id, { fraudScore }, { new: true })
-    res.json({ success: true, user })
+    if (!user) return res.status(404).json({ message: 'User not found' })
+
+    await logAdminAction(
+      req.user,
+      'update_fraud_score',
+      { collectionName: 'users', docId: user._id.toString(), name: user.name },
+      `Fraud score set to ${fraudScore}`
+    )
+
+    res.json({ success: true, user: safeUser(user.toObject()) })
   } catch (err) {
     next(err)
   }
 })
 
-app.get('/api/admin/safety/reports', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+app.get('/api/admin/safety/reports', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
   try {
     const reports = await Report.find().sort({ createdAt: -1 }).populate('reporterId', 'name email').lean()
     res.json({ reports })
@@ -1945,8 +2753,46 @@ app.get('/api/admin/safety/reports', verifyFirebaseToken, requireMongoUser, asyn
   }
 })
 
-app.get('/api/admin/safety/disputes', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+app.patch('/api/admin/safety/reports/:id/status', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const { status, adminNotes } = req.body
+    const validStatuses = ['open', 'under_review', 'resolved', 'closed', 'rejected', 'pending', 'investigating', 'dismissed']
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' })
+    }
+
+    const report = await Report.findByIdAndUpdate(
+      req.params.id,
+      {
+        status,
+        ...(adminNotes !== undefined ? { adminNotes } : {}),
+        ...(status === 'resolved' || status === 'closed' ? { resolvedAt: new Date(), resolvedBy: req.user._id } : {})
+      },
+      { new: true }
+    )
+    if (!report) return res.status(404).json({ message: 'Report not found' })
+
+    await logAdminAction(
+      req.user,
+      `report_${status}`,
+      { collectionName: 'reports', docId: report._id.toString(), name: `Report on ${report.targetType}` },
+      adminNotes || `Report status updated to ${status}`
+    )
+
+    await sendNotification(report.reporterId, {
+      type: 'general',
+      title: `Report Status Updated: ${status.toUpperCase()}`,
+      message: `Your report regarding ${report.targetType} (ID: ${report.targetId}) is now marked as ${status}.`,
+      link: '/hub'
+    })
+
+    res.json({ success: true, report: report.toObject() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/safety/disputes', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
   try {
     const disputes = await Dispute.find().sort({ createdAt: -1 }).populate('raisedBy', 'name email').lean()
     res.json({ disputes })
@@ -1955,11 +2801,146 @@ app.get('/api/admin/safety/disputes', verifyFirebaseToken, requireMongoUser, asy
   }
 })
 
-app.get('/api/admin/safety/sos', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
+app.patch('/api/admin/safety/disputes/:id/status', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const { status, adminNotes } = req.body
+    const validStatuses = ['open', 'under_review', 'resolved', 'closed', 'rejected']
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' })
+    }
+
+    const dispute = await Dispute.findByIdAndUpdate(
+      req.params.id,
+      {
+        status,
+        ...(adminNotes !== undefined ? { adminNotes } : {}),
+        ...(status === 'resolved' || status === 'closed' ? { resolvedAt: new Date(), resolvedBy: req.user._id } : {})
+      },
+      { new: true }
+    )
+    if (!dispute) return res.status(404).json({ message: 'Dispute not found' })
+
+    await logAdminAction(
+      req.user,
+      `dispute_${status}`,
+      { collectionName: 'disputes', docId: dispute._id.toString(), name: `Dispute on booking ${dispute.bookingId}` },
+      adminNotes || `Dispute status updated to ${status}`
+    )
+
+    await sendNotification(dispute.raisedBy, {
+      type: 'general',
+      title: `Dispute Case Updated: ${status.toUpperCase()} ⚖️`,
+      message: `Your dispute for booking ${dispute.bookingId} has been updated to ${status}. Notes: ${adminNotes || 'None'}`,
+      bookingId: dispute.bookingId,
+      link: '/my-bookings'
+    })
+
+    res.json({ success: true, dispute: dispute.toObject() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/safety/sos', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
   try {
     const sosList = await SOS.find().sort({ createdAt: -1 }).populate('userId', 'name email phone').lean()
     res.json({ sosList })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/admin/support/tickets', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const tickets = await Ticket.find().sort({ updatedAt: -1 }).lean()
+    res.json({ tickets })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.post('/api/admin/support/tickets/:id/reply', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const { message } = req.body
+    if (!message) return res.status(400).json({ message: 'Message is required' })
+
+    const ticket = await Ticket.findById(req.params.id)
+    if (!ticket) return res.status(404).json({ message: 'Ticket not found' })
+
+    ticket.messages.push({
+      senderId: req.user._id,
+      senderName: req.user.name || 'Admin',
+      message,
+      isAdmin: true,
+      timestamp: new Date()
+    })
+    ticket.status = 'in_progress'
+    await ticket.save()
+
+    await logAdminAction(
+      req.user,
+      'ticket_reply',
+      { collectionName: 'tickets', docId: ticket._id.toString(), name: ticket.subject },
+      `Replied: ${message.slice(0, 100)}`
+    )
+
+    // Send in-app notification to the ticket owner
+    await sendNotification(ticket.userId, {
+      type: 'general',
+      title: `Reply on Ticket: ${ticket.subject} 💬`,
+      message: `Support team replied: "${message.slice(0, 80)}..."`,
+      link: '/hub'
+    })
+
+    res.json({ success: true, ticket: ticket.toObject() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.patch('/api/admin/support/tickets/:id/status', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const { status, adminNotes } = req.body
+    if (!['open', 'under_review', 'in_progress', 'resolved', 'closed', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' })
+    }
+    const ticket = await Ticket.findByIdAndUpdate(
+      req.params.id,
+      {
+        status,
+        ...(adminNotes !== undefined ? { adminNotes } : {}),
+        ...(status === 'resolved' || status === 'closed' ? { resolvedAt: new Date(), resolvedBy: req.user._id } : {})
+      },
+      { new: true }
+    )
+    if (!ticket) return res.status(404).json({ message: 'Ticket not found' })
+
+    await logAdminAction(
+      req.user,
+      `ticket_${status}`,
+      { collectionName: 'tickets', docId: ticket._id.toString(), name: ticket.subject },
+      adminNotes || `Ticket status updated to ${status}`
+    )
+
+    await sendNotification(ticket.userId, {
+      type: 'general',
+      title: `Support Ticket Updated: ${status.toUpperCase()} 🎫`,
+      message: `Your ticket "${ticket.subject}" is now ${status}.`,
+      link: '/hub'
+    })
+
+    res.json({ success: true, ticket: ticket.toObject() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Admin Audit Logs API ────────────────────────────────────
+
+app.get('/api/admin/audit-logs', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const logs = await AuditLog.find().sort({ createdAt: -1 }).limit(100).lean()
+    res.json({ logs })
   } catch (err) {
     next(err)
   }
@@ -2018,6 +2999,15 @@ async function start() {
   }
 }
 
+// Process error handlers
+process.on('uncaughtException', (err) => {
+  console.error('💥 Uncaught Exception:', err)
+})
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason)
+})
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   try {
@@ -2029,4 +3019,15 @@ process.on('SIGINT', async () => {
   process.exit(0)
 })
 
+process.on('SIGTERM', async () => {
+  try {
+    await mongoose.connection.close()
+    logger.info('MongoDB disconnected. Server stopped.')
+  } catch (err) {
+    logger.error('Error during shutdown', err)
+  }
+  process.exit(0)
+})
+
 start()
+

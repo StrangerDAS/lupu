@@ -1,10 +1,9 @@
 import mongoose from 'mongoose'
 
-const disputeMessageSchema = new mongoose.Schema({
+const ticketMessageSchema = new mongoose.Schema({
   senderId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    ref: 'User'
   },
   senderName: {
     type: String,
@@ -36,32 +35,40 @@ const evidenceSchema = new mongoose.Schema({
   }
 }, { _id: false })
 
-const disputeSchema = new mongoose.Schema(
+const ticketSchema = new mongoose.Schema(
   {
-    raisedBy: {
+    userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      required: true
     },
-    bookingId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Booking',
-      required: true,
-    },
-    reason: {
+    userName: {
       type: String,
-      required: true,
+      required: true
     },
-    description: {
+    userEmail: {
+      type: String
+    },
+    subject: {
       type: String,
+      required: true
+    },
+    category: {
+      type: String,
+      default: 'General'
     },
     status: {
       type: String,
-      enum: ['open', 'under_review', 'resolved', 'closed', 'rejected'],
-      default: 'open',
+      enum: ['open', 'under_review', 'in_progress', 'resolved', 'closed', 'rejected'],
+      default: 'open'
+    },
+    priority: {
+      type: String,
+      enum: ['low', 'medium', 'high', 'urgent'],
+      default: 'medium'
     },
     evidence: [evidenceSchema],
-    messages: [disputeMessageSchema],
+    messages: [ticketMessageSchema],
     adminNotes: {
       type: String,
       default: ''
@@ -75,5 +82,5 @@ const disputeSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
-export default mongoose.model('Dispute', disputeSchema)
+export default mongoose.model('Ticket', ticketSchema)
 

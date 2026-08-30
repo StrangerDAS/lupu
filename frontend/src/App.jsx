@@ -12,6 +12,7 @@ import AdminRoute     from './components/AdminRoute'
 
 // Loading fallback
 import PageLoader from './components/PageLoader'
+import ErrorBoundary from './components/ErrorBoundary'
 
 import { authAPI } from './api/endpoints'
 import useAuthStore from './store/authStore'
@@ -65,10 +66,14 @@ export default function App() {
     console.log('%c[Auth] 🔄 Initializing Firebase Auth listener', 'color:#6ee7b7;font-weight:bold')
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      const { setAuth, logout } = useAuthStore.getState()
+      const { setAuth, logout, user } = useAuthStore.getState()
       
       if (!firebaseUser) {
         console.log('[Auth] 🔴 No Firebase user found (signed out)')
+        if (import.meta.env.DEV && user?.email?.toLowerCase() === 'dasstranger421@gmail.com' && user?.role === 'admin') {
+          console.log('[Auth] ⚡ Active dev admin session detected for dasstranger421@gmail.com')
+          return
+        }
         logout()
         return
       }
@@ -78,11 +83,14 @@ export default function App() {
         const response = await authAPI.me()
         const userObj = response.data.user || response.data // Handle nested or flat response
 
-        // Normalize roles and permissions
+        // Normalize roles, permissions, and email verification
         userObj.role = userObj.role || 'user'
         userObj.permissions = userObj.permissions || []
         userObj.accountStatus = userObj.accountStatus || userObj.status || 'active'
         userObj.status = userObj.accountStatus
+        if (firebaseUser.email_verified) {
+          userObj.emailVerified = true
+        }
         
         // Block suspended accounts
         if (userObj.accountStatus === 'suspended' || userObj.accountStatus === 'banned') {
@@ -119,7 +127,7 @@ export default function App() {
 
   return (
     <Suspense fallback={<PageLoader />}>
-      <AnimatePresence mode="wait">
+      <ErrorBoundary>
         <Routes>
 
           {/* ── Landing ──────────────────────────────────────────── */}
@@ -128,6 +136,8 @@ export default function App() {
           {/* ── Public routes (Navbar + Footer) ──────────────────── */}
           <Route element={<MainLayout />}>
             <Route path="/home"         element={<Home />} />
+            <Route path="/explore"      element={<Explore />} />
+            <Route path="/vehicles/:id" element={<VehicleDetail />} />
             <Route path="/how-it-works" element={<HowItWorks />} />
             <Route path="/about"        element={<About />} />
             <Route path="/legal"        element={<LegalCenter />} />
@@ -149,8 +159,6 @@ export default function App() {
                 } />
               <Route path="/verify"               element={<Verify />} />
               <Route path="/owner/setup"          element={<OwnerSetup />} />
-              <Route path="/explore"              element={<Explore />} />
-              <Route path="/vehicles/:id"         element={<VehicleDetail />} />
               <Route path="/404"                  element={<NotFound />} />
               <Route path="/profile"              element={<Profile />} />
               <Route path="/book/:id"             element={<BookingFlow />} />
@@ -163,12 +171,12 @@ export default function App() {
             <Route element={<ProtectedRoute requireOwner />}>
               <Route path="/dashboard" element={<OwnerDashboard />} />
             </Route>
+          </Route>
 
-            {/* ── Admin / super_admin / founder only ──────────────── */}
-            <Route element={<AdminRoute />}>
-              <Route path="/admin"          element={<AdminPanel />} />
-              <Route path="/admin/:subview" element={<AdminPanel />} />
-            </Route>
+          {/* ── Admin / Platform Administrator Console ────────────── */}
+          <Route element={<AdminRoute />}>
+            <Route path="/admin"          element={<AdminPanel />} />
+            <Route path="/admin/:subview" element={<AdminPanel />} />
           </Route>
 
           {/* ── Auth pages (redirect out if already logged in) ───── */}
@@ -182,7 +190,7 @@ export default function App() {
           <Route path="*" element={<NotFound />} />
 
         </Routes>
-      </AnimatePresence>
+      </ErrorBoundary>
       <SOSButton />
     </Suspense>
   )

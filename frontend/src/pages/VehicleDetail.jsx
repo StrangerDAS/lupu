@@ -50,7 +50,7 @@ export default function VehicleDetail() {
   const vehicle = fetched
 
   // Determine availability: must be approved AND isLive
-  const isApproved = vehicle?.status === 'approved'
+  const isApproved = vehicle?.status === 'approved' || vehicle?.verificationStatus === 'approved'
   const isLive = vehicle?.isLive !== false
   const isBookable = vehicle?.currentStatus === 'Available' || (isApproved && isLive && !vehicle?.currentStatus)
 
@@ -124,8 +124,6 @@ export default function VehicleDetail() {
   const handleBook = () => {
     if (!isAuthenticated()) {
       navigate('/auth/login', { state: { from: `/book/${id}` } })
-    } else if (!isKycComplete()) {
-      navigate('/complete-profile')
     } else {
       navigate(`/book/${id}`)
     }
@@ -197,9 +195,30 @@ export default function VehicleDetail() {
     )
   }
 
-  if (!vehicle) return null
+  if (!vehicle) {
+    return (
+      <PageWrapper>
+        <div className="container-main py-16 text-center">
+          <div className="card p-10 max-w-md mx-auto">
+            <RiMotorbikeLine className="text-white/20 text-6xl mx-auto mb-4" />
+            <h2 className="text-xl font-bold mb-2">Vehicle Not Available</h2>
+            <p className="text-white/40 text-xs mb-6">
+              This vehicle may have been removed, deactivated by the owner, or does not exist.
+            </p>
+            <button onClick={() => navigate('/explore')} className="btn-primary py-2.5 px-6 text-xs mx-auto">
+              Browse Available Vehicles
+            </button>
+          </div>
+        </div>
+      </PageWrapper>
+    )
+  }
 
   const Icon = vehicle.type === 'bike' ? RiMotorbikeLine : RiEBikeLine
+
+  const allImages = (vehicle?.images && vehicle.images.length > 0)
+    ? vehicle.images
+    : (vehicle?.photos && vehicle.photos.length > 0 ? vehicle.photos : [])
 
   return (
     <PageWrapper>
@@ -217,10 +236,14 @@ export default function VehicleDetail() {
           <div className="lg:col-span-3 space-y-3">
             {/* Main image */}
             <div className="card h-72 md:h-96 flex items-center justify-center bg-surface-2 overflow-hidden relative">
-              {vehicle.images?.[activeImg] ? (
+              {allImages[activeImg] ? (
                 <img
-                  src={getImageUrl(vehicle.images[activeImg])}
+                  src={getImageUrl(allImages[activeImg])}
                   alt={vehicle.name}
+                  onError={(e) => {
+                    e.target.onerror = null;
+                    e.target.src = 'https://images.unsplash.com/photo-1558981403-c5f9899a28bc?w=800&auto=format&fit=crop&q=60';
+                  }}
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -261,9 +284,9 @@ export default function VehicleDetail() {
               </div>
             </div>
             {/* Thumbnails */}
-            {vehicle.images?.length > 1 && (
+            {allImages.length > 1 && (
               <div className="flex gap-2">
-                {vehicle.images.map((img, i) => (
+                {allImages.map((img, i) => (
                   <button
                     key={i}
                     onClick={() => setActiveImg(i)}

@@ -6,6 +6,8 @@ import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { auth } from '../config/firebase'
 import { sendEmailVerification } from 'firebase/auth'
+import { authAPI } from '../api/endpoints'
+import { ADMIN_ROLES } from '../lib/roleUtils'
 
 export default function Verify() {
   const navigate = useNavigate()
@@ -14,19 +16,54 @@ export default function Verify() {
   const [loading, setLoading] = useState(false)
   const [checking, setChecking] = useState(false)
 
-  // Redirect if already verified
+  // Redirect target
+  const getRedirectDest = (u) => {
+    if (!u) return '/explore'
+    if (ADMIN_ROLES.includes(u.role)) return '/admin'
+    if (u.isOwner) return '/dashboard'
+    return '/explore'
+  }
+
+  // Redirect if already verified in store
   useEffect(() => {
     if (user?.emailVerified) {
-      navigate('/explore', { replace: true })
+      navigate(getRedirectDest(user), { replace: true })
+      return
     }
-  }, [user, navigate])
+
+    // Auto-check once on mount if Firebase user exists
+    let active = true
+    if (auth.currentUser) {
+      auth.currentUser.reload().then(async () => {
+        if (!active) return
+        if (auth.currentUser?.emailVerified) {
+          try {
+            const { data } = await authAPI.me()
+            const userObj = data.user || data
+            userObj.emailVerified = true
+            setAuth(userObj, auth.currentUser)
+            toast.success("Email verified!")
+            navigate(getRedirectDest(userObj), { replace: true })
+          } catch (e) {
+            console.error('[Verify] Auto sync failed:', e)
+          }
+        }
+      }).catch(() => {})
+    }
+
+    return () => { active = false }
+  }, [user, navigate, setAuth])
 
   const handleResendVerification = async () => {
     if (!auth.currentUser) return toast.error("You must be logged in to verify your email.")
     
     setLoading(true)
     try {
-      await sendEmailVerification(auth.currentUser)
+      const actionCodeSettings = {
+        url: `${window.location.origin}/auth/login`,
+        handleCodeInApp: false,
+      }
+      await sendEmailVerification(auth.currentUser, actionCodeSettings)
       toast.success("Verification email sent! Please check your inbox.")
     } catch (error) {
       toast.error(error.message || "Failed to send verification email.")
@@ -42,12 +79,19 @@ export default function Verify() {
     try {
       await auth.currentUser.reload()
       if (auth.currentUser.emailVerified) {
-        toast.success("Email verified! Redirecting to login…")
-        navigate('/auth/login', { replace: true })
+        // Sync verified state with backend and update Zustand store
+        const { data } = await authAPI.me()
+        const userObj = data.user || data
+        userObj.emailVerified = true
+        setAuth(userObj, auth.currentUser)
+        
+        toast.success("Email verified! Welcome to LUPU 🎉")
+        navigate(getRedirectDest(userObj), { replace: true })
       } else {
         toast.error("Email not verified yet. Please check your inbox.")
       }
     } catch (error) {
+      console.error('[Verify] Error checking verification:', error)
       toast.error("Error checking verification status.")
     } finally {
       setChecking(false)

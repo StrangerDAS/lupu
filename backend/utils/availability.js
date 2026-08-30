@@ -14,13 +14,20 @@ export const attachVehicleAvailability = (vehicle, activeBookings = []) => {
     (b) => new Date(b.startTime) <= now && new Date(b.endTime) >= now
   )
 
-  if (!vehicle.isLive || vehicle.verificationStatus !== 'approved' || vehicle.status === 'pending_verification') {
+  const isApproved = vehicle.verificationStatus === 'approved' || vehicle.status === 'approved'
+  const isPending = vehicle.verificationStatus === 'submitted' || vehicle.verificationStatus === 'under_review' || vehicle.status === 'pending_verification' || vehicle.status === 'under_review'
+
+  if (isPending) {
     currentStatus = 'Pending Approval'
+  } else if (isApproved && vehicle.isLive === false) {
+    currentStatus = 'Offline'
   } else if (currentBooking) {
     currentStatus = 'Booked'
     bookedFrom = currentBooking.startTime
     bookedUntil = currentBooking.endTime
     availableAgain = currentBooking.endTime
+  } else if (isApproved && vehicle.isLive !== false) {
+    currentStatus = 'Available'
   }
 
   // Also include the list of upcoming disabled date ranges for the calendar

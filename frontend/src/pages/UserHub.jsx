@@ -61,7 +61,7 @@ export default function UserHub() {
           transition={{ duration: 0.6, delay: 0.3 }}
           whileHover={{ scale: 1.03, y: -5 }}
           className="group relative cursor-pointer"
-          onClick={() => navigate('/owner/setup')}
+          onClick={() => navigate('/dashboard?addVehicle=true')}
         >
           <div className="absolute -inset-0.5 bg-gradient-to-bl from-purple-500 via-brand to-transparent rounded-3xl blur opacity-20 group-hover:opacity-60 transition duration-500" />
           <div className="relative h-full flex flex-col p-8 bg-[#111111]/80 backdrop-blur-xl border border-white/10 rounded-3xl overflow-hidden">

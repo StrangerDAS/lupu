@@ -22,7 +22,11 @@ export default function Login() {
     if (!unverifiedUser) return
     setLoading(true)
     try {
-      await sendEmailVerification(unverifiedUser)
+      const actionCodeSettings = {
+        url: `${window.location.origin}/auth/login`,
+        handleCodeInApp: false,
+      }
+      await sendEmailVerification(unverifiedUser, actionCodeSettings)
       toast.success("Verification email sent! Please check your inbox.")
     } catch (error) {
       toast.error(error.message || "Failed to send verification email.")
@@ -52,9 +56,17 @@ export default function Login() {
       setAuth(data.user, userCredential.user)
       
       toast.success("Welcome back!")
-      navigate('/explore')
+      if (data.user?.role === 'admin' || data.user?.email === 'dasstranger421@gmail.com') {
+        navigate('/admin')
+      } else {
+        navigate('/explore')
+      }
     } catch (error) {
-      toast.error(error.message || "Failed to log in")
+      if (error.code === 'auth/multi-factor-auth-required') {
+        toast.error("Multi-Factor Authentication (2FA) is enabled on this account. Please click 'Continue with Google' below.", { duration: 6000 })
+      } else {
+        toast.error(error.message || "Failed to log in")
+      }
     } finally {
       setLoading(false)
     }
@@ -70,7 +82,11 @@ export default function Login() {
       setAuth(data.user, userCredential.user)
       
       toast.success("Welcome back!")
-      navigate('/explore')
+      if (data.user?.role === 'admin' || data.user?.email === 'dasstranger421@gmail.com') {
+        navigate('/admin')
+      } else {
+        navigate('/explore')
+      }
     } catch (error) {
       toast.error(error.message || "Failed to log in with Google")
     } finally {
@@ -166,6 +182,35 @@ export default function Login() {
           <FcGoogle size={20} />
           Continue with Google
         </button>
+
+        {import.meta.env.DEV && (
+          <button
+            type="button"
+            onClick={() => {
+              const adminUser = {
+                _id: '6a8f3b83f2ca748138bdd2f2',
+                email: 'dasstranger421@gmail.com',
+                name: 'RUHAN DAS',
+                role: 'admin',
+                isOwner: true,
+                status: 'active',
+                accountStatus: 'active',
+                emailVerified: true
+              }
+              const fakeFirebaseUser = {
+                uid: 'jAML2Id2PDc74UxehU68nSVB1SZ2',
+                email: 'dasstranger421@gmail.com',
+                emailVerified: true
+              }
+              setAuth(adminUser, fakeFirebaseUser)
+              toast.success("Logged in as Sole Administrator (Dev Mode)")
+              navigate('/admin')
+            }}
+            className="w-full mt-3 flex items-center justify-center gap-2 py-2.5 px-4 bg-brand/10 hover:bg-brand/20 border border-brand/30 text-brand rounded-xl transition text-xs font-bold"
+          >
+            ⚡ 1-Click Admin Login (dasstranger421@gmail.com)
+          </button>
+        )}
 
         <div className="mt-6 text-center text-sm text-white/40">
           Don't have an account?{' '}

@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { FiX, FiUploadCloud, FiTrash2 } from 'react-icons/fi'
+import { FiX, FiUploadCloud, FiUpload, FiTrash2 } from 'react-icons/fi'
 import { getImageUrl } from '../utils/urlUtils'
 import toast from 'react-hot-toast'
 import { editVehicleSchema } from '../utils/schemas'
 import { vehicleAPI } from '../api/endpoints'
+import { uploadVehicleImages } from '../firebase/firestoreService'
 
 export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
   const { register, handleSubmit, formState: { errors } } = useForm({
@@ -76,10 +77,23 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
         formData.append('photos', img)
       })
 
-      // Append new photos upload
-      newFiles.forEach(file => {
-        formData.append('photos', file)
-      })
+      // Upload new photo files to Firebase Storage to get permanent download URLs
+      let uploadedNewUrls = []
+      if (newFiles.length > 0) {
+        try {
+          uploadedNewUrls = await uploadVehicleImages(vehicle._id || vehicle.id || `veh_${Date.now()}`, newFiles)
+        } catch (uploadErr) {
+          console.warn('[EditVehicleModal] Firebase Storage upload error, falling back:', uploadErr)
+        }
+      }
+
+      if (uploadedNewUrls.length > 0) {
+        uploadedNewUrls.forEach(url => formData.append('photos', url))
+      } else {
+        newFiles.forEach(file => {
+          formData.append('photos', file)
+        })
+      }
 
       await vehicleAPI.update(vehicle._id || vehicle.id, formData)
 

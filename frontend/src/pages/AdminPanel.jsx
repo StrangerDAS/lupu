@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   FiUsers, FiCalendar, FiDollarSign, FiAlertCircle, 
   FiMessageSquare, FiStar, FiFileText, FiBell, FiShield, 
-  FiSettings, FiGrid, FiMenu, FiX, FiLogOut, FiAnchor, FiPercent
+  FiSettings, FiGrid, FiMenu, FiX, FiLogOut, FiAnchor, FiPercent,
+  FiLifeBuoy, FiLock, FiSliders
 } from 'react-icons/fi'
 import { RiMotorbikeLine } from 'react-icons/ri'
 import { getVisibleModules, isFounder as checkFounder, isSuperAdmin as checkSuperAdmin } from '../lib/roleUtils'
@@ -16,7 +17,7 @@ import { getVisibleModules, isFounder as checkFounder, isSuperAdmin as checkSupe
 import useAuthStore from '../store/authStore'
 import PageWrapper from '../components/PageWrapper'
 import ErrorBoundary from '../components/ErrorBoundary'
-import { adminAPI, userAPI, bookingAPI, paymentAPI } from '../api/endpoints'
+import { adminAPI, userAPI, bookingAPI, paymentAPI, adminSafetyAPI, adminSupportAPI, adminAuditAPI, reviewAPI } from '../api/endpoints'
 
 // Administrative Subviews
 import DashboardView from '../components/admin/DashboardView'
@@ -70,7 +71,7 @@ export default function AdminPanel() {
   const loadUsers = async () => {
     try {
       const res = await userAPI.getAll()
-      setUsers(res.data.users || [])
+      setUsers(res.data.users || (Array.isArray(res.data) ? res.data : []))
     } catch (err) {
       console.error('Failed to load users:', err)
     }
@@ -88,9 +89,35 @@ export default function AdminPanel() {
   const loadPayments = async () => {
     try {
       const res = await paymentAPI.getHistory()
-      setPayments(res.data?.payments || res.data || [])
+      setPayments(res.data?.history || res.data?.transactions || res.data?.payments || [])
     } catch (err) {
       console.error('Failed to load payments:', err)
+    }
+  }
+
+  const loadReviews = async () => {
+    try {
+      const res = await reviewAPI.getAllAdmin()
+      setReviews(res.data?.reviews || [])
+    } catch (err) {
+      console.error('Failed to load reviews:', err)
+    }
+  }
+
+  const loadSafetyAndSupport = async () => {
+    try {
+      const [repRes, disRes, tickRes, logRes] = await Promise.allSettled([
+        adminSafetyAPI.getReports(),
+        adminSafetyAPI.getDisputes(),
+        adminSupportAPI.getTickets(),
+        adminAuditAPI.getLogs()
+      ])
+      if (repRes.status === 'fulfilled') setReports(repRes.value.data?.reports || [])
+      if (disRes.status === 'fulfilled') setDisputes(disRes.value.data?.disputes || [])
+      if (tickRes.status === 'fulfilled') setTickets(tickRes.value.data?.tickets || [])
+      if (logRes.status === 'fulfilled') setAdminActions(logRes.value.data?.logs || [])
+    } catch (err) {
+      console.error('Failed to load safety/support:', err)
     }
   }
 
@@ -101,7 +128,9 @@ export default function AdminPanel() {
       loadVehicles(),
       loadUsers(),
       loadBookings(),
-      loadPayments()
+      loadPayments(),
+      loadReviews(),
+      loadSafetyAndSupport()
     ]).finally(() => {
       setLoading(false)
     })
@@ -116,18 +145,32 @@ export default function AdminPanel() {
     bookings:      FiCalendar,
     payments:      FiDollarSign,
     safety:        FiShield,
-    support:       FiMessageSquare,
+    support:       FiLifeBuoy,
     reviews:       FiStar,
     'audit-logs':  FiFileText,
-    admins:        FiShield,
+    admins:        FiLock,
     commission:    FiPercent,
-    settings:      FiSettings,
+    settings:      FiSliders,
     notifications: FiBell,
   }
 
   // Badge counts for urgent items
+  const safeUsers = Array.isArray(users) ? users : []
+  const safeVehicles = Array.isArray(vehicles) ? vehicles : []
+  const safeBookings = Array.isArray(bookings) ? bookings : []
+  const safeDisputes = Array.isArray(disputes) ? disputes : []
+  const safeReports = Array.isArray(reports) ? reports : []
+  const safeTickets = Array.isArray(tickets) ? tickets : []
+  const safeReviews = Array.isArray(reviews) ? reviews : []
+
   const MODULE_BADGES = {
-    support:   tickets.filter(t => t.status === 'open').length  || null,
+    users:     safeUsers.filter(u => u?.kycStatus === 'pending').length || null,
+    vehicles:  safeVehicles.filter(v => v?.verificationStatus === 'submitted' || v?.verificationStatus === 'pending_verification').length || null,
+    bookings:  safeBookings.filter(b => b?.status === 'pending').length || null,
+    disputes:  safeDisputes.filter(d => d?.status === 'open').length || null,
+    safety:    (safeDisputes.filter(d => d?.status === 'open').length + safeReports.filter(r => r?.status === 'open').length) || null,
+    support:   safeTickets.filter(t => t?.status === 'open').length || null,
+    reviews:   safeReviews.length || null,
   }
 
   // Derive visible modules from Firestore role (via roleUtils — no hardcoding)
@@ -156,9 +199,9 @@ export default function AdminPanel() {
       case 'safety':
         return <SafetyView />
       case 'support':
-        return <SupportView tickets={tickets} />
+        return <SupportView tickets={tickets} onRefresh={loadSafetyAndSupport} />
       case 'reviews':
-        return <ReviewsView reviews={reviews} />
+        return <ReviewsView reviews={reviews} onRefresh={loadReviews} />
       case 'audit-logs':
         return <AuditLogsView adminActions={adminActions} />
       case 'admins':
@@ -267,19 +310,11 @@ export default function AdminPanel() {
               <span>Loading data...</span>
             </div>
           ) : (
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activeTab}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.15 }}
-              >
-                <ErrorBoundary>
-                  {renderActiveView()}
-                </ErrorBoundary>
-              </motion.div>
-            </AnimatePresence>
+            <div key={activeTab} className="w-full">
+              <ErrorBoundary>
+                {renderActiveView()}
+              </ErrorBoundary>
+            </div>
           )}
         </div>
       </div>

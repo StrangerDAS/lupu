@@ -90,8 +90,8 @@ export default function Handover() {
     }
   }, [bookingId, navigate])
 
-  const isOwner = user?._id === booking?.ownerId
-  const isRenter = user?._id === booking?.renterId
+  const isOwner = String(booking?.ownerId?._id || booking?.ownerId || '') === String(user?._id || '')
+  const isRenter = String(booking?.renterId?._id || booking?.renterId || booking?.userId?._id || booking?.userId || '') === String(user?._id || '')
 
   // Forms - Handover (Owner)
   const [ownerChecklist, setOwnerChecklist] = useState({
@@ -618,9 +618,9 @@ export default function Handover() {
 
                 {/* Payment notice */}
                 <div className="card p-5 border border-brand/20 bg-brand/5 space-y-2">
-                  <h3 className="text-sm font-semibold text-brand flex items-center gap-1.5">Online Payment Settlement</h3>
+                  <h3 className="text-sm font-semibold text-brand flex items-center gap-1.5">Payment Settlement</h3>
                   <p className="text-xs text-white/70 leading-normal">
-                    The renter will be prompted to settle the remaining 75% final payment (<strong>₹{booking?.pricing?.remaining || Math.round(booking?.totalPrice * 0.75)}</strong>) online via Razorpay on their dashboard once you submit this checklist.
+                    The renter can settle the remaining payment (<strong>₹{booking?.pricing?.remaining || Math.round(booking?.totalPrice * 0.75)}</strong>) directly with you upon completing this return checklist.
                   </p>
                 </div>
 

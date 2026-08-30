@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { vehicleAPI } from '../api/endpoints'
+import { vehicleAPI, itemAPI } from '../api/endpoints'
 
 /**
  * Vehicle store — holds vehicle list + active filters.
@@ -20,13 +20,14 @@ const useVehicleStore = create((set, get) => ({
     availabilityStatus: '', // 'Available', 'Booked', ''
     dateStart: '',
     dateEnd: '',
+    sortBy: 'relevance',    // 'relevance' | 'price_asc' | 'price_desc' | 'rating'
   },
 
   setFilter: (key, value) =>
     set((state) => ({ filters: { ...state.filters, [key]: value } })),
 
   clearFilters: () =>
-    set({ filters: { type: '', category: '', minPrice: '', maxPrice: '', search: '', availabilityStatus: '', dateStart: '', dateEnd: '' } }),
+    set({ filters: { type: '', category: '', minPrice: '', maxPrice: '', search: '', availabilityStatus: '', dateStart: '', dateEnd: '', sortBy: 'relevance' } }),
 
   setVehicles: (vehicles) => set({ vehicles }),
 
@@ -38,8 +39,8 @@ const useVehicleStore = create((set, get) => ({
   loadVehicles: async () => {
     set({ loading: true, error: null })
     try {
-      const response = await vehicleAPI.getAll()
-      set({ vehicles: response.data?.vehicles || [], loading: false })
+      const response = await itemAPI.getAll()
+      set({ vehicles: response.data?.items || [], loading: false })
     } catch (err) {
       console.error('Error fetching vehicles:', err)
       set({ error: 'Could not load vehicles', loading: false, vehicles: [] })
@@ -51,25 +52,37 @@ const useVehicleStore = create((set, get) => ({
    */
   getFiltered: (showOffline = false) => {
     const { vehicles, filters } = get()
-    return vehicles.filter((v) => {
+    const list = vehicles.filter((v) => {
+      // Normalize category property
+      const cat = v.category || 'vehicle'
       // Hide offline vehicles from explore unless showOffline is true
       if (!showOffline) {
-        const isAvailable = (v.status === 'approved') && (v.isLive !== false)
-        if (!isAvailable) return false
+        if (cat === 'accessory') {
+          if (v.availability === false) return false
+        } else {
+          const isApproved = v.status === 'approved' || v.verificationStatus === 'approved'
+          const isLive = v.isLive !== false
+          if (!isApproved || !isLive) return false
+        }
       }
-      if (filters.category && v.category !== filters.category) return false
+      if (filters.category && cat !== filters.category) return false
       if (filters.type && v.type !== filters.type) return false
       const price = v.pricePerHour || v.pricePerDay || 0
       if (filters.minPrice && price < Number(filters.minPrice)) return false
       if (filters.maxPrice && price > Number(filters.maxPrice)) return false
+      
       if (filters.search) {
-        const q = filters.search.toLowerCase()
-        if (
-          !v.name.toLowerCase().includes(q) &&
-          !(v.location || '').toLowerCase().includes(q)
-        )
+        const q = filters.search.toLowerCase().trim()
+        const matchName = (v.name || '').toLowerCase().includes(q)
+        const matchBrand = (v.brand || '').toLowerCase().includes(q)
+        const matchModel = (v.model || '').toLowerCase().includes(q)
+        const matchLocation = (v.location || '').toLowerCase().includes(q)
+        const matchType = (v.type || '').toLowerCase().includes(q)
+        if (!matchName && !matchBrand && !matchModel && !matchLocation && !matchType) {
           return false
+        }
       }
+
       if (filters.availabilityStatus && v.currentStatus !== filters.availabilityStatus) return false
       
       if (filters.dateStart && filters.dateEnd && v.disabledDates) {
@@ -85,6 +98,17 @@ const useVehicleStore = create((set, get) => ({
       
       return true
     })
+
+    // Apply Sorting
+    if (filters.sortBy === 'price_asc') {
+      list.sort((a, b) => (a.pricePerHour || a.pricePerDay || 0) - (b.pricePerHour || b.pricePerDay || 0))
+    } else if (filters.sortBy === 'price_desc') {
+      list.sort((a, b) => (b.pricePerHour || b.pricePerDay || 0) - (a.pricePerHour || a.pricePerDay || 0))
+    } else if (filters.sortBy === 'rating') {
+      list.sort((a, b) => (b.rating || 0) - (a.rating || 0))
+    }
+
+    return list
   },
 }))
 

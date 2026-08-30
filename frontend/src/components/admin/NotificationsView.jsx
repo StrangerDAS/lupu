@@ -1,32 +1,31 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { FiBell, FiCheck, FiCheckSquare } from 'react-icons/fi'
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, getDocs } from 'firebase/firestore'
-import { db } from '../../firebase/config'
+import { notificationAPI } from '../../api/endpoints'
 import toast from 'react-hot-toast'
 
 export default function NotificationsView() {
   const [notifs, setNotifs] = useState([])
 
+  const fetchNotifs = async () => {
+    try {
+      const { data } = await notificationAPI.getAll()
+      setNotifs(data.notifications || [])
+    } catch (err) {
+      console.error('Failed to load admin notifications:', err)
+    }
+  }
+
   useEffect(() => {
-    // Admin notices collection subscription (where read == false)
-    const q = query(
-      collection(db, 'notifications'),
-      where('userId', '==', 'admin_group'), // We can use global topic or target specifically
-      orderBy('createdAt', 'desc')
-    )
-    const unsubscribe = onSnapshot(q, (snap) => {
-      setNotifs(snap.docs.map(d => ({ _id: d.id, ...d.data() })))
-    }, (err) => {
-      // Fallback
-      console.error(err)
-    })
-    return () => unsubscribe()
+    fetchNotifs()
+    const interval = setInterval(fetchNotifs, 5000)
+    return () => clearInterval(interval)
   }, [])
 
   const markRead = async (id) => {
     try {
-      await updateDoc(doc(db, 'notifications', id), { read: true })
+      await notificationAPI.markRead(id)
+      setNotifs(prev => prev.map(n => n._id === id ? { ...n, read: true } : n))
       toast.success('Marked as read.')
     } catch (err) {
       console.error(err)
@@ -35,10 +34,8 @@ export default function NotificationsView() {
 
   const markAllRead = async () => {
     try {
-      const q = query(collection(db, 'notifications'), where('userId', '==', 'admin_group'), where('read', '==', false))
-      const snap = await getDocs(q)
-      const promises = snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { read: true }))
-      await Promise.all(promises)
+      await notificationAPI.markAllRead()
+      setNotifs(prev => prev.map(n => ({ ...n, read: true })))
       toast.success('All marked as read.')
     } catch (err) {
       console.error(err)
@@ -80,7 +77,7 @@ export default function NotificationsView() {
                   <div className="font-semibold text-white/95">{n.title}</div>
                   <p className="text-white/60 mt-0.5">{n.message}</p>
                   <span className="text-[9px] text-white/30 block mt-1">
-                    {n.createdAt?.seconds ? new Date(n.createdAt.seconds * 1000).toLocaleString() : 'Just now'}
+                    {n.createdAt ? new Date(n.createdAt).toLocaleString('en-IN') : 'Just now'}
                   </span>
                 </div>
               </div>

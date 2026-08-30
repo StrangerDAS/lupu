@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FiCalendar, FiClock, FiHeart, FiUser, FiX, FiCheck,
@@ -31,7 +31,7 @@ import {
 } from '../firebase/firestoreService'
 import { doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import { paymentAPI, bookingAPI, safetyAPI } from '../api/endpoints'
+import { paymentAPI, bookingAPI, safetyAPI, notificationAPI } from '../api/endpoints'
 import DisputeModal from '../components/DisputeModal'
 
 /* ═══════════════════════════════════════════════════════════
@@ -126,10 +126,11 @@ function formatTime(iso) {
    ═══════════════════════════════════════════════════════════ */
 
 export default function CustomerDashboard() {
+  const navigate = useNavigate()
   const { user, updateUser } = useAuthStore()
   const [activeTab, setActiveTab] = useState('overview')
 
-  // Real-time lists from Firestore
+  // Real-time lists from API
   const [bookings, setBookings] = useState([])
   const [payments, setPayments] = useState([])
   const [notifications, setNotifications] = useState([])
@@ -148,7 +149,6 @@ export default function CustomerDashboard() {
   const [reviewBooking, setReviewBooking] = useState(null)
   const [disputeBookingId, setDisputeBookingId] = useState(null)
   const [contactOwnerBooking, setContactOwnerBooking] = useState(null)
-  const [simulatedPaymentOrder, setSimulatedPaymentOrder] = useState(null)
 
   // KYC Submission States
   const [kycType, setKycType] = useState('college_id') // 'college_id' | 'aadhaar'
@@ -178,19 +178,24 @@ export default function CustomerDashboard() {
     }
 
     const adaptBooking = (b) => {
+      const s = (b.status || '').toLowerCase().trim()
       const statusMap = {
+        pending: 'under_review',
         requested: 'under_review',
         accepted: 'accepted',
-        confirmed: 'advance_paid',
-        ready_for_pickup: 'ready_for_pickup',
+        approved: 'accepted',
+        active: 'ongoing',
         ongoing: 'ongoing',
+        ready_for_pickup: 'ready_for_pickup',
+        confirmed: 'accepted',
         completed: 'completed',
+        returned: 'completed',
         cancelled: 'cancelled',
         rejected: 'rejected'
       }
       return {
         ...b,
-        bookingStatus: statusMap[b.status] || b.status
+        bookingStatus: statusMap[s] || s || 'under_review'
       }
     }
 
@@ -215,11 +220,26 @@ export default function CustomerDashboard() {
       }
     }
 
+    const fetchNotifications = async () => {
+      try {
+        const { data } = await notificationAPI.getAll()
+        setNotifications(data.notifications || [])
+      } catch (err) {
+        console.error('Error fetching notifications:', err)
+      } finally {
+        notificationsReady = true
+        checkReady()
+      }
+    }
+
     fetchBookings()
     fetchPayments()
+    fetchNotifications()
+
     const intervalBookings = setInterval(() => {
       fetchBookings()
       fetchPayments()
+      fetchNotifications()
     }, 5000)
 
     // Subscribe Favorites
@@ -227,17 +247,9 @@ export default function CustomerDashboard() {
       setFavoriteIds(ids)
     })
 
-    // Subscribe Notifications
-    const unsubNotifs = subscribeToUserNotifications(user._id, (data) => {
-      setNotifications(data)
-      notificationsReady = true
-      checkReady()
-    })
-
     return () => {
       clearInterval(intervalBookings)
       unsubFavs()
-      unsubNotifs()
     }
   }, [user?._id])
 
@@ -368,164 +380,7 @@ export default function CustomerDashboard() {
   const pastRentals = completedBookings.concat(cancelledBookings)
 
 
-  /* ── Razorpay Payment Integration ───────────────────── */
-  const loadRazorpay = () => {
-    return new Promise((resolve) => {
-      const script = document.createElement('script')
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js'
-      script.async = true
-      script.onload = () => resolve(true)
-      script.onerror = () => resolve(false)
-      document.body.appendChild(script)
-    })
-  }
 
-  const saveSuccessfulPayment = async (response, booking, type, amount) => {
-    const isAdvance = type === 'advance'
-    const verifyToastId = toast.loading('Confirming transaction...')
-    try {
-      // Call the MongoDB verification backend endpoint
-      await paymentAPI.verify({
-        bookingId: booking._id || booking.bookingId,
-        type,
-        razorpayOrderId: response.razorpay_order_id,
-        razorpayPaymentId: response.razorpay_payment_id,
-        razorpaySignature: response.razorpay_signature
-      })
-
-      toast.success('Payment completed successfully!', { id: verifyToastId })
-
-      // Send notifications for payment success
-      try {
-        const renterId = booking.renterId || user._id
-        const renterName = booking.renterName || user.name || 'Renter'
-        const ownerId = booking.ownerId
-        const vehicleName = booking.vehicleName || 'Vehicle'
-
-        if (isAdvance) {
-          // 1. Notify Renter
-          await addNotification(renterId, {
-            title: 'Advance Payment Successful',
-            message: `Your advance payment of ₹${amount} for booking ${vehicleName} was successful!`,
-            bookingId: booking._id || booking.bookingId,
-            type: 'payment'
-          })
-
-          // 2. Notify Owner
-          if (ownerId) {
-            await addNotification(ownerId, {
-              title: 'Advance Payment Received',
-              message: `Renter ${renterName} paid the 25% advance of ₹${amount} for ${vehicleName}.`,
-              bookingId: booking._id || booking.bookingId,
-              type: 'payment'
-            })
-          }
-
-          // 3. Notify Admin
-          await addNotification('admin', {
-            title: 'Payment Received',
-            message: `Payment of ₹${amount} (Advance) received for booking ${booking._id || booking.bookingId}.`,
-            bookingId: booking._id || booking.bookingId,
-            type: 'payment'
-          })
-        } else {
-          // 1. Notify Renter
-          await addNotification(renterId, {
-            title: 'Final Payment Successful',
-            message: `Your final payment of ₹${amount} for booking ${vehicleName} was successful!`,
-            bookingId: booking._id || booking.bookingId,
-            type: 'payment'
-          })
-
-          // 2. Notify Owner
-          if (ownerId) {
-            await addNotification(ownerId, {
-              title: 'Final Payment Received',
-              message: `Renter ${renterName} paid the 75% final balance of ₹${amount} for ${vehicleName}.`,
-              bookingId: booking._id || booking.bookingId,
-              type: 'payment'
-            })
-          }
-
-          // 3. Notify Admin
-          await addNotification('admin', {
-            title: 'Payment Received',
-            message: `Payment of ₹${amount} (Final) received for booking ${booking._id || booking.bookingId}.`,
-            bookingId: booking._id || booking.bookingId,
-            type: 'payment'
-          })
-        }
-      } catch (notifErr) {
-        console.error('Failed to trigger payment notifications:', notifErr)
-      }
-    } catch (err) {
-      console.error('Error handling payment success:', err)
-      toast.error('Payment succeeded but failed to update status in database. Contact support.', { id: verifyToastId })
-    }
-  }
-
-  const handleRazorpayPayment = async (booking, type) => {
-    const isAdvance = type === 'advance'
-    const amount = isAdvance 
-      ? (booking.pricing?.advance || Math.round(booking.totalPrice * 0.25))
-      : (booking.pricing?.remaining || Math.round(booking.totalPrice * 0.75))
-
-    const toastId = toast.loading('Initializing secure gateway...')
-    try {
-      const orderRes = await paymentAPI.createOrder(
-        booking._id || booking.bookingId,
-        type
-      )
-      const order = orderRes.data
-
-      toast.dismiss(toastId)
-
-      const keyId = import.meta.env.VITE_RAZORPAY_KEY_ID || 'YOUR_RAZORPAY_KEY_ID'
-      const isMockPayment = order.isMock || !keyId || keyId.startsWith('YOUR_') || keyId === ''
-
-      if (isMockPayment) {
-        setSimulatedPaymentOrder({
-          order,
-          booking,
-          type,
-          amount
-        })
-        return
-      }
-
-      const loaded = await loadRazorpay()
-      if (!loaded) {
-        toast.error('Razorpay SDK failed to load. Please check your internet connection.', { id: toastId })
-        return
-      }
-
-      const options = {
-        key: keyId,
-        amount: order.amount,
-        currency: order.currency,
-        name: 'LUPU Rentals',
-        description: isAdvance ? '25% Booking Advance Payment' : '75% Final Settlement Dues',
-        order_id: order.id,
-        handler: async function (response) {
-          await saveSuccessfulPayment(response, booking, type, amount)
-        },
-        prefill: {
-          name: user.name || '',
-          email: user.email || '',
-          contact: user.phone || ''
-        },
-        theme: {
-          color: '#ff6b00'
-        }
-      }
-
-      const rzp = new window.Razorpay(options)
-      rzp.open()
-    } catch (err) {
-      console.error('Payment initialization error:', err)
-      toast.error(err.response?.data?.message || err.message || 'Failed to initiate payment. Please try again.', { id: toastId })
-    }
-  }
   
   const totalSpent = useMemo(() => {
     return completedBookings.reduce((sum, b) => sum + (b.totalPrice || 0), 0)
@@ -576,7 +431,8 @@ export default function CustomerDashboard() {
 
   const handleMarkAllRead = async () => {
     try {
-      await markAllNotificationsRead(user._id)
+      await notificationAPI.markAllRead()
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })))
       toast.success('All notifications marked as read')
     } catch {
       toast.error('Failed to mark notifications')
@@ -585,9 +441,21 @@ export default function CustomerDashboard() {
 
   const handleMarkRead = async (id) => {
     try {
-      await markNotificationRead(id)
+      await notificationAPI.markRead(id)
+      setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n))
     } catch {
       // silent fail
+    }
+  }
+
+  const handleNotificationClick = async (n) => {
+    if (!n.read) {
+      await handleMarkRead(n._id)
+    }
+    if (n.link) {
+      navigate(n.link)
+    } else {
+      navigate('/my-bookings')
     }
   }
 
@@ -1017,14 +885,6 @@ export default function CustomerDashboard() {
                                  {cancellingId === (b._id || b.bookingId) ? 'Cancelling…' : 'Cancel Request'}
                                </button>
                              )}
-                             {['approved', 'accepted'].includes(b.bookingStatus) && (
-                               <button
-                                 onClick={() => handleRazorpayPayment(b, 'advance')}
-                                 className="btn-primary text-xs py-2 px-4 bg-brand text-white hover:bg-brand-dark transition font-semibold"
-                               >
-                                 Pay 25% Advance (₹{b.pricing?.advance || Math.round(b.totalPrice * 0.25)})
-                               </button>
-                             )}
                            </div>
                         </div>
                       )
@@ -1148,14 +1008,6 @@ export default function CustomerDashboard() {
                             >
                               <FiStar /> Write Review
                             </button>
-                            {b.bookingStatus === 'completed' && (
-                              <button
-                                onClick={() => handleRazorpayPayment(b, 'final')}
-                                className="btn-primary text-xs py-2 px-4 bg-brand text-white hover:bg-brand-dark transition font-semibold"
-                              >
-                                Pay Remaining 75% (₹{b.pricing?.remaining || Math.round(b.totalPrice * 0.75)})
-                              </button>
-                            )}
                           </div>
                         </div>
                       ))}
@@ -1405,7 +1257,7 @@ export default function CustomerDashboard() {
                       {notifications.map((n) => (
                         <div
                           key={n._id}
-                          onClick={() => !n.read && handleMarkRead(n._id)}
+                          onClick={() => handleNotificationClick(n)}
                           className={`card p-4 flex gap-3 cursor-pointer transition ${
                             !n.read ? 'border-brand/20 bg-brand/5' : 'hover:bg-surface-2'
                           }`}
@@ -1721,107 +1573,7 @@ export default function CustomerDashboard() {
         )}
       </AnimatePresence>
 
-      {/* Razorpay Simulated Checkout Modal */}
-      <AnimatePresence>
-        {simulatedPaymentOrder && (() => {
-          const { order, booking, type, amount } = simulatedPaymentOrder
-          const isAdvance = type === 'advance'
-          
-          const handleSimulatedSuccess = async () => {
-            const mockResponse = {
-              razorpay_payment_id: `pay_mock_${Math.random().toString(36).substring(2, 11)}`,
-              razorpay_order_id: order.id,
-              razorpay_signature: `sig_mock_${Math.random().toString(36).substring(2, 11)}`
-            }
-            setSimulatedPaymentOrder(null)
-            await saveSuccessfulPayment(mockResponse, booking, type, amount)
-          }
-
-          const handleSimulatedFailure = () => {
-            setSimulatedPaymentOrder(null)
-            toast.error('Payment cancelled or failed by user')
-          }
-
-          return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fade-in">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 15 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 15 }}
-                className="w-full max-w-md bg-[#121214] border border-white/10 rounded-3xl overflow-hidden shadow-2xl"
-              >
-                {/* Header */}
-                <div className="bg-[#1a1a1e] px-6 py-5 border-b border-white/5 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-brand flex items-center justify-center font-bold text-white text-base">
-                      L
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-white tracking-wide">Razorpay Checkout</h3>
-                      <p className="text-[10px] text-green-400 font-semibold tracking-wider uppercase">Sandbox / Test Mode</p>
-                    </div>
-                  </div>
-                  <div className="px-2.5 py-1 rounded bg-white/5 text-[10px] text-white/50 font-mono">
-                    {order.id}
-                  </div>
-                </div>
-
-                {/* Content */}
-                <div className="p-6 space-y-5">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="font-semibold text-white text-base">
-                        {isAdvance ? 'Booking Advance Payment (25%)' : 'Remaining Ride Balance (75%)'}
-                      </h4>
-                      <p className="text-xs text-white/40 mt-1">LUPU Rental Services</p>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-2xl font-black text-brand">₹{amount}</div>
-                      <div className="text-[10px] text-white/30 font-medium mt-0.5">INR</div>
-                    </div>
-                  </div>
-
-                  {/* Customer Prefill Info */}
-                  <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 space-y-2.5">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-white/40">Customer Name</span>
-                      <span className="font-medium text-white">{user.name}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-white/40">Email Address</span>
-                      <span className="font-medium text-white">{user.email}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-white/40">Contact Phone</span>
-                      <span className="font-medium text-white">{user.phone || 'N/A'}</span>
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-brand/5 border border-brand/20 rounded-xl text-[11px] text-brand/90 leading-relaxed">
-                    💡 <strong>Local Test Sandbox:</strong> Real credentials were not detected in your `.env`. You can securely test the booking state transition and Firestore logs by simulating this payment.
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="px-6 py-4 bg-[#1a1a1e] border-t border-white/5 flex gap-3">
-                  <button
-                    onClick={handleSimulatedFailure}
-                    className="w-1/3 py-3 rounded-xl border border-white/10 text-xs font-semibold text-white/70 hover:bg-white/5 transition"
-                  >
-                    Cancel / Fail
-                  </button>
-                  <button
-                    onClick={handleSimulatedSuccess}
-                    className="w-2/3 py-3 rounded-xl bg-brand hover:bg-brand-hover text-xs font-bold text-white shadow-lg shadow-brand/20 transition flex items-center justify-center gap-1.5"
-                  >
-                    Simulate Success (Pay ₹{amount})
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          )
-        })()}
-      </AnimatePresence>
+      
 
       {/* Review & Star Rating Modal */}
       <ReviewModal

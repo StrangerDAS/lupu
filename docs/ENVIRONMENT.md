@@ -16,8 +16,8 @@ Create a `.env` file in the `backend/` directory based on the following schema:
 | `JWT_SECRET` | Yes | *Required in Prod* | Secret key for signing JSON Web Tokens. Must be a secure 64+ char random hex string in production. |
 | `JWT_EXPIRES_IN` | No | `7d` | Lifespan expiration duration for signed client sessions. |
 | `ALLOWED_ORIGINS` | No | *Localhost Dev list* | Comma-separated list of browser origins permitted to bypass CORS security policies. |
-| `RAZORPAY_KEY_ID` | Yes | `YOUR_RAZORPAY_KEY_ID` | Razorpay Account API Key. Leave as default placeholder to enable simulated payment checkout modes. |
-| `RAZORPAY_KEY_SECRET` | Yes | `YOUR_RAZORPAY_KEY_SECRET` | Razorpay Account secret key matching Key ID. |
+| *(Future Integration)* `RAZORPAY_KEY_ID` | No | `YOUR_RAZORPAY_KEY_ID` | Future Integration: Razorpay Account API Key. |
+| *(Future Integration)* `RAZORPAY_KEY_SECRET` | No | `YOUR_RAZORPAY_KEY_SECRET` | Future Integration: Razorpay Account secret key. |
 
 ### Generating a Secure JWT Secret
 For production environments, generate a cryptographically secure key:
@@ -36,7 +36,7 @@ Create a `.env` file in the `frontend/` directory based on the following schema:
 | Variable | Required | Default Value | Description |
 |----------|----------|---------------|-------------|
 | `VITE_API_URL` | Yes | `/api` | Base URL routing endpoint for proxying REST API calls to the Express server. |
-| `VITE_RAZORPAY_KEY_ID` | Yes | `YOUR_RAZORPAY_KEY_ID` | Exposes your public Razorpay API Key to initialize the payment checkout window in client browsers. |
+| *(Future Integration)* `VITE_RAZORPAY_KEY_ID` | No | `YOUR_RAZORPAY_KEY_ID` | Future Integration: Public Razorpay API Key. |
 | `VITE_FIREBASE_API_KEY` | Yes | *Required* | Firebase Web SDK configuration parameter. |
 | `VITE_FIREBASE_AUTH_DOMAIN` | Yes | *Required* | Firebase Web SDK configuration parameter. |
 | `VITE_FIREBASE_PROJECT_ID` | Yes | *Required* | Firebase Web SDK configuration parameter. |
@@ -63,7 +63,7 @@ Create a `.env` file in the `frontend/` directory based on the following schema:
    ```
 
 ### Phase 3: Frontend Deployment
-1. Set client-side variables during build time (`VITE_API_URL`, `VITE_RAZORPAY_KEY_ID`, and Firebase keys).
+1. Set client-side variables during build time (`VITE_API_URL` and Firebase keys).
 2. Compile client production bundle:
    ```bash
    npm run build

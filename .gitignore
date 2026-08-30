@@ -39,5 +39,9 @@ Thumbs.db
 # Backend — local uploads (use S3/Cloudinary in production)
 backend/uploads/
 
-# Backend — runtime files
+# Backend — runtime files & local DB
 backend/server.pid
+backend/data/
+backend/test-*.js
+backend/test-*.mjs
+scratch/

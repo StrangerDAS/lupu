@@ -7,6 +7,10 @@ const paymentSchema = new mongoose.Schema(
       ref: 'Booking',
       required: true,
     },
+    vehicleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Vehicle',
+    },
     renterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -17,38 +21,70 @@ const paymentSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    rentalAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    securityDeposit: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    platformFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    ownerPayoutAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     amount: {
       type: Number,
       required: true,
       min: 0,
     },
+    currency: {
+      type: String,
+      default: 'INR',
+    },
     type: {
       type: String,
-      enum: ['advance', 'final', 'refund'],
-      required: true,
+      enum: ['rental', 'advance', 'final', 'deposit', 'refund', 'payout'],
+      default: 'rental',
     },
     status: {
       type: String,
-      enum: ['pending', 'success', 'failed', 'refunded'],
+      enum: ['pending', 'paid', 'success', 'failed', 'refunded', 'cancelled', 'not_integrated'],
       default: 'pending',
     },
-    razorpayOrderId: String,
-    razorpayPaymentId: String,
-    razorpaySignature: String,
-    platformFee: {
-      type: Number,
-      default: 50,
+    paymentMethod: {
+      type: String,
+      default: 'none',
     },
-    ownerShare: {
-      type: Number,
-      default: 0,
+    transactionReference: {
+      type: String,
+      default: null,
     },
     transactionId: {
       type: String,
       unique: true,
-      required: true,
+      sparse: true,
     },
-    errorMessage: String,
+    payoutStatus: {
+      type: String,
+      enum: ['unsettled', 'processing', 'settled', 'hold'],
+      default: 'unsettled',
+    },
+    payoutDetails: {
+      upiId: String,
+      accountHolderName: String,
+      accountNumberMasked: String,
+      ifscCode: String,
+    },
+    notes: String,
   },
   { timestamps: true }
 )
@@ -57,5 +93,7 @@ const paymentSchema = new mongoose.Schema(
 paymentSchema.index({ bookingId: 1 })
 paymentSchema.index({ renterId: 1 })
 paymentSchema.index({ ownerId: 1 })
+paymentSchema.index({ status: 1 })
 
 export default mongoose.model('Payment', paymentSchema)
+

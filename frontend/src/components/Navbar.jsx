@@ -23,25 +23,27 @@ export default function Navbar() {
   const [notifications, setNotifications] = useState([])
   const [showNotifDropdown, setShowNotifDropdown] = useState(false)
 
+  const fetchNotifications = async () => {
+    if (!user?._id) return
+    try {
+      const { data } = await notificationAPI.getAll()
+      setNotifications(data.notifications || [])
+    } catch (err) {
+      console.error('Failed to load notifications in Navbar:', err)
+    }
+  }
+
   useEffect(() => {
     if (user?._id) {
-      const fetchNotifications = async () => {
-        try {
-          const { data } = await notificationAPI.getAll()
-          setNotifications(data.notifications || [])
-        } catch (err) {
-          console.error('Failed to load notifications in Navbar:', err)
-        }
-      }
       fetchNotifications()
       const interval = setInterval(fetchNotifications, 5000)
       return () => clearInterval(interval)
     } else {
       setNotifications([])
     }
-  }, [user])
+  }, [user?._id])
 
-  const unreadCount = notifications.filter((n) => !n.read).length
+  const unreadCount = notifications.filter((n) => !n.read && !n.isRead).length
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20)
@@ -133,6 +135,7 @@ export default function Navbar() {
                     onClose={() => setShowNotifDropdown(false)}
                     notifications={notifications}
                     userId={user?._id}
+                    onRefresh={fetchNotifications}
                   />
                 </div>
                 {dashLink && (

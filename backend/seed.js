@@ -14,64 +14,15 @@ export async function seedDatabase() {
 
     console.log('  🌱 Seeding database with initial data...')
 
-    // Seed users (1 Admin, 1 Owner, 1 Renter)
+    // Seed users (1 admin, 1 Owner, 1 Renter)
     const [admin, owner, renter] = await User.insertMany([
-      { name: 'Admin User', email: 'admin@lupu.in', phone: '9876543210', role: 'admin', isRider: true, isOwner: true, kycStatus: 'verified' },
+      { name: 'Admin User', email: 'admin@lupu.in', phone: '9876543210', role: 'user', isRider: true, isOwner: false, kycStatus: 'verified' },
       { name: 'Owner User', email: 'owner@lupu.in', phone: '9876543211', role: 'owner', isRider: true, isOwner: true, kycStatus: 'verified' },
       { name: 'Renter User', email: 'renter@lupu.in', phone: '9876543212', role: 'user', isRider: true, isOwner: false, kycStatus: 'verified' },
     ])
 
-    // Seed vehicles
-    const vehicles = await Vehicle.insertMany([
-      {
-        name: 'Royal Enfield Classic 350', brand: 'Royal Enfield', model: 'Classic 350',
-        registrationNumber: 'AS01AB1234',
-        type: 'bike', pricePerHour: 120, pricePerDay: 800,
-        verificationStatus: 'approved', status: 'approved', isLive: true,
-        rating: 4.8, totalReviews: 24,
-        location: 'AT Road, Dibrugarh',
-        description: 'A well-maintained Royal Enfield Classic 350. Full-service history available. Helmet included. Perfect for long rides and city commuting.',
-        specs: { year: 2022, cc: 350, fuel: 'Petrol', transmission: 'Manual' },
-        images: [], photos: [], documents: {},
-        ownerId: owner._id, owner: { name: owner.name, rating: 4.9, totalTrips: 47 }
-      },
-      {
-        name: 'Honda Activa 6G', brand: 'Honda', model: 'Activa 6G',
-        registrationNumber: 'AS01CD5678',
-        type: 'scooty', pricePerHour: 55, pricePerDay: 350,
-        verificationStatus: 'approved', status: 'approved', isLive: true,
-        rating: 4.6, totalReviews: 18,
-        location: 'Chowkidinghee, Dibrugarh',
-        description: 'Reliable Honda Activa — ideal for city errands and college commutes.',
-        specs: { year: 2023, cc: 110, fuel: 'Petrol', transmission: 'Automatic' },
-        images: [], photos: [], documents: {},
-        ownerId: owner._id, owner: { name: owner.name, rating: 4.7, totalTrips: 31 }
-      },
-      {
-        name: 'Bajaj Pulsar NS200', brand: 'Bajaj', model: 'Pulsar NS200',
-        registrationNumber: 'AS01EF9012',
-        type: 'bike', pricePerHour: 100, pricePerDay: 650,
-        verificationStatus: 'approved', status: 'approved', isLive: false,
-        rating: 4.5, totalReviews: 9,
-        location: 'Graham Bazar, Dibrugarh',
-        description: 'Sporty Pulsar NS200 in great condition. Good for highway and city rides.',
-        specs: { year: 2021, cc: 200, fuel: 'Petrol', transmission: 'Manual' },
-        images: [], photos: [], documents: {},
-        ownerId: owner._id, owner: { name: owner.name, rating: 4.5, totalTrips: 12 }
-      },
-      {
-        name: 'Hero Splendor Plus', brand: 'Hero', model: 'Splendor Plus',
-        registrationNumber: 'AS01GH3456',
-        type: 'bike', pricePerHour: 40, pricePerDay: 250,
-        verificationStatus: 'submitted', status: 'pending_verification', isLive: false,
-        rating: 0, totalReviews: 0,
-        location: 'Mohanbari, Dibrugarh',
-        description: 'Budget-friendly Hero Splendor. Perfect for city commuting.',
-        specs: { year: 2023, cc: 100, fuel: 'Petrol', transmission: 'Manual' },
-        images: [], photos: [], documents: {},
-        ownerId: owner._id, owner: { name: owner.name, rating: 0, totalTrips: 0 }
-      }
-    ])
+    // Vehicles start empty — real vehicles added by owners
+    const vehicles = []
 
     // Seed accessories
     await Accessory.insertMany([
@@ -79,33 +30,10 @@ export async function seedDatabase() {
       { name: 'Riding Gloves', category: 'accessory', pricePerDay: 30, description: 'Touch-screen compatible riding gloves. Good grip.', availability: true, ownerId: owner._id, owner: { name: owner.name }, rating: 4.5, totalReviews: 8, location: 'AT Road, Dibrugarh', images: [] }
     ])
 
-    // Seed sample bookings
-    await Booking.insertMany([
-      {
-        renterId: renter._id,
-        vehicleId: vehicles[1]._id,
-        ownerId: owner._id,
-        startTime: new Date('2024-05-10T09:00:00Z'),
-        endTime: new Date('2024-05-10T18:00:00Z'),
-        status: 'completed',
-        price: 350,
-        deposit: 0,
-        duration: 9,
-        vehicleName: 'Honda Activa 6G',
-        vehicleType: 'scooty',
-        renterName: renter.name,
-        renterEmail: renter.email,
-        ownerName: owner.name,
-        pricing: { total: 350, advance: 88, remaining: 262 },
-        agreementAccepted: true,
-        agreementTimestamp: new Date('2024-05-10T08:30:00Z'),
-      }
-    ])
-
-    console.log(`  ✅ Seeded: 3 users, ${vehicles.length} vehicles, 2 accessories, 1 bookings`)
+    console.log(`  ✅ Seeded: 3 users, ${vehicles.length} vehicles, 2 accessories`)
     console.log('')
     console.log('  📧 Test accounts (use send-otp to get code, printed in console):')
-    console.log('     admin@lupu.in  (Admin)')
+    console.log('     admin@lupu.in  (User)')
     console.log('     owner@lupu.in  (Owner)')
     console.log('     renter@lupu.in (Renter)')
 

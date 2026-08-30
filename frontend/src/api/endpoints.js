@@ -70,19 +70,28 @@ export const roleAPI = {
   activateRider: () => api.post('/user/activate-rider'),
 }
 
-/* ── Payments ───────────────────────────────────────────── */
+/* ── Payments & Financials ──────────────────────────────── */
 export const paymentAPI = {
-  createOrder: (data) => api.post('/payment/create-order', data),
-  verify: (data) => api.post('/payment/verify', data),
-  refund: (id) => api.post(`/payment/${id}/refund`),
-  getHistory: () => api.get('/payment/history'),
+  createOrder: (data) => api.post('/payments/create-order', data),
+  verify: (data) => api.post('/payments/verify', data),
+  createRecord: (data) => api.post('/payments/records', data),
+  getBookingPayments: (bookingId) => api.get(`/payments/booking/${bookingId}`),
+  getHistory: () => api.get('/payments/history'),
+  getPayoutDetails: () => api.get('/user/payout-details'),
+  updatePayoutDetails: (data) => api.put('/user/payout-details', data),
+  getOwnerEarnings: () => api.get('/payments/owner/earnings'),
+  getAdminStats: () => api.get('/admin/financials/stats'),
+  getAdminTransactions: () => api.get('/admin/financials/transactions'),
 }
+
 
 /* ── Notifications ──────────────────────────────────────── */
 export const notificationAPI = {
   getAll: () => api.get('/notifications'),
   markRead: (id) => api.patch(`/notifications/${id}/read`),
   markAllRead: () => api.post('/notifications/read-all'),
+  delete: (id) => api.delete(`/notifications/${id}`),
+  deleteAll: () => api.delete('/notifications'),
 }
 
 /* ── Simulated Emails ───────────────────────────────────── */
@@ -96,23 +105,58 @@ export const reviewAPI = {
   submit: (data) => api.post('/reviews', data),
   getVehicleReviews: (vehicleId) => api.get(`/reviews/vehicle/${vehicleId}`),
   getUserReviews: (userId) => api.get(`/reviews/user/${userId}`),
+  getMyReviews: () => api.get('/reviews/my'),
   getEligibility: (bookingId) => api.get(`/reviews/eligible/${bookingId}`),
+  edit: (id, data) => api.patch(`/reviews/${id}`, data),
+  delete: (id, reason) => api.delete(`/reviews/${id}`, { data: { reason } }),
+  getAllAdmin: () => api.get('/admin/reviews'),
 }
+
 
 /* ── Trust & Safety ─────────────────────────────────────── */
 export const safetyAPI = {
   report: (data) => api.post('/safety/report', data),
+  getMyReports: () => api.get('/safety/my-reports'),
+  getReportById: (id) => api.get(`/safety/reports/${id}`),
   dispute: (data) => api.post('/safety/dispute', data),
+  getMyDisputes: () => api.get('/safety/my-disputes'),
+  getDisputeById: (id) => api.get(`/safety/disputes/${id}`),
+  sendDisputeMessage: (id, message) => api.post(`/safety/disputes/${id}/messages`, { message }),
   triggerSOS: (data) => api.post('/safety/sos', data),
   updateEmergencyContacts: (data) => api.put('/users/emergency-contacts', data),
 }
 
 /* ── Admin Safety ───────────────────────────────────────── */
 export const adminSafetyAPI = {
-  suspendUser: (id, isSuspended) => api.patch(`/admin/users/${id}/suspend`, { isSuspended }),
+  suspendUser: (id, isSuspended, reason) => api.patch(`/admin/users/${id}/suspend`, { isSuspended, reason }),
   updateFraudScore: (id, fraudScore) => api.patch(`/admin/users/${id}/fraud`, { fraudScore }),
   getReports: () => api.get('/admin/safety/reports'),
+  updateReportStatus: (id, status, adminNotes) => api.patch(`/admin/safety/reports/${id}/status`, { status, adminNotes }),
   getDisputes: () => api.get('/admin/safety/disputes'),
+  updateDisputeStatus: (id, status, adminNotes) => api.patch(`/admin/safety/disputes/${id}/status`, { status, adminNotes }),
   getSOS: () => api.get('/admin/safety/sos'),
 }
+
+/* ── Support ────────────────────────────────────────────── */
+export const supportAPI = {
+  createTicket: (data) => api.post('/support/tickets', data),
+  getMyTickets: () => api.get('/support/my-tickets'),
+  getTicketById: (id) => api.get(`/support/tickets/${id}`),
+  replyTicket: (id, message) => api.post(`/support/tickets/${id}/reply`, { message }),
+}
+
+/* ── Admin Support ──────────────────────────────────────── */
+export const adminSupportAPI = {
+  createTicket: (data) => api.post('/support/tickets', data),
+  getTickets: () => api.get('/admin/support/tickets'),
+  replyTicket: (id, message) => api.post(`/admin/support/tickets/${id}/reply`, { message }),
+  updateStatus: (id, status, adminNotes) => api.patch(`/admin/support/tickets/${id}/status`, { status, adminNotes }),
+}
+
+/* ── Admin Audit Logs ───────────────────────────────────── */
+export const adminAuditAPI = {
+  getLogs: () => api.get('/admin/audit-logs'),
+}
+
+
 

@@ -1,5 +1,17 @@
 import mongoose from 'mongoose'
 
+const evidenceSchema = new mongoose.Schema({
+  url: {
+    type: String,
+    required: true
+  },
+  filename: String,
+  uploadedAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false })
+
 const reportSchema = new mongoose.Schema(
   {
     reporterId: {
@@ -9,13 +21,12 @@ const reportSchema = new mongoose.Schema(
     },
     targetType: {
       type: String,
-      enum: ['user', 'vehicle'],
+      enum: ['user', 'vehicle', 'booking'],
       required: true,
     },
     targetId: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
-      // Can reference User or Vehicle dynamically
     },
     reason: {
       type: String,
@@ -26,14 +37,22 @@ const reportSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'investigating', 'resolved', 'dismissed'],
-      default: 'pending',
+      enum: ['open', 'under_review', 'resolved', 'closed', 'rejected', 'pending', 'investigating', 'dismissed'],
+      default: 'open',
     },
+    evidence: [evidenceSchema],
     adminNotes: {
       type: String,
+      default: ''
+    },
+    resolvedAt: Date,
+    resolvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
     }
   },
   { timestamps: true }
 )
 
 export default mongoose.model('Report', reportSchema)
+

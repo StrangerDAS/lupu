@@ -33,16 +33,19 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       enum: [
         'draft',
+        'pending',
         'requested',
         'accepted',
-        'rejected',
-        'cancelled',
-        'confirmed',
-        'ready_for_pickup',
+        'approved',
+        'active',
         'ongoing',
-        'completed'
+        'ready_for_pickup',
+        'confirmed',
+        'completed',
+        'rejected',
+        'cancelled'
       ],
-      default: 'requested',
+      default: 'pending',
     },
     price: {
       type: Number,
@@ -74,10 +77,10 @@ const bookingSchema = new mongoose.Schema(
     remainingAmount: { type: Number, default: 0 },
     paymentStatus: {
       type: String,
-      enum: ['Online Payment', 'Pending', 'Paid', 'Failed', 'Refunded'],
+      enum: ['Online Payment', 'Pending', 'Paid', 'Failed', 'Refunded', 'not_integrated'],
       default: 'Pending',
     },
-    paymentMethod: { type: String, default: 'razorpay' },
+    paymentMethod: { type: String, default: 'none' },
     ownerPaymentStatus: {
       type: String,
       enum: ['Pending Pickup', 'Pending Owner Payment', 'Paid To Owner', 'Completed'],
@@ -129,6 +132,35 @@ const bookingSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
+const normalizeBookingStatus = (val) => {
+  if (!val) return 'pending'
+  const v = val.toLowerCase().trim()
+  if (['pending', 'requested', 'draft'].includes(v)) return 'pending'
+  if (['accepted', 'approved'].includes(v)) return 'accepted'
+  if (['active', 'ongoing', 'ready_for_pickup', 'confirmed', 'in progress', 'picked up'].includes(v)) return 'active'
+  if (['completed', 'returned'].includes(v)) return 'completed'
+  if (['rejected'].includes(v)) return 'rejected'
+  if (['cancelled'].includes(v)) return 'cancelled'
+  return v
+}
+
+bookingSchema.pre('save', function (next) {
+  if (this.isModified('status')) {
+    this.status = normalizeBookingStatus(this.status)
+  }
+  next()
+})
+
+bookingSchema.pre('findOneAndUpdate', function (next) {
+  const update = this.getUpdate()
+  if (!update) return next()
+  const setObj = update.$set || update
+  if (setObj.status) {
+    setObj.status = normalizeBookingStatus(setObj.status)
+  }
+  next()
+})
+
 // Indexes for common queries and validation checks
 bookingSchema.index({ vehicleId: 1, startTime: 1, endTime: 1 })
 bookingSchema.index({ renterId: 1, status: 1 })
@@ -136,3 +168,4 @@ bookingSchema.index({ ownerId: 1, status: 1 })
 bookingSchema.index({ createdAt: -1 })
 
 export default mongoose.model('Booking', bookingSchema)
+

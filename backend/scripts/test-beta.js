@@ -64,7 +64,7 @@ async function runTest() {
     await booking.save()
     console.log(`[3] Owner accepted booking | Status: accepted`)
 
-    // 5. User pays advance (simulating Razorpay success)
+    // 5. User settles advance payment
     await Payment.create({
       bookingId: booking._id,
       userId: user._id,
@@ -72,7 +72,7 @@ async function runTest() {
       renterId: user._id,
       amount: booking.pricing.advance,
       type: 'advance',
-      method: 'razorpay',
+      method: 'direct',
       status: 'success',
       transactionId: 'pay_beta_test_' + Date.now()
     })
@@ -97,7 +97,7 @@ async function runTest() {
       renterId: user._id,
       amount: booking.pricing.remaining,
       type: 'final',
-      method: 'razorpay',
+      method: 'direct',
       status: 'success',
       transactionId: 'pay_beta_test_final_' + Date.now()
     })

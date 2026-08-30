@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { FiSearch, FiTrash2, FiAlertCircle } from 'react-icons/fi'
-import { moderateReview } from '../../firebase/firestoreService'
+import { reviewAPI } from '../../api/endpoints'
 import useAuthStore from '../../store/authStore'
 import toast from 'react-hot-toast'
 
-export default function ReviewsView({ reviews = [] }) {
+export default function ReviewsView({ reviews = [], onRefresh }) {
   const { user } = useAuthStore()
   const [search, setSearch] = useState('')
 
@@ -17,12 +17,14 @@ export default function ReviewsView({ reviews = [] }) {
   )
 
   const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this review from the platform? This action recalculates vehicle ratings.')) return
+    const reason = prompt('Enter reason for removing this review (audit logged):', 'Policy violation - inappropriate content')
+    if (reason === null) return
     try {
-      await moderateReview(id, user._id, user.name, 'Policy violation - inappropriate content')
-      toast.success('Review removed.')
+      await reviewAPI.delete(id, reason)
+      toast.success('Review removed and ratings updated.')
+      onRefresh?.()
     } catch (err) {
-      toast.error('Failed to moderate: ' + err.message)
+      toast.error('Failed to moderate: ' + (err.response?.data?.message || err.message))
     }
   }
 

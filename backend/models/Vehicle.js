@@ -39,7 +39,7 @@ const vehicleSchema = new mongoose.Schema(
     },
     pricePerDay: {
       type: Number,
-      min: [1, 'Price per day must be positive'],
+      min: [0, 'Price per day cannot be negative'],
     },
     securityDeposit: {
       type: Number,
@@ -75,13 +75,13 @@ const vehicleSchema = new mongoose.Schema(
     },
     verificationStatus: {
       type: String,
-      enum: ['draft', 'submitted', 'under_review', 'approved', 'rejected'],
-      default: 'draft',
+      enum: ['draft', 'submitted', 'pending_verification', 'under_review', 'approved', 'rejected'],
+      default: 'submitted',
     },
     status: {
       type: String,
-      enum: ['draft', 'pending_verification', 'under_review', 'approved', 'rejected'],
-      default: 'draft',
+      enum: ['draft', 'submitted', 'pending_verification', 'under_review', 'approved', 'rejected'],
+      default: 'pending_verification',
     },
     submittedAt: Date,
     verifiedAt: Date,
@@ -112,19 +112,29 @@ const vehicleSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
+const syncStatusMap = (val) => {
+  if (val === 'submitted' || val === 'pending_verification') {
+    return { verificationStatus: 'submitted', status: 'pending_verification' }
+  }
+  if (val === 'approved') {
+    return { verificationStatus: 'approved', status: 'approved' }
+  }
+  if (val === 'rejected') {
+    return { verificationStatus: 'rejected', status: 'rejected' }
+  }
+  if (val === 'under_review') {
+    return { verificationStatus: 'under_review', status: 'under_review' }
+  }
+  return { verificationStatus: 'draft', status: 'draft' }
+}
+
 // Pre-save middleware to keep status & images in sync with verificationStatus & photos.
-// 'images' is the canonical field for the frontend, while 'photos' is retained for legacy integration.
 vehicleSchema.pre('save', function (next) {
-  // Sync status
-  if (this.isModified('verificationStatus')) {
-    const map = {
-      draft: 'draft',
-      submitted: 'pending_verification',
-      under_review: 'under_review',
-      approved: 'approved',
-      rejected: 'rejected',
-    }
-    this.status = map[this.verificationStatus] || 'draft'
+  if (this.isModified('verificationStatus') || this.isModified('status')) {
+    const activeVal = this.isModified('verificationStatus') ? this.verificationStatus : this.status
+    const synced = syncStatusMap(activeVal)
+    this.verificationStatus = synced.verificationStatus
+    this.status = synced.status
   }
   // Sync images with photos bi-directionally if one is updated
   if (this.isModified('photos') && !this.isModified('images')) {
@@ -135,11 +145,30 @@ vehicleSchema.pre('save', function (next) {
   next()
 })
 
+// Pre-findOneAndUpdate hook to keep fields synchronized across findByIdAndUpdate operations
+vehicleSchema.pre('findOneAndUpdate', function (next) {
+  const update = this.getUpdate()
+  if (!update) return next()
+  const setObj = update.$set || update
+  if (setObj.verificationStatus || setObj.status) {
+    const activeVal = setObj.verificationStatus || setObj.status
+    const synced = syncStatusMap(activeVal)
+    setObj.verificationStatus = synced.verificationStatus
+    setObj.status = synced.status
+  }
+  if (setObj.photos && !setObj.images) {
+    setObj.images = setObj.photos
+  } else if (setObj.images && !setObj.photos) {
+    setObj.photos = setObj.images
+  }
+  next()
+})
+
 // Indexes for common queries
-// Note: registrationNumber already has a unique index from `unique: true` in field definition
-vehicleSchema.index({ verificationStatus: 1, isLive: 1 }) // primary listing query
-vehicleSchema.index({ type: 1, verificationStatus: 1, isLive: 1 }) // filtered listing query
+vehicleSchema.index({ verificationStatus: 1, isLive: 1 })
+vehicleSchema.index({ status: 1, isLive: 1 })
+vehicleSchema.index({ type: 1, verificationStatus: 1, isLive: 1 })
 vehicleSchema.index({ ownerId: 1 })
-vehicleSchema.index({ status: 1 }) // admin status check query index
 
 export default mongoose.model('Vehicle', vehicleSchema)
+

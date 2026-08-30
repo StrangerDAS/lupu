@@ -1,18 +1,74 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiX, FiCheckSquare, FiTrash2, FiBell, FiDollarSign, FiAlertCircle, FiMessageSquare } from 'react-icons/fi'
-import { Link } from 'react-router-dom'
+import { FiX, FiCheckSquare, FiTrash2, FiBell, FiDollarSign, FiAlertCircle, FiMessageSquare, FiClock } from 'react-icons/fi'
+import { useNavigate } from 'react-router-dom'
 import { notificationAPI } from '../api/endpoints'
+import toast from 'react-hot-toast'
 
-export default function NotificationCenter({ isOpen, onClose, notifications, userId }) {
+export default function NotificationCenter({ isOpen, onClose, notifications, userId, onRefresh }) {
+  const navigate = useNavigate()
   const unreadCount = notifications.filter(n => !n.isRead && !n.read).length
 
   const handleMarkAllRead = async () => {
-    await notificationAPI.markAllRead()
+    try {
+      await notificationAPI.markAllRead()
+      if (onRefresh) onRefresh()
+    } catch {
+      toast.error('Failed to mark all as read')
+    }
   }
 
   const handleDeleteAll = async () => {
-    if (confirm('Are you sure you want to mark all notifications as read?')) {
-      await notificationAPI.markAllRead()
+    if (confirm('Are you sure you want to delete all notifications?')) {
+      try {
+        await notificationAPI.deleteAll()
+        if (onRefresh) onRefresh()
+        toast.success('All notifications cleared')
+      } catch {
+        toast.error('Failed to delete notifications')
+      }
+    }
+  }
+
+  const handleItemClick = async (n) => {
+    try {
+      if (!n.read && !n.isRead) {
+        await notificationAPI.markRead(n._id)
+        if (onRefresh) onRefresh()
+      }
+    } catch (err) {
+      console.error('Error marking notification read:', err)
+    }
+
+    onClose()
+
+    if (n.link) {
+      navigate(n.link)
+    } else if (n.type === 'admin') {
+      navigate('/admin')
+    } else if (n.type === 'vehicle') {
+      navigate('/dashboard')
+    } else {
+      navigate('/my-bookings')
+    }
+  }
+
+  const handleDeleteOne = async (e, id) => {
+    e.stopPropagation()
+    try {
+      await notificationAPI.delete(id)
+      if (onRefresh) onRefresh()
+    } catch {
+      toast.error('Failed to delete notification')
+    }
+  }
+
+  const handleMarkReadOne = async (e, id) => {
+    e.stopPropagation()
+    try {
+      await notificationAPI.markRead(id)
+      if (onRefresh) onRefresh()
+    } catch {
+      toast.error('Failed to mark as read')
     }
   }
 
@@ -21,9 +77,25 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
       case 'payment': return <FiDollarSign className="text-green-400" />
       case 'vehicle': return <FiMessageSquare className="text-blue-400" />
       case 'admin': return <FiAlertCircle className="text-amber-400" />
+      case 'reminder': return <FiClock className="text-yellow-400" />
       case 'booking':
       default:
         return <FiBell className="text-brand" />
+    }
+  }
+
+  const formatDate = (d) => {
+    if (!d) return 'Just now'
+    try {
+      const dateObj = typeof d === 'string' ? new Date(d) : (d.toDate ? d.toDate() : new Date(d))
+      return dateObj.toLocaleString('en-IN', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch {
+      return 'Just now'
     }
   }
 
@@ -79,7 +151,7 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                   onClick={handleDeleteAll}
                   className="text-xs flex items-center gap-1.5 text-red-400 hover:text-red-300 transition"
                 >
-                  <FiTrash2 size={14} /> Delete all
+                  <FiTrash2 size={14} /> Clear all
                 </button>
               </div>
             )}
@@ -102,8 +174,9 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.95 }}
-                      className={`relative p-4 rounded-xl transition border group ${
-                        isRead ? 'bg-white/5 border-white/5 hover:border-white/10' : 'bg-brand/10 border-brand/20 hover:border-brand/30'
+                      onClick={() => handleItemClick(n)}
+                      className={`relative p-4 rounded-xl transition border group cursor-pointer ${
+                        isRead ? 'bg-white/5 border-white/5 hover:border-white/20' : 'bg-brand/10 border-brand/20 hover:border-brand/40 hover:bg-brand/15'
                       }`}
                     >
                       <div className="flex gap-3">
@@ -112,11 +185,12 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                         </div>
                         <div className="flex-1 min-w-0 pr-8">
                           <h4 className={`font-semibold text-sm ${isRead ? 'text-white/80' : 'text-white'}`}>{n.title}</h4>
-                          <p className={`text-xs mt-1 leading-relaxed ${isRead ? 'text-white/50' : 'text-white/70'}`}>
+                          <p className={`text-xs mt-1 leading-relaxed ${isRead ? 'text-white/50' : 'text-white/80'}`}>
                             {n.message}
                           </p>
-                          <div className="text-[10px] text-white/30 mt-2">
-                            {n.createdAt?.toDate ? n.createdAt.toDate().toLocaleString('en-IN') : 'Just now'}
+                          <div className="text-[10px] text-white/30 mt-2 flex items-center gap-1">
+                            <FiClock size={10} />
+                            {formatDate(n.createdAt)}
                           </div>
                         </div>
                       </div>
@@ -125,7 +199,7 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                       <div className="absolute top-3 right-3 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition">
                         {!isRead && (
                           <button
-                            onClick={() => notificationAPI.markRead(n._id)}
+                            onClick={(e) => handleMarkReadOne(e, n._id)}
                             className="p-1.5 bg-brand/20 text-brand rounded hover:bg-brand/40 transition"
                             title="Mark as read"
                           >
@@ -133,9 +207,9 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
                           </button>
                         )}
                         <button
-                          onClick={() => notificationAPI.markRead(n._id)}
+                          onClick={(e) => handleDeleteOne(e, n._id)}
                           className="p-1.5 bg-red-500/10 text-red-400 rounded hover:bg-red-500/20 transition"
-                          title="Archive notification"
+                          title="Delete notification"
                         >
                           <FiTrash2 size={14} />
                         </button>
@@ -151,3 +225,4 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
     </AnimatePresence>
   )
 }
+

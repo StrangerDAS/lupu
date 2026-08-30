@@ -64,9 +64,11 @@ export default function AuditLogsView({ adminActions = [] }) {
                     </td>
                     <td className="p-4 text-white/70 max-w-xs truncate">{log?.notes || '-'}</td>
                     <td className="p-4 text-right text-white/40">
-                      {log?.timestamp?.seconds
-                        ? new Date(log.timestamp.seconds * 1000).toLocaleString()
-                        : 'Just now'}
+                      {log?.createdAt
+                        ? new Date(log.createdAt).toLocaleString()
+                        : (log?.timestamp?.seconds
+                            ? new Date(log.timestamp.seconds * 1000).toLocaleString()
+                            : 'Just now')}
                     </td>
                   </tr>
                 ))

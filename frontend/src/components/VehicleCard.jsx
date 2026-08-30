@@ -44,6 +44,8 @@ export default function VehicleCard({ vehicle, index = 0 }) {
     return new Date(dateString).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
   }
 
+  const allImages = (images && images.length > 0) ? images : (vehicle.photos && vehicle.photos.length > 0 ? vehicle.photos : [])
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -54,10 +56,14 @@ export default function VehicleCard({ vehicle, index = 0 }) {
         <div className="card card-hover">
           {/* Image */}
           <div className="relative h-48 bg-surface-2 overflow-hidden">
-            {images?.[0] ? (
+            {allImages[0] ? (
               <img
-                src={getImageUrl(images[0])}
+                src={getImageUrl(allImages[0])}
                 alt={name}
+                onError={(e) => {
+                  e.target.onerror = null;
+                  e.target.src = 'https://images.unsplash.com/photo-1558981403-c5f9899a28bc?w=800&auto=format&fit=crop&q=60';
+                }}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
               />
             ) : (

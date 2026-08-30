@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { FiSearch, FiSend, FiCheckSquare, FiAlertCircle } from 'react-icons/fi'
-import { replyToSupportTicket, updateSupportTicketStatus } from '../../firebase/firestoreService'
+import { adminSupportAPI } from '../../api/endpoints'
 import useAuthStore from '../../store/authStore'
 import toast from 'react-hot-toast'
 
-export default function SupportView({ tickets = [] }) {
+export default function SupportView({ tickets = [], onRefresh }) {
   const { user } = useAuthStore()
   const [search, setSearch] = useState('')
   const [selectedTicket, setSelectedTicket] = useState(null)
@@ -22,22 +22,29 @@ export default function SupportView({ tickets = [] }) {
     e.preventDefault()
     if (!selectedTicket || !message.trim()) return
     try {
-      await replyToSupportTicket(selectedTicket._id || selectedTicket.id, user._id, user.name, message, true)
+      const ticketId = selectedTicket._id || selectedTicket.id
+      const res = await adminSupportAPI.replyTicket(ticketId, message)
+      if (res.data?.ticket) {
+        setSelectedTicket(res.data.ticket)
+      }
       setMessage('')
       toast.success('Reply submitted.')
+      onRefresh?.()
     } catch (err) {
-      toast.error('Failed to send message: ' + err.message)
+      toast.error('Failed to send message: ' + (err.response?.data?.message || err.message))
     }
   }
 
   const handleCloseTicket = async () => {
     if (!selectedTicket) return
     try {
-      await updateSupportTicketStatus(selectedTicket._id || selectedTicket.id, 'closed', user._id, user.name)
+      const ticketId = selectedTicket._id || selectedTicket.id
+      await adminSupportAPI.updateStatus(ticketId, 'closed')
       toast.success('Ticket closed successfully.')
       setSelectedTicket(null)
+      onRefresh?.()
     } catch (err) {
-      toast.error('Failed to close ticket: ' + err.message)
+      toast.error('Failed to close ticket: ' + (err.response?.data?.message || err.message))
     }
   }
 

@@ -70,19 +70,31 @@ export default function Explore() {
           ))}
         </div>
 
-        {/* Search + filter bar */}
+        {/* Search + filter + sort bar */}
         <div className="flex flex-col sm:flex-row gap-3 mb-6">
           <div className="relative flex-1">
             <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
             <input
               id="item-search"
               type="text"
-              placeholder="Search by name or area…"
+              placeholder="Search by name, brand, model, area…"
               value={filters.search}
               onChange={(e) => setFilter('search', e.target.value)}
               className="input-field pl-11"
             />
           </div>
+
+          <select
+            value={filters.sortBy || 'relevance'}
+            onChange={(e) => setFilter('sortBy', e.target.value)}
+            className="input-field bg-surface-2 text-white text-sm py-2.5 px-3 rounded-xl border border-white/10 shrink-0 max-w-[180px] cursor-pointer"
+          >
+            <option value="relevance">Relevance</option>
+            <option value="price_asc">Price: Low to High</option>
+            <option value="price_desc">Price: High to Low</option>
+            <option value="rating">Top Rated</option>
+          </select>
+
           <button
             onClick={() => setFilterOpen(!filterOpen)}
             className={`btn-secondary flex items-center gap-2 shrink-0 ${hasFilters ? 'border-brand text-brand' : ''}`}

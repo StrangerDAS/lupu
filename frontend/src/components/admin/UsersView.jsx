@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { FiSearch, FiAlertTriangle, FiCheckCircle, FiFileText, FiXCircle } from 'react-icons/fi'
-import { suspendUser, restoreUser } from '../../firebase/firestoreService'
 import useAuthStore from '../../store/authStore'
 import { ADMIN_ROLES } from '../../lib/roleUtils'
 import toast from 'react-hot-toast'
-import { userAPI, adminAPI } from '../../api/endpoints'
+import { adminSafetyAPI, userAPI } from '../../api/endpoints'
 import axiosInstance from '../../api/axiosInstance'
 import { getImageUrl } from '../../utils/urlUtils'
 
@@ -23,7 +22,7 @@ export default function UsersView() {
   const fetchUsers = async () => {
     try {
       const { data } = await userAPI.getAll()
-      setUsers(data.users || data || [])
+      setUsers(data.users || (Array.isArray(data) ? data : []))
     } catch (err) {
       console.error(err)
       toast.error('Failed to fetch users')
@@ -51,17 +50,17 @@ export default function UsersView() {
           toast.error('Suspension notes are required')
           return
         }
-        await suspendUser(selectedUser._id, currentAdmin._id, currentAdmin.name, notes)
+        await adminSafetyAPI.suspendUser(selectedUser._id, true, notes)
         toast.success(`User ${selectedUser.name} suspended.`)
       } else if (modalType === 'restore') {
-        await restoreUser(selectedUser._id, currentAdmin._id, currentAdmin.name)
+        await adminSafetyAPI.suspendUser(selectedUser._id, false, 'Restored by admin')
         toast.success(`User ${selectedUser.name} account restored.`)
       }
       setSelectedUser(null)
       setNotes('')
       fetchUsers()
     } catch (err) {
-      toast.error('Operation failed: ' + err.message)
+      toast.error('Operation failed: ' + (err.response?.data?.message || err.message))
     }
   }
 

@@ -20,9 +20,9 @@ export default function DashboardView({ users = [], vehicles = [], bookings = []
     suspendedUsers: safeUsers.filter(u => u?.status === 'suspended').length,
     
     totalVehicles: safeVehicles.length,
-    approvedVehicles: safeVehicles.filter(v => v?.status === 'approved').length,
-    pendingVehicles: safeVehicles.filter(v => v?.status === 'pending').length,
-    rejectedVehicles: safeVehicles.filter(v => v?.status === 'rejected').length,
+    approvedVehicles: safeVehicles.filter(v => v?.status === 'approved' || v?.verificationStatus === 'approved').length,
+    pendingVehicles: safeVehicles.filter(v => v?.status === 'pending' || v?.status === 'pending_verification' || v?.verificationStatus === 'submitted' || v?.verificationStatus === 'under_review').length,
+    rejectedVehicles: safeVehicles.filter(v => v?.status === 'rejected' || v?.verificationStatus === 'rejected').length,
     activeVehicles: safeVehicles.filter(v => v?.isLive).length,
 
     totalBookings: safeBookings.length,

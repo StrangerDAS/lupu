@@ -137,7 +137,7 @@ export default function HowItWorks() {
             </div>
             <div className="mt-8 text-center flex flex-col items-center gap-3 text-sm text-white/40 relative z-10">
               <p>Passive income • Flexible pricing • Verified renters</p>
-              <Link to="/owner/setup" className="btn-secondary bg-white text-black hover:bg-gray-200 px-8 py-3 mt-4">List Your Vehicle</Link>
+              <Link to="/dashboard?addVehicle=true" className="btn-secondary bg-white text-black hover:bg-gray-200 px-8 py-3 mt-4">List Your Vehicle</Link>
             </div>
           </motion.section>
 

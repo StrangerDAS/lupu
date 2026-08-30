@@ -18,6 +18,7 @@ if (!getApps().length) {
   } else {
     console.warn('[Firebase Admin] ⚠️  FIREBASE_SERVICE_ACCOUNT not set — using default credentials.')
     initializeApp({
+      projectId: 'uniride-9be37',
       databaseURL: 'https://uniride-9be37-default-rtdb.firebaseio.com'
     })
   }

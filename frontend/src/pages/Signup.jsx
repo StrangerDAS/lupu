@@ -30,8 +30,14 @@ export default function Signup() {
       console.log(`[Signup] Successfully created Firebase user with UID: ${userCredential.user.uid}`)
       
       // Send Verification Email
+      // actionCodeSettings: passing a continueUrl improves deliverability
+      // and reduces spam scoring vs. a bare verification link.
+      const actionCodeSettings = {
+        url: `${window.location.origin}/auth/login`,
+        handleCodeInApp: false,
+      }
       console.log(`[Signup] Attempting to send verification email to: ${userCredential.user.email}`)
-      await sendEmailVerification(userCredential.user)
+      await sendEmailVerification(userCredential.user, actionCodeSettings)
       console.log('[Signup] Verification email sent successfully!')
       
       toast.success("Verification email sent. Please verify your email before logging in.")
