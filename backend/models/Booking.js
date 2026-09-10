@@ -64,6 +64,7 @@ const bookingSchema = new mongoose.Schema(
     renterName: String,
     renterEmail: String,
     ownerName: String,
+    ownerPhone: String,
     pricing: {
       total: Number,
       advance: Number,

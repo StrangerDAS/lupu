@@ -29,10 +29,16 @@ export const vehicleSchema = z.object({
   fuel: z.string().optional(),
   transmission: z.enum(['Manual', 'Automatic']).optional(),
   helmetAvailable: z.boolean().optional(),
+  ownerName: z.string().min(2, "Owner's full name is required (min 2 characters)"),
+  ownerPhone: z.string().min(10, 'Valid 10-digit Indian phone number is required')
+    .refine((val) => {
+      const clean = (val || '').replace(/[\s\-\(\)\+]/g, '').replace(/^91/, '')
+      return /^[6-9]\d{9}$/.test(clean) && !/^(\d)\1{9}$/.test(clean) && !['0123456789', '1234567890', '9876543210'].includes(clean)
+    }, { message: 'Enter a valid, active 10-digit Indian mobile number (starting with 6-9)' }),
 })
 
 export const addVehicleSchema = vehicleSchema
-export const editVehicleSchema = vehicleSchema
+export const editVehicleSchema = vehicleSchema.partial({ ownerName: true, ownerPhone: true })
 
 export const bookingStep1Schema = z.object({
   startTime: z.string().min(1, 'Start time is required'),

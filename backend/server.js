@@ -121,6 +121,55 @@ function kycPlaceholder(_req, _res, next) {
   next()
 }
 
+// ── Validation & Privacy Helpers ───────────────────────────
+function validateIndianPhoneNumber(input) {
+  if (!input || typeof input !== 'string') return { valid: false, message: 'Owner phone number is required' }
+  const raw = input.trim().replace(/[\s\-\(\)]/g, '')
+  const match = raw.match(/^(?:\+?91|0)?([6-9]\d{9})$/)
+  if (!match) {
+    return { valid: false, message: 'Please enter a valid 10-digit Indian phone number (starting with 6, 7, 8, or 9).' }
+  }
+  const digits = match[1]
+  const isRepeating = /^(\d)\1{9}$/.test(digits)
+  const isSequential = ['0123456789', '1234567890', '9876543210'].includes(digits)
+  if (isRepeating || isSequential) {
+    return { valid: false, message: 'Please enter a valid, active phone number (dummy sequences are not allowed).' }
+  }
+  return { valid: true, cleanDigits: digits, formatted: `+91${digits}` }
+}
+
+const ACCEPTED_CONTACT_STATUSES = ['accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed', 'completed']
+
+async function enrichBookingWithContact(booking, requestingUser) {
+  if (!booking) return null
+  const b = typeof booking.toObject === 'function' ? booking.toObject() : { ...booking }
+  if (!requestingUser) {
+    delete b.ownerPhone
+    return b
+  }
+  const isRenter = b.renterId && (b.renterId._id || b.renterId).toString() === requestingUser._id.toString()
+  const isAdmin = ['admin', 'super_admin', 'founder'].includes(requestingUser.role)
+
+  const normalizedStatus = (b.status || '').toLowerCase()
+  const isAcceptedOrLater = ACCEPTED_CONTACT_STATUSES.includes(normalizedStatus)
+
+  if ((isRenter || isAdmin) && isAcceptedOrLater && b.ownerId) {
+    const ownerId = b.ownerId._id || b.ownerId
+    const owner = await User.findById(ownerId).select('name phone').lean()
+    if (owner) {
+      b.ownerName = owner.name || b.ownerName || 'Vehicle Owner'
+      b.ownerPhone = owner.phone || null
+    }
+  } else {
+    delete b.ownerPhone
+  }
+  return b
+}
+
+async function enrichBookingsWithContact(bookings, requestingUser) {
+  return Promise.all(bookings.map(b => enrichBookingWithContact(b, requestingUser)))
+}
+
 // ── Auth Routes ────────────────────────────────────────────
 
 // 1. Firebase Login / Sync Route
@@ -435,15 +484,34 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
     const {
       name, brand, model, type, pricePerHour, pricePerDay, securityDeposit,
       location, description, year, fuel, transmission, helmetAvailable,
-      verificationStatus
+      verificationStatus, ownerName, ownerPhone
     } = req.body
+
+    const isSubmitting = verificationStatus === 'submitted' || !verificationStatus || verificationStatus === 'pending_verification'
+
+    // Owner contact info validation
+    const resolvedOwnerName = (ownerName || req.user.name || '').trim()
+    const resolvedOwnerPhone = (ownerPhone || req.user.phone || '').trim()
+
+    if (isSubmitting) {
+      if (!resolvedOwnerName || resolvedOwnerName.length < 2) {
+        return res.status(400).json({ message: "Owner's full name is required (at least 2 characters)" })
+      }
+      const phoneValidation = validateIndianPhoneNumber(resolvedOwnerPhone)
+      if (!phoneValidation.valid) {
+        return res.status(400).json({ message: phoneValidation.message })
+      }
+      // Persist confirmed owner name & phone to User profile
+      req.user.name = resolvedOwnerName
+      req.user.phone = phoneValidation.formatted
+    }
 
     // Ensure listing user is marked as owner
     if (!req.user.isOwner || req.user.role === 'user') {
       req.user.isOwner = true
       if (req.user.role === 'user') req.user.role = 'owner'
-      await req.user.save()
     }
+    await req.user.save()
 
     const rcFile = req.files?.['RC']?.[0]
     const insFile = req.files?.['Insurance']?.[0]
@@ -461,8 +529,6 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
       : (req.body.photos && typeof req.body.photos === 'string' && req.body.photos.startsWith('http') ? [req.body.photos] : [])
     // Merge: prefer Firebase Storage URLs (permanent), fall back to local disk paths
     const photoUrls = Array.from(new Set([...bodyPhotos, ...uploadedFileUrls])).filter(p => typeof p === 'string' && p.trim())
-
-    const isSubmitting = verificationStatus === 'submitted' || !verificationStatus || verificationStatus === 'pending_verification'
 
     // Perform validation if submitting
     if (isSubmitting) {
@@ -843,7 +909,8 @@ app.get('/api/bookings/my', verifyFirebaseToken, requireMongoUser, async (req, r
     const bookings = await Booking.find({ renterId: req.user._id })
       .sort({ createdAt: -1 })
       .lean()
-    res.json({ bookings })
+    const enriched = await enrichBookingsWithContact(bookings, req.user)
+    res.json({ bookings: enriched })
   } catch (err) {
     next(err)
   }
@@ -864,7 +931,45 @@ app.get('/api/bookings', verifyFirebaseToken, requireMongoUser, async (req, res,
     const bookings = await Booking.find(query)
       .sort({ createdAt: -1 })
       .lean()
-    res.json({ bookings })
+    const enriched = await enrichBookingsWithContact(bookings, req.user)
+    res.json({ bookings: enriched })
+  } catch (err) {
+    next(err)
+  }
+})
+
+app.get('/api/bookings/:id/owner-contact', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+    const booking = await Booking.findById(req.params.id).lean()
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
+
+    const isRenter = booking.renterId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
+
+    if (!isRenter && !isAdmin) {
+      return res.status(403).json({ message: 'You are not authorized to view owner contact details for this booking.' })
+    }
+
+    const normalizedStatus = (booking.status || '').toLowerCase()
+    if (!ACCEPTED_CONTACT_STATUSES.includes(normalizedStatus)) {
+      return res.status(403).json({
+        message: 'Owner contact details are only revealed once the booking is accepted or confirmed by the owner.',
+        status: booking.status
+      })
+    }
+
+    const owner = await User.findById(booking.ownerId).select('name phone').lean()
+    if (!owner) {
+      return res.status(404).json({ message: 'Owner user not found' })
+    }
+
+    res.json({
+      ownerName: owner.name || booking.ownerName || 'Vehicle Owner',
+      ownerPhone: owner.phone || null
+    })
   } catch (err) {
     next(err)
   }
@@ -880,13 +985,14 @@ app.get('/api/bookings/:id', verifyFirebaseToken, requireMongoUser, async (req, 
 
     const isRenter = booking.renterId?.toString() === req.user._id.toString()
     const isOwner = booking.ownerId?.toString() === req.user._id.toString()
-    const isAdmin = req.user.role === 'admin'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
 
     if (!isRenter && !isOwner && !isAdmin) {
       return res.status(403).json({ message: 'Access denied.' })
     }
 
-    res.json(booking)
+    const enriched = await enrichBookingWithContact(booking, req.user)
+    res.json(enriched)
   } catch (err) {
     next(err)
   }
@@ -1067,10 +1173,10 @@ app.patch('/api/bookings/:id/status', verifyFirebaseToken, requireMongoUser, asy
       await sendNotification(booking.renterId, {
         type: 'booking',
         title: 'Booking Accepted! 🎉',
-        message: `Your booking request for ${booking.vehicleName} has been accepted by the owner.`,
+        message: `Your booking request for ${booking.vehicleName} has been accepted by the owner. Owner contact details are now available in your booking details.`,
         bookingId: booking._id,
         vehicleId: booking.vehicleId,
-        link: '/my-bookings'
+        link: '/dashboard'
       })
     } else if (status === 'rejected') {
       await sendNotification(booking.renterId, {
@@ -1892,9 +1998,13 @@ app.get('/api/payments/:id/invoice', verifyFirebaseToken, requireMongoUser, asyn
 // ── Notification Engine helpers & endpoints ─────────────────
 
 async function sendEmailBackend(to, subject, content) {
+  if (process.env.NODE_ENV === 'production') {
+    logger.warn(`[EMAIL DISABLED] Real email delivery is not configured in production. Suppressed sending email to <${to}> for '${subject}'. Email simulation is strictly disabled in production.`)
+    return
+  }
   try {
     await Email.create({ to, subject, content })
-    logger.info(`[SIMULATED EMAIL SENDER] To: ${to} | Subject: ${subject}`)
+    logger.info(`[SIMULATED EMAIL SENDER - DEV ONLY] To: ${to} | Subject: ${subject}`)
   } catch (err) {
     console.error('Failed to save simulated email:', err)
   }
@@ -2058,7 +2168,15 @@ app.delete('/api/notifications', verifyFirebaseToken, requireMongoUser, async (r
   }
 })
 
-app.get('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+// Simulated email API endpoints — strictly restricted to explicit local development environment
+const requireDevelopmentEnv = (req, res, next) => {
+  if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV !== 'development') {
+    return res.status(404).json({ message: 'Not found' })
+  }
+  next()
+}
+
+app.get('/api/emails/simulated', requireDevelopmentEnv, verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
     if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
@@ -2071,7 +2189,7 @@ app.get('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async (r
   }
 })
 
-app.delete('/api/emails/simulated', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+app.delete('/api/emails/simulated', requireDevelopmentEnv, verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     let query = {}
     if (!['admin', 'super_admin', 'founder'].includes(req.user.role)) {
@@ -2980,7 +3098,7 @@ async function start() {
   try {
     logger.info('Connecting to MongoDB...')
     await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 15000,
     })
     logger.info(`MongoDB connected: ${MONGODB_URI.replace(/\/\/.*@/, '//***@')}`)
 

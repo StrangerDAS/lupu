@@ -144,9 +144,18 @@ function StatCard({ label, value, icon: Icon, color, bg, delay = 0 }) {
    ADD VEHICLE MODAL
    ═══════════════════════════════════════════════════════════ */
 function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
+  const { user } = useAuthStore()
+  const defaultOwnerName = userName || user?.name || ''
+  const defaultOwnerPhone = user?.phone ? String(user.phone).replace(/^\+91/, '').replace(/\s+/g, '') : ''
+
   const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(addVehicleSchema),
-    defaultValues: { type: 'bike', helmetAvailable: false },
+    defaultValues: {
+      type: 'bike',
+      helmetAvailable: false,
+      ownerName: defaultOwnerName,
+      ownerPhone: defaultOwnerPhone
+    },
   })
   const [submitting, setSubmitting] = useState(false)
   const [rcFile, setRcFile] = useState(null)
@@ -204,6 +213,8 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
       formData.append('fuel', data.fuel || 'Petrol')
       formData.append('transmission', data.transmission || (data.type === 'scooty' ? 'Automatic' : 'Manual'))
       formData.append('helmetAvailable', data.helmetAvailable ? 'true' : 'false')
+      formData.append('ownerName', data.ownerName)
+      formData.append('ownerPhone', data.ownerPhone)
       formData.append('verificationStatus', 'submitted')
 
       // Documents (binary files)
@@ -340,6 +351,28 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
           <div className="flex items-center gap-2 p-2 bg-white/5 border border-white/5 rounded-xl">
             <input type="checkbox" id="helmet" className="w-4 h-4 rounded accent-brand" {...register('helmetAvailable')} />
             <label htmlFor="helmet" className="text-white/80 font-medium">Helmet Available with ride</label>
+          </div>
+
+          {/* Owner Identity & Contact Information (Confidential) */}
+          <div className="p-3.5 bg-brand/5 border border-brand/20 rounded-xl space-y-3">
+            <div className="flex items-center gap-2 text-brand font-semibold text-xs">
+              <FiUser /> Owner Contact Information (Confidential)
+            </div>
+            <p className="text-[11px] text-white/50 leading-relaxed">
+              Confirm your real full name and active 10-digit mobile number. This information is confidential and is only revealed to renters after you accept their booking.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Owner Full Name *</label>
+                <input className="input-field text-xs" placeholder="e.g. Rahul Sharma" {...register('ownerName')} />
+                {errors.ownerName && <p className="text-red-400 text-[10px] mt-1">{errors.ownerName.message}</p>}
+              </div>
+              <div>
+                <label className="label">Owner Mobile Number (+91) *</label>
+                <input className="input-field text-xs" placeholder="9876543210" {...register('ownerPhone')} />
+                {errors.ownerPhone && <p className="text-red-400 text-[10px] mt-1">{errors.ownerPhone.message}</p>}
+              </div>
+            </div>
           </div>
 
           {/* Upload compliance files */}
