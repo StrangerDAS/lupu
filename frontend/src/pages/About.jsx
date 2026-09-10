@@ -55,6 +55,7 @@ const founder = {
   title: 'Founder & Developer',
   institution: 'Department of Commerce, Dibrugarh University',
   hometown: 'Doomdooma, Tinsukia, Assam',
+  image: '/ruhan-das.jpg',
   initials: 'RD',
   hue: 22,
 }
@@ -293,19 +294,26 @@ export default function About() {
                            hover:border-brand/30 hover:shadow-2xl hover:shadow-brand/10
                            transition-all duration-300 group"
               >
-                {/* Avatar */}
-                <div
-                  className="w-20 h-20 mx-auto mb-5 rounded-2xl flex items-center justify-center
-                             text-white font-black text-2xl shadow-lg transition-transform
-                             duration-300 group-hover:scale-105"
-                  style={{
-                    background: `linear-gradient(135deg,
-                      hsl(${founder.hue}, 80%, 50%),
-                      hsl(${founder.hue + 30}, 70%, 35%))`,
-                    boxShadow: `0 8px 24px hsl(${founder.hue}, 70%, 40%, 0.35)`,
-                  }}
-                >
-                  {founder.initials}
+                {/* Avatar / Photo */}
+                <div className="relative w-28 h-28 mx-auto mb-5 rounded-2xl overflow-hidden border-2 border-brand/40 shadow-xl shadow-brand/10 group-hover:scale-105 transition-transform duration-300">
+                  {founder.image ? (
+                    <img
+                      src={founder.image}
+                      alt={founder.name}
+                      className="w-full h-full object-cover object-top"
+                    />
+                  ) : (
+                    <div
+                      className="w-full h-full flex items-center justify-center text-white font-black text-2xl"
+                      style={{
+                        background: `linear-gradient(135deg,
+                          hsl(${founder.hue}, 80%, 50%),
+                          hsl(${founder.hue + 30}, 70%, 35%))`,
+                      }}
+                    >
+                      {founder.initials}
+                    </div>
+                  )}
                 </div>
 
                 <h3 className="font-bold text-white text-xl mb-1">
