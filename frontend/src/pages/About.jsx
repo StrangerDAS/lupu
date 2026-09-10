@@ -269,25 +269,25 @@ export default function About() {
             </motion.div>
           </section>
 
-          {/* ── Meet the Founder (Cinematic Background Hero - Right Positioned Image) ─────────────────────────── */}
-          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/70 min-h-[480px] md:min-h-[520px] flex items-center p-8 md:p-16">
+          {/* ── Meet the Founder (Expanded Hero & Prominent Photo) ─────────────────────────── */}
+          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/80 min-h-[540px] md:min-h-[620px] flex items-center p-8 md:p-16">
             
-            {/* Cinematic Background Portrait on the Right & Smooth Left-to-Right Fade */}
+            {/* Expanded Background Portrait & Gradient Mask */}
             <div className="absolute inset-0 pointer-events-none select-none overflow-hidden">
               <img
                 src={founder.image}
                 alt={founder.name}
-                className="absolute right-0 top-0 w-full md:w-2/3 h-full object-cover object-[center_15%] opacity-50 md:opacity-60 filter contrast-110 saturate-110 brightness-95 transition-all duration-700"
+                className="absolute right-0 top-0 w-full md:w-3/4 h-full object-cover object-[center_10%] opacity-75 md:opacity-85 filter contrast-105 saturate-105 brightness-100 transition-all duration-700"
               />
-              {/* Horizontal gradient mask: fades image out smoothly towards the left for maximum text contrast */}
-              <div className="absolute inset-0 bg-gradient-to-r from-black via-black/85 to-transparent md:via-black/80 md:to-black/20" />
+              {/* Soft gradient mask for text readability on left while keeping photo clear on right */}
+              <div className="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-transparent md:via-black/65 md:to-transparent" />
               
-              {/* Radial vignetting on top & bottom edges */}
-              <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black to-transparent" />
-              <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black to-transparent" />
+              {/* Subtle top & bottom edge blends */}
+              <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black to-transparent" />
               
-              {/* Ambient brand glow behind text */}
-              <div className="absolute top-1/2 left-10 -translate-y-1/2 w-80 h-80 bg-brand/15 blur-[120px] rounded-full pointer-events-none" />
+              {/* Ambient brand glow */}
+              <div className="absolute top-1/2 left-10 -translate-y-1/2 w-96 h-96 bg-brand/20 blur-[130px] rounded-full pointer-events-none" />
             </div>
 
             {/* Foreground Content - Left Aligned */}
