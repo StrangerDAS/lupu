@@ -49,13 +49,15 @@ const steps = [
   },
 ]
 
-/* ── Team data ──────────────────────────────────────── */
-const team = [
-  { name: 'Ruhan Das',         initials: 'RD', hue: 22  },
-  { name: 'Ankit Dutta',       initials: 'AD', hue: 200 },
-  { name: 'Tonmoy Dihingia',   initials: 'TD', hue: 280 },
-  { name: 'Abhigyan Handique', initials: 'AH', hue: 150 },
-]
+/* ── Founder data ──────────────────────────────────────── */
+const founder = {
+  name: 'Ruhan Das',
+  title: 'Founder & Developer',
+  institution: 'Department of Commerce, Dibrugarh University',
+  hometown: 'Doomdooma, Tinsukia, Assam',
+  initials: 'RD',
+  hue: 22,
+}
 
 /* ── Why section items ──────────────────────────────── */
 const whyItems = [
@@ -254,7 +256,7 @@ export default function About() {
                 </blockquote>
 
                 <p className="text-white/40 text-sm relative z-10">
-                  — The LUPU team
+                  — Ruhan Das
                 </p>
 
                 <div className="mt-8 relative z-10">
@@ -266,54 +268,57 @@ export default function About() {
             </motion.div>
           </section>
 
-          {/* ── Meet the Team ─────────────────────────── */}
+          {/* ── Meet the Founder ─────────────────────────── */}
           <section>
             <motion.div
               variants={fadeUp}
               initial="hidden"
               whileInView="show"
               viewport={{ once: true }}
-              className="text-center mb-14"
+              className="text-center mb-10"
             >
-              <h2 className="text-3xl md:text-4xl font-bold mb-3">Meet the Team</h2>
-              <p className="text-white/45 text-lg">The four of us who built this from scratch.</p>
+              <h2 className="text-3xl md:text-4xl font-bold mb-3">Meet the Founder</h2>
+              <p className="text-white/45 text-lg">Built with passion from Assam.</p>
             </motion.div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-5 max-w-4xl mx-auto">
-              {team.map((member, i) => (
-                <motion.div
-                  key={member.name}
-                  variants={fadeUp}
-                  initial="hidden"
-                  whileInView="show"
-                  viewport={{ once: true }}
-                  custom={i}
-                  whileHover={{ y: -6, scale: 1.02 }}
-                  transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                  className="glass rounded-2xl p-6 text-center border border-white/5
-                             hover:border-white/10 hover:shadow-xl hover:shadow-black/30
-                             transition-colors duration-300 cursor-default group"
+            <div className="max-w-md mx-auto">
+              <motion.div
+                variants={fadeUp}
+                initial="hidden"
+                whileInView="show"
+                viewport={{ once: true }}
+                whileHover={{ y: -6, scale: 1.02 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="glass rounded-2xl p-8 text-center border border-white/10
+                           hover:border-brand/30 hover:shadow-2xl hover:shadow-brand/10
+                           transition-all duration-300 group"
+              >
+                {/* Avatar */}
+                <div
+                  className="w-20 h-20 mx-auto mb-5 rounded-2xl flex items-center justify-center
+                             text-white font-black text-2xl shadow-lg transition-transform
+                             duration-300 group-hover:scale-105"
+                  style={{
+                    background: `linear-gradient(135deg,
+                      hsl(${founder.hue}, 80%, 50%),
+                      hsl(${founder.hue + 30}, 70%, 35%))`,
+                    boxShadow: `0 8px 24px hsl(${founder.hue}, 70%, 40%, 0.35)`,
+                  }}
                 >
-                  {/* Avatar */}
-                  <div
-                    className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center
-                               text-white font-black text-xl shadow-lg transition-transform
-                               duration-300 group-hover:scale-105"
-                    style={{
-                      background: `linear-gradient(135deg,
-                        hsl(${member.hue}, 70%, 50%),
-                        hsl(${member.hue + 30}, 60%, 35%))`,
-                      boxShadow: `0 8px 24px hsl(${member.hue}, 60%, 40%, 0.3)`,
-                    }}
-                  >
-                    {member.initials}
-                  </div>
+                  {founder.initials}
+                </div>
 
-                  <p className="font-semibold text-white text-sm leading-snug">
-                    {member.name}
-                  </p>
-                </motion.div>
-              ))}
+                <h3 className="font-bold text-white text-xl mb-1">
+                  {founder.name}
+                </h3>
+                <p className="text-brand font-semibold text-sm mb-3">
+                  {founder.title}
+                </p>
+                <div className="space-y-1 text-white/60 text-xs leading-relaxed border-t border-white/10 pt-3 mt-3">
+                  <p className="font-medium text-white/80">{founder.institution}</p>
+                  <p className="text-white/50">{founder.hometown}</p>
+                </div>
+              </motion.div>
             </div>
           </section>
 
