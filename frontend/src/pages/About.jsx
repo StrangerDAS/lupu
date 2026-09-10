@@ -269,51 +269,48 @@ export default function About() {
             </motion.div>
           </section>
 
-          {/* ── Meet the Founder (Cinematic Background Hero) ─────────────────────────── */}
-          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/60 min-h-[460px] md:min-h-[520px] flex items-center justify-center p-8 md:p-14">
+          {/* ── Meet the Founder (Cinematic Background Hero - Right Positioned Image) ─────────────────────────── */}
+          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/70 min-h-[480px] md:min-h-[520px] flex items-center p-8 md:p-16">
             
-            {/* Cinematic Background Portrait & Radial Vignette Mask */}
+            {/* Cinematic Background Portrait on the Right & Smooth Left-to-Right Fade */}
             <div className="absolute inset-0 pointer-events-none select-none overflow-hidden">
               <img
                 src={founder.image}
                 alt={founder.name}
-                className="w-full h-full object-cover object-[center_20%] opacity-40 md:opacity-45 scale-105 filter contrast-110 saturate-110 brightness-95 transition-all duration-700"
+                className="absolute right-0 top-0 w-full md:w-2/3 h-full object-cover object-[center_15%] opacity-50 md:opacity-60 filter contrast-110 saturate-110 brightness-95 transition-all duration-700"
               />
-              {/* Radial gradient mask: blends picture smoothly into pure black edges */}
-              <div 
-                className="absolute inset-0"
-                style={{
-                  background: 'radial-gradient(circle at center, rgba(10,10,10,0.45) 0%, rgba(10,10,10,0.85) 60%, rgba(10,10,10,1) 100%)'
-                }}
-              />
-              {/* Top and bottom linear gradient fades */}
-              <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black via-black/70 to-transparent" />
-              <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black via-black/70 to-transparent" />
-              {/* Subtle ambient brand glow behind text */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-brand/15 blur-[120px] rounded-full pointer-events-none" />
+              {/* Horizontal gradient mask: fades image out smoothly towards the left for maximum text contrast */}
+              <div className="absolute inset-0 bg-gradient-to-r from-black via-black/85 to-transparent md:via-black/80 md:to-black/20" />
+              
+              {/* Radial vignetting on top & bottom edges */}
+              <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black to-transparent" />
+              
+              {/* Ambient brand glow behind text */}
+              <div className="absolute top-1/2 left-10 -translate-y-1/2 w-80 h-80 bg-brand/15 blur-[120px] rounded-full pointer-events-none" />
             </div>
 
-            {/* Foreground Content */}
+            {/* Foreground Content - Left Aligned */}
             <motion.div
               variants={fadeUp}
               initial="hidden"
               whileInView="show"
               viewport={{ once: true }}
-              className="relative z-10 text-center max-w-2xl mx-auto space-y-5"
+              className="relative z-10 text-left max-w-xl space-y-5"
             >
               <span className="inline-flex items-center gap-2 bg-brand/15 border border-brand/30 text-brand text-xs font-semibold px-4 py-1.5 rounded-full tracking-wider uppercase backdrop-blur-md">
                 Meet the Founder
               </span>
 
-              <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white drop-shadow-lg">
+              <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white drop-shadow-xl">
                 {founder.name}
               </h2>
 
-              <p className="text-brand font-semibold text-lg md:text-xl tracking-wide text-brand/90">
+              <p className="text-brand font-semibold text-lg md:text-xl tracking-wide">
                 {founder.title}
               </p>
 
-              <div className="pt-4 max-w-md mx-auto space-y-2 border-t border-white/15">
+              <div className="pt-4 space-y-2 border-t border-white/15 max-w-md">
                 <p className="text-white/90 text-sm md:text-base font-medium">
                   {founder.institution}
                 </p>
