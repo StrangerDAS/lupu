@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /customer-dashboard
+Disallow: /hub
+Disallow: /profile
+Disallow: /verify
+Disallow: /auth/
+Disallow: /handover/
+Disallow: /book/
+
+Sitemap: https://lupu.in/sitemap.xml
