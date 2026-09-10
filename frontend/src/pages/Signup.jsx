@@ -45,7 +45,12 @@ export default function Signup() {
       navigate('/verify')
     } catch (error) {
       console.error('[Signup] Error during signup flow:', error)
-      toast.error(error.message || "Failed to create account")
+      if (error.code === 'auth/email-already-in-use') {
+        toast.error("An account with this email already exists. Please log in instead.", { duration: 5000 })
+        navigate('/auth/login')
+      } else {
+        toast.error(error.message || "Failed to create account")
+      }
     } finally {
       setLoading(false)
     }

@@ -21,11 +21,8 @@ import {
   calculateRefund,
   subscribeToUserNotifications,
   markNotificationRead,
-  markAllNotificationsRead,
-  subscribeToSimulatedEmails,
   submitUserKyc,
-  updateUserKycStatus,
-  sendEmailSimulation,
+  sendEmail,
   updateBookingStatus,
   addNotification
 } from '../firebase/firestoreService'
@@ -134,7 +131,6 @@ export default function CustomerDashboard() {
   const [bookings, setBookings] = useState([])
   const [payments, setPayments] = useState([])
   const [notifications, setNotifications] = useState([])
-  const [simulatedEmails, setSimulatedEmails] = useState([])
   const [favoriteIds, setFavoriteIds] = useState([])
   const [favoriteVehicles, setFavoriteVehicles] = useState([])
 
@@ -157,9 +153,6 @@ export default function CustomerDashboard() {
   const [kycFiles, setKycFiles] = useState({ selfie: null, collegeId: null, aadhaarFront: null, aadhaarBack: null })
   const [kycPreviews, setKycPreviews] = useState({ selfie: '', collegeId: '', aadhaarFront: '', aadhaarBack: '' })
   const [kycSubmitting, setKycSubmitting] = useState(false)
-
-  // Developer mode simulation widget
-  const [showSimulator, setShowSimulator] = useState(false)
 
   /* ── REST API Fetch & Short-polling ──────────────────── */
 
@@ -309,7 +302,7 @@ export default function CustomerDashboard() {
             // Send notification
             const title = 'Rental Starts Tomorrow! 🚘'
             const msg = `Get ready! Your rental ride for ${b.vehicleName} starts in less than 24 hours.`
-            await sendEmailSimulation(
+            await sendEmail(
               b.renterEmail || user?.email || 'renter@lupu.in',
               'Rental Reminder: Pickup Tomorrow - LUPU',
               `<h1>Rental Starts Tomorrow 🚘</h1>
@@ -337,7 +330,7 @@ export default function CustomerDashboard() {
             const bRef = doc(db, 'bookings', b._id || b.bookingId)
             await updateDoc(bRef, { returnReminderSent: true })
 
-            await sendEmailSimulation(
+            await sendEmail(
               b.renterEmail || user?.email || 'renter@lupu.in',
               'Rental Reminder: Return Tomorrow - LUPU',
               `<h1>Rental Ends Tomorrow ⏰</h1>
@@ -512,16 +505,6 @@ export default function CustomerDashboard() {
     }
   }
 
-  const handleSimulateKycApproval = async (status) => {
-    try {
-      await updateUserKycStatus(user._id, status)
-      updateUser({ kycStatus: status })
-      toast.success(`KYC status simulated as ${status.toUpperCase()}!`)
-    } catch {
-      toast.error('Failed to simulate KYC status change')
-    }
-  }
-
   // Active status helper
   const isActiveReturnToday = (endTime) => {
     if (!endTime) return false
@@ -551,66 +534,7 @@ export default function CustomerDashboard() {
               Welcome back, {user?.name || 'Rider'} 👋
             </p>
           </div>
-          
-          {/* Developer Simulator Toggle */}
-          <button
-            onClick={() => setShowSimulator(!showSimulator)}
-            className="btn-secondary text-xs px-4 py-2 border-brand/20 bg-brand/5 text-brand hover:bg-brand/10 w-fit shrink-0"
-          >
-            {showSimulator ? 'Hide Dev Tools' : 'Show Dev Simulator'}
-          </button>
         </div>
-
-        {/* Developer Simulation widget */}
-        <AnimatePresence>
-          {showSimulator && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="mb-8 p-5 bg-surface-2 border border-brand/20 rounded-2xl space-y-4 overflow-hidden"
-            >
-              <div className="flex items-center gap-2 text-brand font-semibold text-sm">
-                <FiInfo /> 🛠️ Developer Simulator (Testing on Localhost Only)
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-                <div className="p-3 bg-surface border border-white/5 rounded-xl space-y-2">
-                  <span className="font-semibold text-white/60">Simulate KYC Approvals:</span>
-                  <div className="flex gap-2">
-                    <button onClick={() => handleSimulateKycApproval('Verified')} className="px-2 py-1.5 bg-green-500/25 border border-green-500/30 text-green-400 rounded-md font-semibold hover:bg-green-500/35 transition flex-1">Approve KYC</button>
-                    <button onClick={() => handleSimulateKycApproval('Rejected')} className="px-2 py-1.5 bg-red-500/25 border border-red-500/30 text-red-400 rounded-md font-semibold hover:bg-red-500/35 transition flex-1">Reject KYC</button>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-surface border border-white/5 rounded-xl space-y-2">
-                  <span className="font-semibold text-white/60">Test Simulated Email reminder:</span>
-                  <button
-                    onClick={async () => {
-                      await sendEmailSimulation(
-                        user?.email || 'renter@lupu.in',
-                        'Simulated Custom Notification - LUPU',
-                        `<h3>Localhost Email Test</h3><p>Dear ${user?.name || 'Rider'}, this is a manually triggered developer email simulation.</p>`
-                      )
-                      toast.success('Simulation email queued!')
-                    }}
-                    className="w-full py-1.5 bg-brand/20 border border-brand/30 text-brand rounded-md font-semibold hover:bg-brand/30 transition"
-                  >
-                    Queue Test Email
-                  </button>
-                </div>
-                
-                <div className="p-3 bg-surface border border-white/5 rounded-xl space-y-2">
-                  <span className="font-semibold text-white/60">Verification Info:</span>
-                  <div className="text-[11px] text-white/40 leading-normal">
-                    KYC Status: <strong className="text-white">{user?.kycStatus || 'Not Submitted'}</strong><br/>
-                    Email: <strong className="text-white">{user?.email || 'None'}</strong><br/>
-                    Phone Verified: <strong className="text-white">{user?.phoneVerified ? 'Yes' : 'No'}</strong>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         <div className="flex flex-col lg:flex-row gap-8">
           
@@ -789,20 +713,43 @@ export default function CustomerDashboard() {
                               <p className="text-brand font-bold text-base mt-2">₹{b.totalPrice}</p>
                             </div>
                           </div>
+
+                          {/* Owner Contact Card for Accepted/Active Rentals */}
+                          {['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(b.bookingStatus) && (
+                            <div className="p-3.5 bg-brand/5 border border-brand/20 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div>
+                                <span className="text-[10px] text-brand uppercase tracking-wider font-bold">OWNER</span>
+                                <h4 className="text-sm font-bold text-white">{b.ownerName || 'Vehicle Owner'}</h4>
+                                {b.ownerPhone && (
+                                  <p className="text-xs text-white/80 font-mono mt-0.5">📞 {b.ownerPhone}</p>
+                                )}
+                              </div>
+                              {b.ownerPhone && (
+                                <a
+                                  href={`tel:${b.ownerPhone}`}
+                                  className="btn-primary text-xs py-2 px-4 flex items-center justify-center gap-1.5 w-fit font-semibold"
+                                >
+                                  <FiPhone /> Call Owner
+                                </a>
+                              )}
+                            </div>
+                          )}
                           
-                          <div className="flex items-center gap-3 pt-3 border-t border-white/5">
+                          <div className="flex items-center gap-3 pt-3 border-t border-white/5 flex-wrap">
                             <button
                               onClick={() => setInspectBooking(b)}
                               className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
                             >
                               View Details
                             </button>
-                            <button
-                              onClick={() => setContactOwnerBooking(b)}
-                              className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
-                            >
-                              Contact Owner
-                            </button>
+                            {['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(b.bookingStatus) && (
+                              <button
+                                onClick={() => setContactOwnerBooking(b)}
+                                className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
+                              >
+                                Contact Owner
+                              </button>
+                            )}
                             {b.bookingStatus === 'ready_for_pickup' && (
                               <button
                                 onClick={() => handleConfirmPickup(b)}
@@ -838,7 +785,8 @@ export default function CustomerDashboard() {
                     </div>
                   ) : (
                     upcomingBookings.map((b) => {
-                      const isPending = ['pending_verification', 'under_review'].includes(b.bookingStatus)
+                      const isPending = ['pending', 'pending_verification', 'under_review', 'requested', 'draft'].includes(b.bookingStatus)
+                      const isAccepted = ['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(b.bookingStatus)
                       return (
                         <div key={b._id || b.bookingId} className="card p-5 space-y-4 hover:border-white/10 transition">
                           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
@@ -863,6 +811,27 @@ export default function CustomerDashboard() {
                             </div>
                           </div>
 
+                          {/* Owner Contact Card if Accepted */}
+                          {isAccepted && (
+                            <div className="p-3.5 bg-brand/5 border border-brand/20 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div>
+                                <span className="text-[10px] text-brand uppercase tracking-wider font-bold">OWNER</span>
+                                <h4 className="text-sm font-bold text-white">{b.ownerName || 'Vehicle Owner'}</h4>
+                                {b.ownerPhone && (
+                                  <p className="text-xs text-white/80 font-mono mt-0.5">📞 {b.ownerPhone}</p>
+                                )}
+                              </div>
+                              {b.ownerPhone && (
+                                <a
+                                  href={`tel:${b.ownerPhone}`}
+                                  className="btn-primary text-xs py-2 px-4 flex items-center justify-center gap-1.5 w-fit font-semibold"
+                                >
+                                  <FiPhone /> Call Owner
+                                </a>
+                              )}
+                            </div>
+                          )}
+
                           <div className="flex items-center gap-3 pt-3 border-t border-white/5 flex-wrap">
                              <button
                                onClick={() => setInspectBooking(b)}
@@ -870,12 +839,14 @@ export default function CustomerDashboard() {
                              >
                                View Details
                              </button>
-                             <button
-                               onClick={() => setContactOwnerBooking(b)}
-                               className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
-                             >
-                               Contact Owner
-                             </button>
+                             {isAccepted && (
+                               <button
+                                 onClick={() => setContactOwnerBooking(b)}
+                                 className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
+                               >
+                                 Contact Owner
+                               </button>
+                             )}
                              {isPending && (
                                <button
                                  onClick={() => handleCancelClick(b)}
@@ -942,7 +913,27 @@ export default function CustomerDashboard() {
                               <p className="text-brand font-bold text-base mt-2">₹{b.totalPrice}</p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-3 pt-3 border-t border-white/5">
+
+                          {/* Owner Contact Card for Active Rentals */}
+                          <div className="p-3.5 bg-brand/5 border border-brand/20 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                              <span className="text-[10px] text-brand uppercase tracking-wider font-bold">OWNER</span>
+                              <h4 className="text-sm font-bold text-white">{b.ownerName || 'Vehicle Owner'}</h4>
+                              {b.ownerPhone && (
+                                <p className="text-xs text-white/80 font-mono mt-0.5">📞 {b.ownerPhone}</p>
+                              )}
+                            </div>
+                            {b.ownerPhone && (
+                              <a
+                                href={`tel:${b.ownerPhone}`}
+                                className="btn-primary text-xs py-2 px-4 flex items-center justify-center gap-1.5 w-fit font-semibold"
+                              >
+                                <FiPhone /> Call Owner
+                              </a>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-3 pt-3 border-t border-white/5 flex-wrap">
                             <Link
                               to={`/handover/${b._id || b.bookingId}`}
                               className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
@@ -1551,21 +1542,28 @@ export default function CustomerDashboard() {
               <div className="p-4 rounded-xl bg-surface-2 border border-white/5 space-y-3 text-left">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-white/40">Owner Name:</span>
-                  <span className="font-semibold text-white">{contactOwnerBooking.ownerName}</span>
+                  <span className="font-semibold text-white">{contactOwnerBooking.ownerName || 'Vehicle Owner'}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-white/40">Phone Number:</span>
-                  <a href="tel:+919876543211" className="font-semibold text-brand hover:underline">+91 98765 43211</a>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-white/40">Email:</span>
-                  <span className="font-semibold text-white">owner@lupu.in</span>
+                  {contactOwnerBooking.ownerPhone ? (
+                    <a href={`tel:${contactOwnerBooking.ownerPhone}`} className="font-semibold text-brand hover:underline font-mono">
+                      {contactOwnerBooking.ownerPhone}
+                    </a>
+                  ) : (
+                    <span className="text-white/40 italic">Available after acceptance</span>
+                  )}
                 </div>
               </div>
 
-              <div className="p-3 bg-white/[0.02] border border-white/5 rounded-lg text-[10px] text-white/35">
-                💬 Direct Chat messaging is coming soon to the LUPU mobile experience.
-              </div>
+              {contactOwnerBooking.ownerPhone && (
+                <a
+                  href={`tel:${contactOwnerBooking.ownerPhone}`}
+                  className="btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-semibold"
+                >
+                  <FiPhone /> Call Owner ({contactOwnerBooking.ownerPhone})
+                </a>
+              )}
 
               <button onClick={() => setContactOwnerBooking(null)} className="btn-secondary w-full py-2.5">Close</button>
             </motion.div>

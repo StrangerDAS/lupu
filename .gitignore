@@ -45,3 +45,4 @@ backend/data/
 backend/test-*.js
 backend/test-*.mjs
 scratch/
+.venv/

@@ -28,11 +28,8 @@ api.interceptors.request.use(async (config) => {
     } catch (err) {
       console.error('[Axios] Error fetching Firebase ID token:', err)
     }
-  } else if (import.meta.env.DEV) {
-    const { user } = useAuthStore.getState()
-    if (user?.email?.toLowerCase() === 'dasstranger421@gmail.com' && !config.headers.Authorization) {
-      config.headers.Authorization = `Bearer mock-admin-dasstranger`
-    } else {
+  } else {
+    if (import.meta.env.DEV) {
       console.warn('[Axios] ⚠️ auth.currentUser is null for request:', config.url)
     }
   }

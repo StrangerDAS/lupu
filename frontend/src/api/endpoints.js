@@ -28,6 +28,7 @@ export const bookingAPI = {
   cancel: (id) => api.patch(`/bookings/${id}/cancel`),
   getAll: () => api.get('/bookings'),         // admin, owner, renter
   getById: (id) => api.get(`/bookings/${id}`),
+  getOwnerContact: (id) => api.get(`/bookings/${id}/owner-contact`),
   updateStatus: (id, status) => api.patch(`/bookings/${id}/status`, { status }),
   updateBooking: (id, data) => api.put(`/bookings/${id}`, data),
   getCalendar: (vehicleId) => api.get(`/vehicles/${vehicleId}/calendar`),

@@ -9,54 +9,9 @@ export const verifyFirebaseToken = async (req, res, next) => {
 
   const idToken = authHeader.split('Bearer ')[1]
 
-  // Developer E2E Integration test bypass
-  if (process.env.NODE_ENV !== 'production' && idToken.startsWith('mock-')) {
-    let email = `${idToken}@lupu.test`
-    let role = 'user'
-    let isOwner = false
-
-    if (idToken.startsWith('mock-admin-')) {
-      const uid = idToken.split('mock-admin-')[1]
-      email = uid === 'dasstranger' || uid === 'jAML2Id2PDc74UxehU68nSVB1SZ2' ? 'dasstranger421@gmail.com' : (uid === 'fakeadmin' ? 'fakeadmin@example.com' : `${idToken}@lupu.test`)
-      role = (email.toLowerCase() === 'dasstranger421@gmail.com') ? 'admin' : 'user'
-      isOwner = true
-    } else if (idToken.startsWith('mock-owner-')) {
-      email = 'owner@lupu.test'
-      role = 'owner'
-      isOwner = true
-    } else if (idToken.startsWith('mock-renter-')) {
-      email = 'renter@lupu.test'
-      role = 'user'
-      isOwner = false
-    }
-
-    req.firebaseUser = { uid: idToken, email, email_verified: true, name: role === 'admin' ? 'Stranger Admin' : 'E2E Tester' }
-    
-    if (email.toLowerCase() === 'dasstranger421@gmail.com') {
-      let adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' })
-      if (adminUser) {
-        adminUser.role = 'admin'
-        adminUser.status = 'active'
-        adminUser.isSuspended = false
-        req.user = adminUser
-        return next()
-      }
-    }
-
-    // For other test bypass tokens, attach transient mock user without polluting database
-    req.user = {
-      _id: 'mock-transient-' + role,
-      firebaseUid: idToken,
-      email,
-      name: role === 'owner' ? 'Owner User' : 'Test User',
-      role,
-      isOwner,
-      isRider: true,
-      status: 'active',
-      isSuspended: false,
-      emailVerified: true
-    }
-    return next()
+  // Disallow any mock/test tokens unconditionally
+  if (idToken.startsWith('mock-')) {
+    return res.status(401).json({ message: 'Unauthorized: Mock authentication is permanently disabled.' })
   }
 
   try {
@@ -86,7 +41,7 @@ export const verifyFirebaseToken = async (req, res, next) => {
           name: decodedToken.name || (decodedToken.email ? decodedToken.email.split('@')[0] : 'LUPU User'),
           role: 'user',
           isRider: true,
-          isOwner: true,
+          isOwner: false,
           emailVerified: !!decodedToken.email_verified,
           lastLogin: new Date()
         })

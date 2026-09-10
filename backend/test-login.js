@@ -1,38 +1,71 @@
-import mongoose from 'mongoose';
-import User from './models/User.js';
+import { initializeApp, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-dotenv.config();
+import path from 'path';
 
-async function test() {
-  await mongoose.connect(process.env.MONGODB_URI);
-  
-  const firebaseUser = {
-    uid: "mock-uid-12345",
-    email: "test@example.com",
-    name: "Mock User",
-    email_verified: true
-  };
-  
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+
+const uid = 'jAML2Id2PDc74UxehU68nSVB1SZ2'; // User UID from previous diagnostics
+const apiKey = 'AIzaSyApxoYeZTelEFfFs8c1F0eePCEimOPRK9o'; // From frontend config
+
+async function run() {
   try {
-    let user = new User({
-        firebaseUid: firebaseUser.uid,
-        email: firebaseUser.email,
-        name: firebaseUser.name || 'LUPU User',
-        role: 'user',
-        isRider: true,
-        isOwner: false,
-        emailVerified: firebaseUser.email_verified,
-        phone: firebaseUser.phone_number || '',
-        lastLogin: new Date()
+    // 1. Init Firebase Admin
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      initializeApp({
+        credential: cert(serviceAccount)
       });
-    await user.save();
-    console.log("Success");
-  } catch (err) {
-    console.error("Save Error:", err.message);
-    console.error(err.stack);
+    } else {
+      initializeApp({
+        projectId: process.env.FIREBASE_PROJECT_ID || 'uniride-9be37'
+      });
+    }
+
+    const auth = getAuth();
+    console.log("Firebase admin initialized. Setting email as verified...");
+    await auth.updateUser(uid, { emailVerified: true });
+
+    console.log("Creating custom token...");
+    const customToken = await auth.createCustomToken(uid);
+
+    console.log("Exchanging custom token for ID token...");
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: customToken,
+        returnSecureToken: true
+      })
+    });
+    
+    const data = await res.json();
+    if (data.error) {
+      throw new Error(`Auth Error: ${data.error.message}`);
+    }
+    
+    const idToken = data.idToken;
+    console.log("Got ID token! Making request to local backend POST /api/auth/login...");
+
+    const backendRes = await fetch('http://localhost:5000/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`
+      },
+      body: JSON.stringify({
+        name: 'Pratyay Borborah',
+        role: 'user'
+      })
+    });
+
+    const backendData = await backendRes.json();
+    console.log("Backend response:", JSON.stringify(backendData, null, 2));
+
+  } catch (error) {
+    console.error("Error:", error);
   }
-  
-  await mongoose.connection.close();
 }
 
-test();
+run();

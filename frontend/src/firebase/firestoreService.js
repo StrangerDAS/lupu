@@ -285,10 +285,10 @@ export async function updateBookingStatus(bookingId, status) {
         title = 'Booking Approved! 🎉'
         msg = `Great news! The owner has approved your booking for ${booking.vehicleName}.`
 
-        // Trigger simulated approved email
+        // Trigger email notification
         const formattedStart = new Date(booking.startTime).toLocaleString('en-IN')
         const formattedEnd = new Date(booking.endTime).toLocaleString('en-IN')
-        await sendEmailSimulation(
+        await sendEmail(
           booking.renterEmail || 'renter@lupu.in',
           'Booking Approved - LUPU',
           `<h1>Booking Approved 🎉</h1>
@@ -309,8 +309,8 @@ export async function updateBookingStatus(bookingId, status) {
         title = 'Booking Rejected'
         msg = `Unfortunately, your booking for ${booking.vehicleName} was rejected by the owner.`
 
-        // Trigger simulated rejected email
-        await sendEmailSimulation(
+        // Trigger email notification
+        await sendEmail(
           booking.renterEmail || 'renter@lupu.in',
           'Booking Request Rejected - LUPU',
           `<h1>Booking Request Rejected</h1>
@@ -442,9 +442,9 @@ export async function cancelBooking(bookingId, cancelledBy = 'renter') {
       type: 'status'
     })
 
-    // Send simulated email if owner cancelled
+    // Send email notification if owner cancelled
     if (cancelledBy === 'owner') {
-      await sendEmailSimulation(
+      await sendEmail(
         booking.renterEmail || 'renter@lupu.in',
         'Booking Request Rejected - LUPU',
         `<h1>Booking Request Cancelled/Rejected by Owner</h1>
@@ -1458,14 +1458,7 @@ export async function submitUserKyc(userId, { kycType, kycDetails, files }) {
   return updatePayload
 }
 
-/** Update global user KYC status (used by developer simulator) */
-export async function updateUserKycStatus(userId, status) {
-  const userRef = doc(db, 'users', userId)
-  await updateDoc(userRef, {
-    kycStatus: status,
-    updatedAt: serverTimestamp()
-  })
-}
+
 
 import { sendEmail, sendEmailSimulation } from '../services/emailService'
 export { sendEmail, sendEmailSimulation }

@@ -4,9 +4,14 @@ import { FiMail, FiTrash2, FiChevronLeft } from 'react-icons/fi'
 import PageWrapper from '../components/PageWrapper'
 import useAuthStore from '../store/authStore'
 import toast from 'react-hot-toast'
+import { Navigate } from 'react-router-dom'
 import { simulatedEmailAPI } from '../api/endpoints'
 
 export default function SimulatedInbox() {
+  if (!import.meta.env.DEV) {
+    return <Navigate to="/404" replace />
+  }
+
   const [emails, setEmails] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedEmail, setSelectedEmail] = useState(null)
