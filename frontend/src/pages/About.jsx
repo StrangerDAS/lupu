@@ -269,65 +269,59 @@ export default function About() {
             </motion.div>
           </section>
 
-          {/* ── Meet the Founder ─────────────────────────── */}
-          <section>
+          {/* ── Meet the Founder (Cinematic Background Hero) ─────────────────────────── */}
+          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/60 min-h-[460px] md:min-h-[520px] flex items-center justify-center p-8 md:p-14">
+            
+            {/* Cinematic Background Portrait & Radial Vignette Mask */}
+            <div className="absolute inset-0 pointer-events-none select-none overflow-hidden">
+              <img
+                src={founder.image}
+                alt={founder.name}
+                className="w-full h-full object-cover object-top opacity-30 md:opacity-35 scale-105 filter contrast-110 saturate-110 brightness-90 transition-all duration-700"
+              />
+              {/* Radial gradient mask: blends picture smoothly into pure black edges */}
+              <div 
+                className="absolute inset-0"
+                style={{
+                  background: 'radial-gradient(circle at center, rgba(10,10,10,0.45) 0%, rgba(10,10,10,0.85) 60%, rgba(10,10,10,1) 100%)'
+                }}
+              />
+              {/* Top and bottom linear gradient fades */}
+              <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black via-black/70 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black via-black/70 to-transparent" />
+              {/* Subtle ambient brand glow behind text */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-brand/15 blur-[120px] rounded-full pointer-events-none" />
+            </div>
+
+            {/* Foreground Content */}
             <motion.div
               variants={fadeUp}
               initial="hidden"
               whileInView="show"
               viewport={{ once: true }}
-              className="text-center mb-10"
+              className="relative z-10 text-center max-w-2xl mx-auto space-y-5"
             >
-              <h2 className="text-3xl md:text-4xl font-bold mb-3">Meet the Founder</h2>
-              <p className="text-white/45 text-lg">Built with passion from Assam.</p>
-            </motion.div>
+              <span className="inline-flex items-center gap-2 bg-brand/15 border border-brand/30 text-brand text-xs font-semibold px-4 py-1.5 rounded-full tracking-wider uppercase backdrop-blur-md">
+                Meet the Founder
+              </span>
 
-            <div className="max-w-md mx-auto">
-              <motion.div
-                variants={fadeUp}
-                initial="hidden"
-                whileInView="show"
-                viewport={{ once: true }}
-                whileHover={{ y: -6, scale: 1.02 }}
-                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                className="glass rounded-2xl p-8 text-center border border-white/10
-                           hover:border-brand/30 hover:shadow-2xl hover:shadow-brand/10
-                           transition-all duration-300 group"
-              >
-                {/* Avatar / Photo */}
-                <div className="relative w-28 h-28 mx-auto mb-5 rounded-2xl overflow-hidden border-2 border-brand/40 shadow-xl shadow-brand/10 group-hover:scale-105 transition-transform duration-300">
-                  {founder.image ? (
-                    <img
-                      src={founder.image}
-                      alt={founder.name}
-                      className="w-full h-full object-cover object-top"
-                    />
-                  ) : (
-                    <div
-                      className="w-full h-full flex items-center justify-center text-white font-black text-2xl"
-                      style={{
-                        background: `linear-gradient(135deg,
-                          hsl(${founder.hue}, 80%, 50%),
-                          hsl(${founder.hue + 30}, 70%, 35%))`,
-                      }}
-                    >
-                      {founder.initials}
-                    </div>
-                  )}
-                </div>
+              <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white drop-shadow-lg">
+                {founder.name}
+              </h2>
 
-                <h3 className="font-bold text-white text-xl mb-1">
-                  {founder.name}
-                </h3>
-                <p className="text-brand font-semibold text-sm mb-3">
-                  {founder.title}
+              <p className="text-brand font-semibold text-lg md:text-xl tracking-wide text-brand/90">
+                {founder.title}
+              </p>
+
+              <div className="pt-4 max-w-md mx-auto space-y-2 border-t border-white/15">
+                <p className="text-white/90 text-sm md:text-base font-medium">
+                  {founder.institution}
                 </p>
-                <div className="space-y-1 text-white/60 text-xs leading-relaxed border-t border-white/10 pt-3 mt-3">
-                  <p className="font-medium text-white/80">{founder.institution}</p>
-                  <p className="text-white/50">{founder.hometown}</p>
-                </div>
-              </motion.div>
-            </div>
+                <p className="text-white/60 text-xs md:text-sm font-normal">
+                  📍 {founder.hometown}
+                </p>
+              </div>
+            </motion.div>
           </section>
 
         </div>
