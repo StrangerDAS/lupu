@@ -277,7 +277,7 @@ export default function About() {
               <img
                 src={founder.image}
                 alt={founder.name}
-                className="w-full h-full object-cover object-top opacity-30 md:opacity-35 scale-105 filter contrast-110 saturate-110 brightness-90 transition-all duration-700"
+                className="w-full h-full object-cover object-[center_20%] opacity-40 md:opacity-45 scale-105 filter contrast-110 saturate-110 brightness-95 transition-all duration-700"
               />
               {/* Radial gradient mask: blends picture smoothly into pure black edges */}
               <div 
