@@ -8,6 +8,8 @@ import useAuthStore from '../store/authStore'
 import { notificationAPI } from '../api/endpoints'
 import NotificationCenter from './NotificationCenter'
 
+import { requestNotificationPermission, getNotificationPermission, triggerNativePush } from '../services/pushNotificationService'
+
 const navLinks = [
   { label: 'Explore', to: '/explore' },
   { label: 'How it works', to: '/how-it-works' },
@@ -27,7 +29,22 @@ export default function Navbar() {
     if (!user?._id) return
     try {
       const { data } = await notificationAPI.getAll()
-      setNotifications(data.notifications || [])
+      const fetchedNotifs = data.notifications || []
+      setNotifications(fetchedNotifs)
+
+      // Trigger native device push notification on phone/laptop if permission granted
+      if (getNotificationPermission() === 'granted') {
+        fetchedNotifs.forEach((n) => {
+          if (!n.read && !n.isRead) {
+            triggerNativePush({
+              id: n._id || n.notificationId,
+              title: n.title || 'LUPU Alert',
+              body: n.message || 'You have a new update.',
+              link: n.link || '/my-bookings',
+            })
+          }
+        })
+      }
     } catch (err) {
       console.error('Failed to load notifications in Navbar:', err)
     }

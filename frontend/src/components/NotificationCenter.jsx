@@ -1,12 +1,51 @@
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { FiX, FiCheckSquare, FiTrash2, FiBell, FiDollarSign, FiAlertCircle, FiMessageSquare, FiClock } from 'react-icons/fi'
 import { useNavigate } from 'react-router-dom'
 import { notificationAPI } from '../api/endpoints'
+import { requestNotificationPermission, getNotificationPermission, triggerNativePush } from '../services/pushNotificationService'
 import toast from 'react-hot-toast'
 
 export default function NotificationCenter({ isOpen, onClose, notifications, userId, onRefresh }) {
   const navigate = useNavigate()
   const unreadCount = notifications.filter(n => !n.isRead && !n.read).length
+  const [permStatus, setPermStatus] = useState(getNotificationPermission())
+
+  useEffect(() => {
+    setPermStatus(getNotificationPermission())
+  }, [])
+
+  // Auto trigger push notifications for new unread notifications
+  useEffect(() => {
+    if (permStatus === 'granted' && notifications.length > 0) {
+      notifications.forEach((n) => {
+        if (!n.read && !n.isRead) {
+          triggerNativePush({
+            id: n._id || n.notificationId,
+            title: n.title || 'LUPU Notification',
+            body: n.message || 'You have a new update.',
+            link: n.link || '/my-bookings',
+          })
+        }
+      })
+    }
+  }, [notifications, permStatus])
+
+  const handleEnablePush = async () => {
+    const res = await requestNotificationPermission()
+    setPermStatus(res)
+    if (res === 'granted') {
+      toast.success('Device push notifications enabled!')
+      triggerNativePush({
+        id: 'welcome-push',
+        title: 'Notifications Enabled 🎉',
+        body: 'You will now receive real-time booking and trip alerts on your phone or laptop.',
+        link: '/my-bookings',
+      })
+    } else if (res === 'denied') {
+      toast.error('Notification permission was blocked in your browser settings.')
+    }
+  }
 
   const handleMarkAllRead = async () => {
     try {
@@ -137,9 +176,28 @@ export default function NotificationCenter({ isOpen, onClose, notifications, use
               </button>
             </div>
 
+            {/* Push Notification Permission Banner */}
+            {permStatus !== 'granted' && (
+              <div className="mx-4 mt-4 p-3.5 bg-brand/10 border border-brand/25 rounded-xl flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs text-white/90">
+                  <FiBell className="text-brand shrink-0 text-base" />
+                  <div>
+                    <p className="font-semibold text-white">Enable Device Push Alerts</p>
+                    <p className="text-[10px] text-white/60">Get instant booking & trip alerts on phone/laptop.</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleEnablePush}
+                  className="px-3 py-1.5 bg-brand text-white font-semibold text-xs rounded-lg hover:bg-brand/90 transition shrink-0 shadow-md"
+                >
+                  Enable
+                </button>
+              </div>
+            )}
+
             {/* Actions Toolbar */}
             {notifications.length > 0 && (
-              <div className="flex items-center justify-between px-5 py-3 bg-white/[0.02] border-b border-white/5">
+              <div className="flex items-center justify-between px-5 py-3 bg-white/[0.02] border-b border-white/5 mt-2">
                 <button
                   onClick={handleMarkAllRead}
                   disabled={unreadCount === 0}
