@@ -269,56 +269,71 @@ export default function About() {
             </motion.div>
           </section>
 
-          {/* ── Meet the Founder (Cinematic Background Hero - Right Positioned Image) ─────────────────────────── */}
-          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/70 min-h-[480px] md:min-h-[520px] flex items-center p-8 md:p-16">
+          {/* ── Meet the Founder ─────────────────────────── */}
+          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/80 p-6 md:p-14">
             
-            {/* Cinematic Background Portrait on the Right & Smooth Left-to-Right Fade */}
-            <div className="absolute inset-0 pointer-events-none select-none overflow-hidden">
+            {/* Desktop Background & Vignette overlay */}
+            <div className="hidden md:block absolute inset-0 pointer-events-none select-none overflow-hidden">
               <img
                 src={founder.image}
                 alt={founder.name}
-                className="absolute right-0 top-0 w-full md:w-2/3 h-full object-cover object-[center_15%] opacity-50 md:opacity-60 filter contrast-110 saturate-110 brightness-95 transition-all duration-700"
+                className="absolute right-0 top-0 w-2/3 h-full object-cover object-[center_15%] opacity-65 filter contrast-110 saturate-110 brightness-95"
               />
-              {/* Horizontal gradient mask: fades image out smoothly towards the left for maximum text contrast */}
-              <div className="absolute inset-0 bg-gradient-to-r from-black via-black/85 to-transparent md:via-black/80 md:to-black/20" />
-              
-              {/* Radial vignetting on top & bottom edges */}
+              <div className="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-transparent" />
               <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black to-transparent" />
               <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black to-transparent" />
-              
-              {/* Ambient brand glow behind text */}
-              <div className="absolute top-1/2 left-10 -translate-y-1/2 w-80 h-80 bg-brand/15 blur-[120px] rounded-full pointer-events-none" />
+              <div className="absolute top-1/2 left-10 -translate-y-1/2 w-80 h-80 bg-brand/15 blur-[120px]" />
             </div>
 
-            {/* Foreground Content - Left Aligned */}
-            <motion.div
-              variants={fadeUp}
-              initial="hidden"
-              whileInView="show"
-              viewport={{ once: true }}
-              className="relative z-10 text-left max-w-xl space-y-5"
-            >
-              <span className="inline-flex items-center gap-2 bg-brand/15 border border-brand/30 text-brand text-xs font-semibold px-4 py-1.5 rounded-full tracking-wider uppercase backdrop-blur-md">
-                Meet the Founder
-              </span>
+            {/* Content Container */}
+            <div className="relative z-10 flex flex-col md:flex-row items-center gap-8 md:gap-12">
+              
+              {/* Mobile Portrait Photo (Bright, Sharp & Clear) */}
+              <motion.div
+                variants={fadeUp}
+                initial="hidden"
+                whileInView="show"
+                viewport={{ once: true }}
+                className="block md:hidden relative w-44 h-44 sm:w-52 sm:h-52 mx-auto rounded-3xl overflow-hidden border-2 border-brand/40 shadow-2xl shadow-brand/20"
+              >
+                <img
+                  src={founder.image}
+                  alt={founder.name}
+                  className="w-full h-full object-cover object-top"
+                />
+              </motion.div>
 
-              <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white drop-shadow-xl">
-                {founder.name}
-              </h2>
+              {/* Text Information */}
+              <motion.div
+                variants={fadeUp}
+                initial="hidden"
+                whileInView="show"
+                viewport={{ once: true }}
+                className="text-center md:text-left max-w-xl space-y-4"
+              >
+                <span className="inline-flex items-center gap-2 bg-brand/15 border border-brand/30 text-brand text-xs font-semibold px-4 py-1.5 rounded-full tracking-wider uppercase backdrop-blur-md">
+                  Meet the Founder
+                </span>
 
-              <p className="text-brand font-semibold text-lg md:text-xl tracking-wide">
-                {founder.title}
-              </p>
+                <h2 className="text-3xl sm:text-4xl md:text-6xl font-extrabold tracking-tight text-white drop-shadow-xl">
+                  {founder.name}
+                </h2>
 
-              <div className="pt-4 space-y-2 border-t border-white/15 max-w-md">
-                <p className="text-white/90 text-sm md:text-base font-medium">
-                  {founder.institution}
+                <p className="text-brand font-semibold text-base sm:text-lg md:text-xl tracking-wide">
+                  {founder.title}
                 </p>
-                <p className="text-white/60 text-xs md:text-sm font-normal">
-                  📍 {founder.hometown}
-                </p>
-              </div>
-            </motion.div>
+
+                <div className="pt-3 space-y-1.5 border-t border-white/15 max-w-md mx-auto md:mx-0 text-left md:text-left">
+                  <p className="text-white/90 text-sm md:text-base font-medium text-center md:text-left">
+                    {founder.institution}
+                  </p>
+                  <p className="text-white/60 text-xs md:text-sm font-normal text-center md:text-left">
+                    📍 {founder.hometown}
+                  </p>
+                </div>
+              </motion.div>
+
+            </div>
           </section>
 
         </div>
