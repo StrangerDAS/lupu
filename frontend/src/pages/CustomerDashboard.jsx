@@ -392,6 +392,21 @@ export default function CustomerDashboard() {
 
   /* ── Action Handlers ───────────────────────────────────── */
 
+  const [markingPaymentId, setMarkingPaymentId] = useState(null)
+
+  const handleMarkPaymentDone = async (bookingId) => {
+    try {
+      setMarkingPaymentId(bookingId)
+      const { data } = await paymentAPI.markPaid(bookingId)
+      toast.success(data.message || 'Payment marked as done. Waiting for owner confirmation.')
+      setBookings(prev => prev.map(b => (b._id === bookingId || b.bookingId === bookingId) ? { ...b, paymentStatus: 'customer_marked_paid' } : b))
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to mark payment as done')
+    } finally {
+      setMarkingPaymentId(null)
+    }
+  }
+
   const handleCancelClick = (booking) => {
     setCancelModalBooking(booking)
   }
@@ -743,12 +758,31 @@ export default function CustomerDashboard() {
                               View Details
                             </button>
                             {['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(b.bookingStatus) && (
-                              <button
-                                onClick={() => setContactOwnerBooking(b)}
-                                className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
-                              >
-                                Contact Owner
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => setContactOwnerBooking(b)}
+                                  className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
+                                >
+                                  Contact Owner
+                                </button>
+                                {(b.paymentStatus || '').toLowerCase() === 'customer_marked_paid' ? (
+                                  <span className="text-xs text-amber-400 bg-amber-500/10 px-3 py-2 rounded-lg border border-amber-500/20 font-medium flex items-center gap-1.5">
+                                    <FiClock /> Payment marked as done. Waiting for owner confirmation.
+                                  </span>
+                                ) : ['paid'].includes((b.paymentStatus || '').toLowerCase()) ? (
+                                  <span className="text-xs text-green-400 bg-green-500/10 px-3 py-2 rounded-lg border border-green-500/20 font-semibold flex items-center gap-1.5">
+                                    <FiCheckCircle /> Payment Received
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => handleMarkPaymentDone(b._id || b.bookingId)}
+                                    disabled={markingPaymentId === (b._id || b.bookingId)}
+                                    className="btn-primary bg-brand hover:bg-brand-dark text-xs py-2 px-4 font-semibold text-white flex items-center gap-1.5"
+                                  >
+                                    <FiDollarSign /> {markingPaymentId === (b._id || b.bookingId) ? 'Marking…' : 'Payment Done'}
+                                  </button>
+                                )}
+                              </>
                             )}
                             {b.bookingStatus === 'ready_for_pickup' && (
                               <button
@@ -840,12 +874,31 @@ export default function CustomerDashboard() {
                                View Details
                              </button>
                              {isAccepted && (
-                               <button
-                                 onClick={() => setContactOwnerBooking(b)}
-                                 className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
-                               >
-                                 Contact Owner
-                               </button>
+                               <>
+                                 <button
+                                   onClick={() => setContactOwnerBooking(b)}
+                                   className="btn-secondary text-xs py-2 px-4 hover:bg-surface-3 transition"
+                                 >
+                                   Contact Owner
+                                 </button>
+                                 {(b.paymentStatus || '').toLowerCase() === 'customer_marked_paid' ? (
+                                   <span className="text-xs text-amber-400 bg-amber-500/10 px-3 py-2 rounded-lg border border-amber-500/20 font-medium flex items-center gap-1.5">
+                                     <FiClock /> Payment marked as done. Waiting for owner confirmation.
+                                   </span>
+                                 ) : ['paid'].includes((b.paymentStatus || '').toLowerCase()) ? (
+                                   <span className="text-xs text-green-400 bg-green-500/10 px-3 py-2 rounded-lg border border-green-500/20 font-semibold flex items-center gap-1.5">
+                                     <FiCheckCircle /> Payment Received
+                                   </span>
+                                 ) : (
+                                   <button
+                                     onClick={() => handleMarkPaymentDone(b._id || b.bookingId)}
+                                     disabled={markingPaymentId === (b._id || b.bookingId)}
+                                     className="btn-primary bg-brand hover:bg-brand-dark text-xs py-2 px-4 font-semibold text-white flex items-center gap-1.5"
+                                   >
+                                     <FiDollarSign /> {markingPaymentId === (b._id || b.bookingId) ? 'Marking…' : 'Payment Done'}
+                                   </button>
+                                 )}
+                               </>
                              )}
                              {isPending && (
                                <button

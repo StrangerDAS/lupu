@@ -1812,6 +1812,176 @@ app.post('/api/payments/records', verifyFirebaseToken, requireMongoUser, async (
   }
 })
 
+// Renter marks offline payment as done
+app.post('/api/payments/mark-paid', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { bookingId } = req.body
+    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
+      return res.status(400).json({ message: 'Valid bookingId is required' })
+    }
+
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+
+    // Security Check: Customer can ONLY mark their own booking as payment done
+    const isRenter = (booking.renterId || booking.userId)?.toString() === req.user._id.toString()
+    if (!isRenter) {
+      return res.status(403).json({ message: 'Forbidden: You can only mark payment for your own booking.' })
+    }
+
+    // Validation: Booking must not be rejected or cancelled
+    const bStatus = (booking.status || '').toLowerCase().trim()
+    if (['rejected', 'cancelled'].includes(bStatus)) {
+      return res.status(400).json({ message: `Cannot mark payment for a ${bStatus} booking.` })
+    }
+
+    // Validation: Payment cannot already be paid
+    const currentPayStatus = (booking.paymentStatus || '').toLowerCase().trim()
+    if (currentPayStatus === 'paid') {
+      return res.status(400).json({ message: 'Payment has already been confirmed as received.' })
+    }
+
+    booking.paymentStatus = 'customer_marked_paid'
+    booking.paymentMethod = 'offline'
+    await booking.save()
+
+    // Upsert financial payment record
+    let payment = await Payment.findOne({ bookingId: booking._id })
+    if (payment) {
+      payment.status = 'customer_marked_paid'
+      payment.paymentMethod = 'offline'
+      await payment.save()
+    } else {
+      const rentAmt = booking.rentalAmount || booking.price || 0
+      const secDep = booking.deposit || 0
+      payment = await Payment.create({
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        renterId: booking.renterId || booking.userId,
+        ownerId: booking.ownerId,
+        rentalAmount: rentAmt,
+        securityDeposit: secDep,
+        platformFee: 0,
+        ownerPayoutAmount: rentAmt,
+        amount: rentAmt + secDep,
+        currency: 'INR',
+        status: 'customer_marked_paid',
+        paymentMethod: 'offline',
+        transactionId: `tx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        payoutStatus: 'unsettled'
+      })
+    }
+
+    // Notification requirement:
+    // When renter marks payment done: Notify owner: "[Renter name] has marked the payment as done. Please confirm receipt."
+    const renterName = req.user.name || booking.renterName || 'Renter'
+    await sendNotification(booking.ownerId, {
+      type: 'payment',
+      title: 'Payment Marked Done 💳',
+      message: `${renterName} has marked the payment as done. Please confirm receipt.`,
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      link: '/dashboard'
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Payment marked as done. Waiting for owner confirmation.',
+      booking
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// Owner confirms offline payment received
+app.post('/api/payments/confirm-received', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { bookingId } = req.body
+    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
+      return res.status(400).json({ message: 'Valid bookingId is required' })
+    }
+
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' })
+    }
+
+    // Security Check: Owner can ONLY confirm payment for a booking belonging to their own vehicle
+    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
+    if (!isOwner) {
+      return res.status(403).json({ message: 'Forbidden: You can only confirm payment for your own vehicle bookings.' })
+    }
+
+    // Validation: Booking must be in customer_marked_paid status (cannot skip or confirm if pending)
+    const currentPayStatus = (booking.paymentStatus || '').toLowerCase().trim()
+    if (currentPayStatus !== 'customer_marked_paid') {
+      if (currentPayStatus === 'paid') {
+        return res.status(400).json({ message: 'Payment has already been confirmed as received.' })
+      }
+      return res.status(400).json({ message: 'Renter has not marked the payment as done yet.' })
+    }
+
+    // Validation: Booking must not be rejected or cancelled
+    const bStatus = (booking.status || '').toLowerCase().trim()
+    if (['rejected', 'cancelled'].includes(bStatus)) {
+      return res.status(400).json({ message: `Cannot confirm payment for a ${bStatus} booking.` })
+    }
+
+    booking.paymentStatus = 'paid'
+    booking.paymentMethod = 'offline'
+    await booking.save()
+
+    // Upsert financial payment record
+    let payment = await Payment.findOne({ bookingId: booking._id })
+    if (payment) {
+      payment.status = 'paid'
+      payment.paymentMethod = 'offline'
+      await payment.save()
+    } else {
+      const rentAmt = booking.rentalAmount || booking.price || 0
+      const secDep = booking.deposit || 0
+      payment = await Payment.create({
+        bookingId: booking._id,
+        vehicleId: booking.vehicleId,
+        renterId: booking.renterId || booking.userId,
+        ownerId: booking.ownerId,
+        rentalAmount: rentAmt,
+        securityDeposit: secDep,
+        platformFee: 0,
+        ownerPayoutAmount: rentAmt,
+        amount: rentAmt + secDep,
+        currency: 'INR',
+        status: 'paid',
+        paymentMethod: 'offline',
+        transactionId: `tx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        payoutStatus: 'unsettled'
+      })
+    }
+
+    // Notification requirement:
+    // When owner confirms: Notify renter: "Payment received has been confirmed by the owner."
+    await sendNotification(booking.renterId || booking.userId, {
+      type: 'payment',
+      title: 'Payment Confirmed ✅',
+      message: 'Payment received has been confirmed by the owner.',
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      link: '/my-bookings'
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Payment Received',
+      booking
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // Booking payments inquiry
 app.get('/api/payments/booking/:bookingId', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {

@@ -19,7 +19,7 @@ import { StatCardSkeleton, BookingCardSkeleton } from '../components/Skeletons'
 import {
   uploadVehicleImages
 } from '../firebase/firestoreService'
-import { vehicleAPI, bookingAPI, notificationAPI } from '../api/endpoints'
+import { vehicleAPI, bookingAPI, notificationAPI, paymentAPI } from '../api/endpoints'
 import { auth } from '../config/firebase'
 import ReviewModal from '../components/ReviewModal'
 import EditVehicleModal from '../components/EditVehicleModal'
@@ -636,6 +636,21 @@ export default function OwnerDashboard() {
     }
   }
 
+  const [confirmingPaymentId, setConfirmingPaymentId] = useState(null)
+
+  const handleConfirmPaymentReceived = async (bookingId) => {
+    try {
+      setConfirmingPaymentId(bookingId)
+      const { data } = await paymentAPI.confirmReceived(bookingId)
+      toast.success(data.message || 'Payment Received! 🎉')
+      setBookings(prev => prev.map(b => (b._id === bookingId || b.bookingId === bookingId) ? { ...b, paymentStatus: 'paid' } : b))
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to confirm payment')
+    } finally {
+      setConfirmingPaymentId(null)
+    }
+  }
+
   const handleInspectApprove = async () => {
     if (!inspectBooking) return
     const bid = inspectBooking._id || inspectBooking.bookingId
@@ -1169,9 +1184,30 @@ export default function OwnerDashboard() {
                                   </span>
                                 )}
                                 {['approved', 'accepted'].includes(b.bookingStatus) && (
-                                  <span className="text-xs text-amber-400/85 bg-amber-500/5 px-2.5 py-1.5 rounded-lg border border-amber-500/10 italic flex items-center gap-1.5">
-                                    <FiClock /> Awaiting renter 25% advance payment
-                                  </span>
+                                  <>
+                                    {(b.paymentStatus || '').toLowerCase() === 'customer_marked_paid' ? (
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-xs text-brand bg-brand/10 px-2.5 py-1.5 rounded-lg border border-brand/20 flex items-center gap-1.5 font-medium">
+                                          <FiClock /> Renter marked payment as done
+                                        </span>
+                                        <button
+                                          onClick={() => handleConfirmPaymentReceived(b._id || b.bookingId)}
+                                          disabled={confirmingPaymentId === (b._id || b.bookingId)}
+                                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 text-sm font-semibold transition"
+                                        >
+                                          <FiCheckCircle /> {confirmingPaymentId === (b._id || b.bookingId) ? 'Confirming…' : 'Confirm Payment Received'}
+                                        </button>
+                                      </div>
+                                    ) : ['paid'].includes((b.paymentStatus || '').toLowerCase()) ? (
+                                      <span className="text-xs text-green-400 bg-green-500/10 px-2.5 py-1.5 rounded-lg border border-green-500/20 flex items-center gap-1.5 font-semibold">
+                                        <FiCheckCircle /> Payment Received
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-amber-400/85 bg-amber-500/5 px-2.5 py-1.5 rounded-lg border border-amber-500/10 italic flex items-center gap-1.5">
+                                        <FiClock /> Awaiting renter 25% advance payment
+                                      </span>
+                                    )}
+                                  </>
                                 )}
                                 {b.bookingStatus === 'advance_paid' && (
                                   <>
