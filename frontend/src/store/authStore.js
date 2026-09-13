@@ -129,7 +129,8 @@ const useAuthStore = create(
         const { user } = get()
         if (!user) return false
         if (_isAdmin(user)) return true
-        return user.kycStatus === 'verified' || !!user.emailVerified
+        const status = (user.kycStatus || '').toLowerCase()
+        return status === 'verified'
       },
 
       // isOwner: admins can act as owners in the system

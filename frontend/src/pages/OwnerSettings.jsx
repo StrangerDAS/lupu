@@ -623,9 +623,70 @@ function PhoneEditRow({ user, updateUser }) {
    VERIFICATION SECTION
    ═══════════════════════════════════════════════════════════ */
 
-function VerificationSection({ user }) {
-  const kycStatus = user?.kycStatus || 'unsubmitted'
-  const isOwner = user?.isOwner
+function VerificationSection({ user, updateUser, isOwner }) {
+  const kycStatus = (user?.kycStatus || 'unsubmitted').toLowerCase()
+  const [showUploadForm, setShowUploadForm] = useState(false)
+  const [docType, setDocType] = useState('driving_license') // 'driving_license' | 'aadhaar' | 'pan' | 'college_id'
+  const [docNumber, setDocNumber] = useState('')
+  const [files, setFiles] = useState({ front: null, back: null, selfie: null })
+  const [previews, setPreviews] = useState({ front: '', back: '', selfie: '' })
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleFileChange = (key, file) => {
+    if (!file) return
+    setFiles(prev => ({ ...prev, [key]: file }))
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setPreviews(prev => ({ ...prev, [key]: reader.result }))
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleSubmitKyc = async (e) => {
+    e.preventDefault()
+    if (!files.front && !docNumber) {
+      return toast.error('Please upload at least one document image or enter your document ID number.')
+    }
+
+    setSubmitting(true)
+    const toastId = toast.loading('Submitting verification documents...')
+    try {
+      const formData = new FormData()
+      formData.append('kycType', docType)
+
+      if (docType === 'driving_license') {
+        if (docNumber) formData.append('drivingLicenseNumber', docNumber)
+        if (files.front) formData.append('drivingLicense', files.front)
+        if (files.back) formData.append('document', files.back)
+      } else if (docType === 'aadhaar') {
+        if (docNumber) formData.append('aadhaarNumber', docNumber)
+        if (files.front) formData.append('aadhaarFront', files.front)
+        if (files.back) formData.append('aadhaarBack', files.back)
+      } else if (docType === 'pan') {
+        if (docNumber) formData.append('panNumber', docNumber)
+        if (files.front) formData.append('pan', files.front)
+      } else if (docType === 'college_id') {
+        if (docNumber) formData.append('collegeName', docNumber)
+        if (files.front) formData.append('collegeId', files.front)
+      }
+
+      if (files.selfie) formData.append('selfie', files.selfie)
+
+      const { data } = await userAPI.submitKyc(formData)
+      if (data.user) {
+        updateUser(data.user)
+      } else {
+        updateUser({ kycStatus: 'pending' })
+      }
+      toast.success('Identity verification documents submitted! Our team will review shortly.', { id: toastId })
+      setShowUploadForm(false)
+    } catch (err) {
+      console.error('KYC submit error:', err)
+      toast.error('Failed to submit documents: ' + (err.response?.data?.message || err.message), { id: toastId })
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   function VerifCard({ icon: Icon, title, status, detail, action }) {
     const map = {
@@ -662,19 +723,156 @@ function VerificationSection({ user }) {
             title="Identity Verification (KYC)"
             status={kycStatus}
             detail={
-              kycStatus === 'verified'    ? 'Your identity has been verified.' :
-              kycStatus === 'pending'     ? 'Your verification is currently under review.' :
-              kycStatus === 'rejected'    ? (user?.kycRejectionReason || 'Documents rejected. Please resubmit.') :
-              'Submit your ID documents to verify your identity.'
+              ['verified', 'verified'].includes(kycStatus)  ? 'Your identity has been officially verified.' :
+              ['pending', 'under review'].includes(kycStatus) ? 'Your verification is currently under admin review.' :
+              kycStatus === 'rejected'   ? (user?.kycRejectionReason || 'Documents rejected. Please resubmit clear photos.') :
+              'Submit your ID documents (Driving License, Aadhaar, PAN, or Student ID) to verify your identity.'
             }
             action={
-              (kycStatus === 'unsubmitted' || kycStatus === 'rejected') && (
-                <Link to="/profile" className="text-xs text-brand hover:text-brand-light font-medium flex items-center gap-1">
-                  Complete <FiChevronRight className="text-xs" />
-                </Link>
+              (kycStatus === 'unsubmitted' || kycStatus === 'rejected' || showUploadForm) ? (
+                <button
+                  onClick={() => setShowUploadForm(!showUploadForm)}
+                  className="text-xs text-brand hover:text-brand-light font-medium flex items-center gap-1 bg-brand/10 border border-brand/20 px-3 py-1.5 rounded-lg transition"
+                >
+                  {showUploadForm ? 'Cancel' : kycStatus === 'rejected' ? 'Resubmit KYC' : 'Verify Identity'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowUploadForm(!showUploadForm)}
+                  className="text-xs text-white/50 hover:text-white font-medium flex items-center gap-1"
+                >
+                  {showUploadForm ? 'Close' : 'View Uploaded Documents'}
+                </button>
               )
             }
           />
+
+          {/* Interactive KYC Document Upload Form */}
+          <AnimatePresence>
+            {showUploadForm && (
+              <motion.form
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                onSubmit={handleSubmitKyc}
+                className="bg-surface-2 border border-brand/20 rounded-xl p-4 sm:p-5 space-y-4"
+              >
+                <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                  <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <FiUpload className="text-brand" /> Submit Identity Documents
+                  </h4>
+                  <span className="text-[11px] text-white/40">Secure & Confidential</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label text-xs">Select Document Type</label>
+                    <select
+                      value={docType}
+                      onChange={(e) => setDocType(e.target.value)}
+                      className="input-field text-xs py-2"
+                    >
+                      <option value="driving_license">Driving License (Rider / Owner)</option>
+                      <option value="aadhaar">Aadhaar Card (National ID)</option>
+                      <option value="pan">PAN Card (Tax ID)</option>
+                      <option value="college_id">College / Student ID</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="label text-xs">
+                      {docType === 'driving_license' ? 'Driving License Number' :
+                       docType === 'aadhaar' ? '12-Digit Aadhaar Number' :
+                       docType === 'pan' ? 'PAN Card Number' : 'College / University Name'}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder={
+                        docType === 'driving_license' ? 'e.g. KA0120200012345' :
+                        docType === 'aadhaar' ? 'e.g. 1234 5678 9012' :
+                        docType === 'pan' ? 'e.g. ABCDE1234F' : 'e.g. IIT Bombay'
+                      }
+                      value={docNumber}
+                      onChange={(e) => setDocNumber(e.target.value)}
+                      className="input-field text-xs py-2"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                  {/* Front Side Document */}
+                  <div className="border border-white/10 rounded-lg p-3 bg-surface text-center space-y-2">
+                    <p className="text-xs text-white/70 font-medium">Front Side Photo</p>
+                    {previews.front ? (
+                      <div className="relative group">
+                        <img src={previews.front} alt="Front Preview" className="w-full h-24 object-cover rounded border border-white/10" />
+                        <button type="button" onClick={() => { setFiles(p => ({ ...p, front: null })); setPreviews(p => ({ ...p, front: '' })) }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 text-[10px]">✕</button>
+                      </div>
+                    ) : (
+                      <label className="block cursor-pointer py-4 border border-dashed border-white/20 rounded hover:border-brand/50 transition">
+                        <FiUpload className="mx-auto text-white/40 text-lg mb-1" />
+                        <span className="text-[11px] text-brand">Choose Image</span>
+                        <input type="file" accept="image/*,.pdf" onChange={(e) => handleFileChange('front', e.target.files[0])} className="hidden" />
+                      </label>
+                    )}
+                  </div>
+
+                  {/* Back Side Document (If applicable) */}
+                  {['driving_license', 'aadhaar'].includes(docType) && (
+                    <div className="border border-white/10 rounded-lg p-3 bg-surface text-center space-y-2">
+                      <p className="text-xs text-white/70 font-medium">Back Side Photo</p>
+                      {previews.back ? (
+                        <div className="relative group">
+                          <img src={previews.back} alt="Back Preview" className="w-full h-24 object-cover rounded border border-white/10" />
+                          <button type="button" onClick={() => { setFiles(p => ({ ...p, back: null })); setPreviews(p => ({ ...p, back: '' })) }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 text-[10px]">✕</button>
+                        </div>
+                      ) : (
+                        <label className="block cursor-pointer py-4 border border-dashed border-white/20 rounded hover:border-brand/50 transition">
+                          <FiUpload className="mx-auto text-white/40 text-lg mb-1" />
+                          <span className="text-[11px] text-brand">Choose Image</span>
+                          <input type="file" accept="image/*,.pdf" onChange={(e) => handleFileChange('back', e.target.files[0])} className="hidden" />
+                        </label>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Selfie / Photo */}
+                  <div className="border border-white/10 rounded-lg p-3 bg-surface text-center space-y-2">
+                    <p className="text-xs text-white/70 font-medium">Selfie / Profile Photo</p>
+                    {previews.selfie ? (
+                      <div className="relative group">
+                        <img src={previews.selfie} alt="Selfie Preview" className="w-full h-24 object-cover rounded border border-white/10" />
+                        <button type="button" onClick={() => { setFiles(p => ({ ...p, selfie: null })); setPreviews(p => ({ ...p, selfie: '' })) }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 text-[10px]">✕</button>
+                      </div>
+                    ) : (
+                      <label className="block cursor-pointer py-4 border border-dashed border-white/20 rounded hover:border-brand/50 transition">
+                        <FiUpload className="mx-auto text-white/40 text-lg mb-1" />
+                        <span className="text-[11px] text-brand">Upload Selfie</span>
+                        <input type="file" accept="image/*" onChange={(e) => handleFileChange('selfie', e.target.files[0])} className="hidden" />
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowUploadForm(false)}
+                    className="btn-ghost text-xs py-2 px-4"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="btn-primary text-xs py-2 px-5 flex items-center gap-1.5"
+                  >
+                    {submitting ? 'Submitting...' : 'Submit Verification'}
+                  </button>
+                </div>
+              </motion.form>
+            )}
+          </AnimatePresence>
 
           <VerifCard
             icon={FiMail}

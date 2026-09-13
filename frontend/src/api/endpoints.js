@@ -41,9 +41,14 @@ export const userAPI = {
   getAll: () => api.get('/users'),            // admin
   updateRole: (id, role) => api.patch(`/users/${id}/role`, { role }),
   deleteUser: (id) => api.delete(`/users/${id}`),
-  submitKyc: (data) => api.post('/users/kyc', data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }),
+  submitKyc: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/users/kyc', data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    }
+    return api.post('/users/kyc', data)
+  },
   updateNotificationPreferences: (data) => api.patch('/users/notification-preferences', data),
   updatePhone: (phone) => api.patch('/users/phone', { phone }),
   requestAccountDeletion: () => api.post('/users/request-account-deletion'),

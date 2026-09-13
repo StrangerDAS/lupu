@@ -100,13 +100,24 @@ const userSchema = new mongoose.Schema(
       }
     ],
     // KYC fields
+    kycType: { type: String, default: 'government_id' },
     collegeIdUrl: { type: String, default: null },
     governmentIdUrl: { type: String, default: null },
+    drivingLicenseNumber: { type: String, default: null },
+    drivingLicenseUrl: { type: String, default: null },
+    aadhaarNumber: { type: String, default: null },
+    aadhaarFrontUrl: { type: String, default: null },
+    aadhaarBackUrl: { type: String, default: null },
+    panNumber: { type: String, default: null },
+    panUrl: { type: String, default: null },
+    selfieUrl: { type: String, default: null },
+    kycDetails: { type: mongoose.Schema.Types.Mixed, default: {} },
     kycStatus: {
       type: String,
-      enum: ['unsubmitted', 'pending', 'verified', 'rejected'],
+      enum: ['unsubmitted', 'pending', 'Under Review', 'verified', 'Verified', 'rejected', 'Rejected'],
       default: 'unsubmitted',
     },
+    kycSubmittedAt: { type: Date, default: null },
     kycRejectionReason: { type: String, default: null },
     // Owner Payout Information
     payoutDetails: {

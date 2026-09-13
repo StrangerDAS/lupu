@@ -1467,38 +1467,101 @@ app.post('/api/users/request-account-deletion', verifyFirebaseToken, requireMong
 })
 
 
-app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, kycUpload, async (req, res) => {
+app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, (req, res, next) => {
+  kycUpload(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ message: err.message || 'File upload error during KYC submission' })
+    }
+    next()
+  })
+}, async (req, res) => {
   try {
-    const govFile = req.files?.['governmentIdUrl']?.[0]
+    const files = req.files || {}
+    const body = req.body || {}
 
-    const collegeFile = req.files?.['collegeIdUrl']?.[0]
+    const getFileUrl = (fieldname) => {
+      const file = files[fieldname]?.[0]
+      return file ? `/uploads/${file.filename}` : null
+    }
 
-    if (!govFile && !collegeFile && !req.body.governmentIdUrl && !req.body.collegeIdUrl) {
-      return res.status(400).json({ message: 'At least one ID is required' })
+    const govUrl = getFileUrl('governmentIdUrl') || getFileUrl('governmentId') || body.governmentIdUrl
+    const collegeUrl = getFileUrl('collegeIdUrl') || getFileUrl('collegeId') || body.collegeIdUrl
+    const dlUrl = getFileUrl('drivingLicenseUrl') || getFileUrl('drivingLicense') || body.drivingLicenseUrl
+    const aadhFrontUrl = getFileUrl('aadhaarFrontUrl') || getFileUrl('aadhaarFront') || body.aadhaarFrontUrl
+    const aadhBackUrl = getFileUrl('aadhaarBackUrl') || getFileUrl('aadhaarBack') || body.aadhaarBackUrl
+    const panUrl = getFileUrl('panUrl') || getFileUrl('pan') || body.panUrl
+    const selfieUrl = getFileUrl('selfieUrl') || getFileUrl('selfie') || body.selfieUrl
+    const genericDoc = getFileUrl('document') || body.documentUrl
+
+    let kycDetails = {}
+    if (typeof body.kycDetails === 'string') {
+      try { kycDetails = JSON.parse(body.kycDetails) } catch (_) {}
+    } else if (typeof body.kycDetails === 'object' && body.kycDetails !== null) {
+      kycDetails = body.kycDetails
     }
 
     const updates = {
       kycStatus: 'pending',
+      kycSubmittedAt: new Date(),
       kycRejectionReason: null
     }
 
-    if (govFile) {
-      updates.governmentIdUrl = `/uploads/${govFile.filename}`
-    } else if (req.body.governmentIdUrl) {
-      updates.governmentIdUrl = req.body.governmentIdUrl
+    if (body.kycType) updates.kycType = body.kycType
+    if (body.drivingLicenseNumber) updates.drivingLicenseNumber = body.drivingLicenseNumber
+    if (body.aadhaarNumber) updates.aadhaarNumber = body.aadhaarNumber
+    if (body.panNumber) updates.panNumber = body.panNumber
+
+    if (govUrl) updates.governmentIdUrl = govUrl
+    if (collegeUrl) updates.collegeIdUrl = collegeUrl
+    if (dlUrl) updates.drivingLicenseUrl = dlUrl
+    if (aadhFrontUrl) updates.aadhaarFrontUrl = aadhFrontUrl
+    if (aadhBackUrl) updates.aadhaarBackUrl = aadhBackUrl
+    if (panUrl) updates.panUrl = panUrl
+    if (selfieUrl) updates.selfieUrl = selfieUrl
+
+    // Store consolidated details object
+    const mergedDetails = {
+      ...kycDetails,
+      ...(body.drivingLicenseNumber && { drivingLicenseNumber: body.drivingLicenseNumber }),
+      ...(body.aadhaarNumber && { aadhaarNumber: body.aadhaarNumber }),
+      ...(body.panNumber && { panNumber: body.panNumber }),
+      ...(govUrl && { governmentIdUrl: govUrl }),
+      ...(collegeUrl && { collegeIdUrl: collegeUrl }),
+      ...(dlUrl && { drivingLicenseUrl: dlUrl }),
+      ...(aadhFrontUrl && { aadhaarFrontUrl: aadhFrontUrl }),
+      ...(aadhBackUrl && { aadhaarBackUrl: aadhBackUrl }),
+      ...(panUrl && { panUrl: panUrl }),
+      ...(selfieUrl && { selfieUrl: selfieUrl }),
+      ...(genericDoc && { documentUrl: genericDoc })
+    }
+    updates.kycDetails = mergedDetails
+
+    // Validate that at least one ID document URL or ID number was provided
+    const hasAnyDoc = govUrl || collegeUrl || dlUrl || aadhFrontUrl || aadhBackUrl || panUrl || selfieUrl || genericDoc ||
+      body.drivingLicenseNumber || body.aadhaarNumber || body.panNumber || Object.keys(mergedDetails).length > 0
+
+    if (!hasAnyDoc) {
+      return res.status(400).json({ message: 'At least one identity document or document number is required' })
     }
 
-    if (collegeFile) {
-      updates.collegeIdUrl = `/uploads/${collegeFile.filename}`
-    } else if (req.body.collegeIdUrl) {
-      updates.collegeIdUrl = req.body.collegeIdUrl
-    }
-    
     const updated = await User.findByIdAndUpdate(req.user._id, updates, { new: true, lean: true })
-    res.json({ message: 'KYC submitted successfully', user: safeUser(updated) })
+
+    // Send confirmation notification to user
+    await sendNotification(req.user._id, {
+      type: 'general',
+      title: 'KYC Submitted 📋',
+      message: 'Your identity documents have been submitted for verification and are under review by our team.',
+      link: '/profile'
+    })
+
+    res.json({
+      success: true,
+      message: 'KYC submitted successfully. Verification is pending review.',
+      user: safeUser(updated)
+    })
   } catch (err) {
     console.error('KYC submit error:', err)
-    res.status(500).json({ message: 'Internal server error' })
+    res.status(500).json({ message: err.message || 'Internal server error during KYC submission' })
   }
 })
 

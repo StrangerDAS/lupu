@@ -46,7 +46,20 @@ export const vehicleUpload = upload.fields([
 
 export const kycUpload = upload.fields([
   { name: 'governmentIdUrl', maxCount: 1 },
-  { name: 'collegeIdUrl', maxCount: 1 }
+  { name: 'collegeIdUrl', maxCount: 1 },
+  { name: 'governmentId', maxCount: 1 },
+  { name: 'collegeId', maxCount: 1 },
+  { name: 'drivingLicense', maxCount: 1 },
+  { name: 'drivingLicenseUrl', maxCount: 1 },
+  { name: 'aadhaarFront', maxCount: 1 },
+  { name: 'aadhaarFrontUrl', maxCount: 1 },
+  { name: 'aadhaarBack', maxCount: 1 },
+  { name: 'aadhaarBackUrl', maxCount: 1 },
+  { name: 'pan', maxCount: 1 },
+  { name: 'panUrl', maxCount: 1 },
+  { name: 'selfie', maxCount: 1 },
+  { name: 'selfieUrl', maxCount: 1 },
+  { name: 'document', maxCount: 1 }
 ])
 
 export const avatarUpload = upload.single('avatar')

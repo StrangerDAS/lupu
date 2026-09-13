@@ -260,48 +260,76 @@ export default function UsersView() {
       {/* KYC Review Modal */}
       {selectedUser && modalType === 'kyc-review' && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="glass max-w-2xl w-full rounded-2xl p-6 border border-white/10 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-4">
-              <h3 className="font-bold text-lg">Review KYC Documents - {selectedUser.name}</h3>
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="glass max-w-3xl w-full rounded-2xl p-6 border border-white/10 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-2">
+              <div>
+                <h3 className="font-bold text-lg text-white">Review KYC Documents - {selectedUser.name}</h3>
+                <p className="text-xs text-white/50">{selectedUser.email} • ID: {selectedUser._id}</p>
+              </div>
               <button onClick={() => { setSelectedUser(null); setNotes(''); }} className="text-white/50 hover:text-white">
                 <FiXCircle size={24} />
               </button>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+
+            {/* Document Numbers & Metadata */}
+            <div className="bg-surface-2 border border-white/5 rounded-xl p-3.5 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div>
-                <p className="text-xs font-semibold text-white/50 mb-2">Government ID</p>
-                {selectedUser.governmentIdUrl ? (
-                  <a href={getImageUrl(selectedUser.governmentIdUrl)} target="_blank" rel="noreferrer" className="block w-full h-48 bg-white/5 rounded-xl overflow-hidden hover:opacity-90 transition border border-white/10 relative group">
-                    {selectedUser.governmentIdUrl.includes('.pdf') ? (
-                      <div className="w-full h-full flex items-center justify-center text-white/50"><FiFileText size={48} /> <span className="absolute bottom-4">View PDF</span></div>
-                    ) : (
-                      <img src={getImageUrl(selectedUser.governmentIdUrl)} className="w-full h-full object-cover" alt="Gov ID" />
-                    )}
-                  </a>
-                ) : <div className="h-48 bg-white/5 rounded-xl flex items-center justify-center text-white/30 text-xs border border-white/10">Not uploaded</div>}
+                <span className="text-white/40 block text-[10px]">KYC Type</span>
+                <span className="font-semibold capitalize text-white">{selectedUser.kycType || 'Government ID'}</span>
               </div>
-              
-              <div>
-                <p className="text-xs font-semibold text-white/50 mb-2">College ID</p>
-                {selectedUser.collegeIdUrl ? (
-                  <a href={getImageUrl(selectedUser.collegeIdUrl)} target="_blank" rel="noreferrer" className="block w-full h-48 bg-white/5 rounded-xl overflow-hidden hover:opacity-90 transition border border-white/10 relative group">
-                    {selectedUser.collegeIdUrl.includes('.pdf') ? (
-                      <div className="w-full h-full flex items-center justify-center text-white/50"><FiFileText size={48} /> <span className="absolute bottom-4">View PDF</span></div>
-                    ) : (
-                      <img src={getImageUrl(selectedUser.collegeIdUrl)} className="w-full h-full object-cover" alt="College ID" />
-                    )}
-                  </a>
-                ) : <div className="h-48 bg-white/5 rounded-xl flex items-center justify-center text-white/30 text-xs border border-white/10">Not uploaded</div>}
-              </div>
+              {selectedUser.drivingLicenseNumber && (
+                <div>
+                  <span className="text-white/40 block text-[10px]">Driving License No.</span>
+                  <span className="font-semibold text-brand">{selectedUser.drivingLicenseNumber}</span>
+                </div>
+              )}
+              {selectedUser.aadhaarNumber && (
+                <div>
+                  <span className="text-white/40 block text-[10px]">Aadhaar No.</span>
+                  <span className="font-semibold text-brand">{selectedUser.aadhaarNumber}</span>
+                </div>
+              )}
+              {selectedUser.panNumber && (
+                <div>
+                  <span className="text-white/40 block text-[10px]">PAN No.</span>
+                  <span className="font-semibold text-brand">{selectedUser.panNumber}</span>
+                </div>
+              )}
             </div>
 
-            <div className="space-y-1.5 border-t border-white/10 pt-4 mt-4">
+            {/* Document Images Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 my-4">
+              {[
+                { title: 'Driving License / Gov ID', url: selectedUser.drivingLicenseUrl || selectedUser.governmentIdUrl },
+                { title: 'Aadhaar Front', url: selectedUser.aadhaarFrontUrl },
+                { title: 'Aadhaar Back', url: selectedUser.aadhaarBackUrl },
+                { title: 'PAN Card', url: selectedUser.panUrl },
+                { title: 'College ID', url: selectedUser.collegeIdUrl },
+                { title: 'Selfie / Photo', url: selectedUser.selfieUrl },
+              ].map((doc, idx) => (
+                <div key={idx} className="bg-white/5 border border-white/10 rounded-xl p-2.5 flex flex-col justify-between space-y-2">
+                  <p className="text-[11px] font-semibold text-white/60">{doc.title}</p>
+                  {doc.url ? (
+                    <a href={getImageUrl(doc.url)} target="_blank" rel="noreferrer" className="block w-full h-36 bg-black/40 rounded-lg overflow-hidden border border-white/10 relative group">
+                      {doc.url.endsWith('.pdf') ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-white/50"><FiFileText size={32} /> <span className="text-[10px] mt-1">View PDF</span></div>
+                      ) : (
+                        <img src={getImageUrl(doc.url)} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt={doc.title} />
+                      )}
+                    </a>
+                  ) : (
+                    <div className="h-36 bg-white/5 rounded-lg flex items-center justify-center text-white/20 text-[11px] border border-dashed border-white/10">Not uploaded</div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-1.5 border-t border-white/10 pt-4">
               <label className="text-[10px] font-semibold text-white/50">Rejection Reason (Required if rejecting)</label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="E.g., Image is blurry, name does not match..."
+                placeholder="E.g., Document image is blurry, name mismatch..."
                 className="input-field text-xs h-20 resize-none p-2.5"
               />
             </div>

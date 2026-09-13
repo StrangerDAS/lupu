@@ -28,7 +28,7 @@ import {
 } from '../firebase/firestoreService'
 import { doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import { paymentAPI, bookingAPI, safetyAPI, notificationAPI } from '../api/endpoints'
+import { paymentAPI, bookingAPI, safetyAPI, notificationAPI, userAPI } from '../api/endpoints'
 import DisputeModal from '../components/DisputeModal'
 
 /* ═══════════════════════════════════════════════════════════
@@ -500,21 +500,28 @@ export default function CustomerDashboard() {
     setKycSubmitting(true)
     const toastId = toast.loading('Submitting verification documents...')
     try {
-      const kycDetails = kycType === 'college_id' 
-        ? { collegeName } 
-        : { aadhaarNumber }
+      const formData = new FormData()
+      formData.append('kycType', kycType)
+      if (kycType === 'college_id') {
+        formData.append('collegeName', collegeName)
+        if (kycFiles.collegeId) formData.append('collegeId', kycFiles.collegeId)
+      } else {
+        formData.append('aadhaarNumber', aadhaarNumber)
+        if (kycFiles.aadhaarFront) formData.append('aadhaarFront', kycFiles.aadhaarFront)
+        if (kycFiles.aadhaarBack) formData.append('aadhaarBack', kycFiles.aadhaarBack)
+      }
+      if (kycFiles.selfie) formData.append('selfie', kycFiles.selfie)
 
-      const updatePayload = await submitUserKyc(user._id, {
-        kycType,
-        kycDetails,
-        files: kycFiles
-      })
-
-      updateUser(updatePayload)
+      const { data } = await userAPI.submitKyc(formData)
+      if (data.user) {
+        updateUser(data.user)
+      } else {
+        updateUser({ kycStatus: 'pending' })
+      }
       toast.success('KYC documents submitted for review! 🎉', { id: toastId })
     } catch (err) {
       console.error(err)
-      toast.error('Failed to submit KYC documents: ' + err.message, { id: toastId })
+      toast.error('Failed to submit KYC documents: ' + (err.response?.data?.message || err.message), { id: toastId })
     } finally {
       setKycSubmitting(false)
     }
