@@ -60,10 +60,23 @@ const userSchema = new mongoose.Schema(
     college: { type: String, trim: true, default: null },
     address: { type: String, trim: true, default: null },
     notificationPreferences: {
-      booking:  { type: Boolean, default: true },
-      vehicle:  { type: Boolean, default: true },
-      payment:  { type: Boolean, default: true },
-      email:    { type: Boolean, default: true },
+      // Broad category toggles (legacy — kept for backward compat)
+      booking:              { type: Boolean, default: true },
+      vehicle:              { type: Boolean, default: true },
+      payment:              { type: Boolean, default: true },
+      email:                { type: Boolean, default: true },
+      // Granular booking notifications
+      bookingRequest:       { type: Boolean, default: true },
+      bookingAccepted:      { type: Boolean, default: true },
+      bookingRejected:      { type: Boolean, default: true },
+      bookingCancelled:     { type: Boolean, default: true },
+      // Granular payment notifications
+      paymentRecorded:      { type: Boolean, default: true },
+      paymentConfirmed:     { type: Boolean, default: true },
+      paymentDisputed:      { type: Boolean, default: true },
+      // Account notifications
+      securityAlerts:       { type: Boolean, default: true },
+      verificationUpdates:  { type: Boolean, default: true },
     },
     // Trust & Safety
     isSuspended: {

@@ -44,6 +44,9 @@ export const userAPI = {
   submitKyc: (data) => api.post('/users/kyc', data, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
+  updateNotificationPreferences: (data) => api.patch('/users/notification-preferences', data),
+  updatePhone: (phone) => api.patch('/users/phone', { phone }),
+  requestAccountDeletion: () => api.post('/users/request-account-deletion'),
 }
 
 /* ── Admin ──────────────────────────────────────────────── */

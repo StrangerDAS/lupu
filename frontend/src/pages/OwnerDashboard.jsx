@@ -25,6 +25,7 @@ import ReviewModal from '../components/ReviewModal'
 import EditVehicleModal from '../components/EditVehicleModal'
 import DisputeModal from '../components/DisputeModal'
 import { getImageUrl } from '../utils/urlUtils'
+import OwnerSettings from './OwnerSettings'
 
 /* ═══════════════════════════════════════════════════════════
    NAVIGATION ITEMS
@@ -1430,20 +1431,8 @@ export default function OwnerDashboard() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.25 }}
-                  className="flex flex-col items-center justify-center py-20"
                 >
-                  <div className="card p-10 text-center max-w-md w-full">
-                    <div className="w-16 h-16 bg-surface-2 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                      <FiSettings className="text-white/20 text-3xl" />
-                    </div>
-                    <h2 className="text-xl font-bold mb-2">Settings</h2>
-                    <p className="text-white/40 text-sm">
-                      Account settings, notification preferences, and payout configuration are coming soon.
-                    </p>
-                    <div className="mt-6 inline-block badge bg-brand/10 text-brand border border-brand/20 text-xs font-medium">
-                      Coming Soon
-                    </div>
-                  </div>
+                  <OwnerSettings />
                 </motion.div>
               )}
 

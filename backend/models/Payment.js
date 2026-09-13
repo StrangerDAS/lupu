@@ -57,13 +57,96 @@ const paymentSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'customer_marked_paid', 'paid', 'success', 'failed', 'refunded', 'cancelled', 'not_integrated'],
+      enum: [
+        'pending',
+        'customer_marked_paid',
+        'paid',
+        'success',
+        'failed',
+        'refunded',
+        'cancelled',
+        'not_integrated',
+        // ── Offline cash record statuses ──
+        'recorded',   // owner directly recorded a cash payment
+        'disputed',   // renter or admin flagged the record
+        'reversed',   // admin reversed/voided the record (original preserved)
+      ],
       default: 'pending',
     },
     paymentMethod: {
       type: String,
       default: 'none',
     },
+
+    // ── Offline Cash Record Fields ─────────────────────────────────────────
+    // Human-readable unique reference: LUPU-PAY-YYYYMMDD-XXXXXX
+    referenceId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    // Purpose of this specific cash payment (what the money was for)
+    paymentPurpose: {
+      type: String,
+      enum: ['advance', 'rental', 'security_deposit', 'damage', 'other'],
+      default: null,
+    },
+    // Who recorded this payment (server-set from req.user._id — always the owner)
+    // Never trusted from client body.
+    recordedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    recordedByName: {
+      type: String,  // denormalized for fast display
+      default: null,
+    },
+
+    // ── Immutability / Audit Trail ─────────────────────────────────────────
+    // Whether this record has been administratively reversed.
+    // The original record is NEVER deleted — isReversed=true preserves it.
+    isReversed: {
+      type: Boolean,
+      default: false,
+    },
+    reversalReason: {
+      type: String,
+      default: null,
+    },
+    reversedAt: {
+      type: Date,
+      default: null,
+    },
+    reversedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    // For correction payments: points to the original payment this corrects
+    correctionOf: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Payment',
+      default: null,
+    },
+
+    // ── Dispute Fields ─────────────────────────────────────────────────────
+    disputeReason: {
+      type: String,
+      default: null,
+    },
+    disputedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    disputedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // ── Legacy / Gateway fields (kept for backward compatibility) ──────────
     transactionReference: {
       type: String,
       default: null,
@@ -94,6 +177,8 @@ paymentSchema.index({ bookingId: 1 })
 paymentSchema.index({ renterId: 1 })
 paymentSchema.index({ ownerId: 1 })
 paymentSchema.index({ status: 1 })
+paymentSchema.index({ paymentPurpose: 1 })
+paymentSchema.index({ referenceId: 1 })
+paymentSchema.index({ createdAt: -1 })
 
 export default mongoose.model('Payment', paymentSchema)
-

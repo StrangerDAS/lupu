@@ -1317,9 +1317,160 @@ app.put('/api/users/profile', verifyFirebaseToken, requireMongoUser, avatarUploa
   }
 })
 
+// ── Notification Preferences ──────────────────────────────
+// PATCH /api/users/notification-preferences
+// Updates granular notification preferences for the authenticated user.
+// Identity is ALWAYS derived from req.user._id — never trusted from body.
+app.patch('/api/users/notification-preferences', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    const allowed = [
+      'booking', 'vehicle', 'payment', 'email',
+      'bookingRequest', 'bookingAccepted', 'bookingRejected', 'bookingCancelled',
+      'paymentRecorded', 'paymentConfirmed', 'paymentDisputed',
+      'securityAlerts', 'verificationUpdates',
+    ]
+
+    const updates = {}
+    for (const key of allowed) {
+      if (typeof req.body[key] === 'boolean') {
+        updates[`notificationPreferences.${key}`] = req.body[key]
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'No valid preference fields provided.' })
+    }
+
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: updates },
+      { new: true, runValidators: true, lean: true }
+    )
+
+    res.json({
+      success: true,
+      message: 'Notification preferences saved.',
+      notificationPreferences: updated.notificationPreferences,
+    })
+  } catch (err) {
+    console.error('PATCH /api/users/notification-preferences error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+// ── Phone Number Update ──────────────────────────────────
+// PATCH /api/users/phone
+// Dedicated endpoint for phone update with strict Indian phone validation.
+// Preserves the existing owner-contact release rules — phone is NEVER exposed publicly.
+app.patch('/api/users/phone', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    const { phone } = req.body
+
+    if (!phone && phone !== '') {
+      return res.status(400).json({ message: 'phone field is required.' })
+    }
+
+    // Allow clearing phone
+    if (phone === '') {
+      const updated = await User.findByIdAndUpdate(
+        req.user._id,
+        { phone: null, phoneVerified: false },
+        { new: true, lean: true }
+      )
+      return res.json({ success: true, message: 'Phone number removed.', user: safeUser(updated) })
+    }
+
+    const validation = validateIndianPhoneNumber(phone)
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.message })
+    }
+
+    // Check uniqueness (exclude current user)
+    const existing = await User.findOne({ phone: validation.formatted, _id: { $ne: req.user._id } })
+    if (existing) {
+      return res.status(409).json({ message: 'This phone number is already registered with another account.' })
+    }
+
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { phone: validation.formatted, phoneVerified: false }, // re-verification required on change
+      { new: true, lean: true }
+    )
+
+    res.json({
+      success: true,
+      message: 'Phone number updated. Please verify your new number.',
+      user: safeUser(updated),
+    })
+  } catch (err) {
+    console.error('PATCH /api/users/phone error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'This phone number is already in use.' })
+    }
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+// ── Account Deletion Request ─────────────────────────────
+// POST /api/users/request-account-deletion
+// Creates a safe deletion request: audit-logged, notifies user.
+// Does NOT delete any data. Actual deletion remains admin-controlled.
+// Respects financial records, booking history, dispute records, and legal retention.
+app.post('/api/users/request-account-deletion', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    const user = req.user
+
+    // Protect admin account
+    if (user.email?.toLowerCase() === 'dasstranger421@gmail.com') {
+      return res.status(403).json({ message: 'Platform administrator account cannot be deleted.' })
+    }
+
+    // Check for active/ongoing bookings (as owner or renter)
+    const activeBookings = await Booking.countDocuments({
+      $or: [
+        { renterId: user._id, status: { $in: ['pending', 'accepted', 'ongoing'] } },
+        { ownerId: user._id, status: { $in: ['pending', 'accepted', 'ongoing'] } },
+      ],
+    })
+
+    if (activeBookings > 0) {
+      return res.status(400).json({
+        message: `You have ${activeBookings} active booking(s). Please resolve all active bookings before requesting account deletion.`,
+        activeBookings,
+      })
+    }
+
+    // Record the deletion request in the audit log
+    await logAdminAction(
+      { _id: user._id, name: user.name || 'Unknown', email: user.email || '', role: user.role },
+      'account_deletion_requested',
+      { collectionName: 'users', docId: user._id.toString(), name: user.name },
+      `User ${user.email || user._id} requested account deletion`
+    )
+
+    // Notify the user (in-app)
+    await sendNotification(user._id, {
+      type: 'system',
+      title: 'Account Deletion Requested',
+      message: 'Your account deletion request has been received. Our team will review it within 7 business days. You will be contacted at your registered email.',
+      link: '/dashboard',
+    })
+
+    res.json({
+      success: true,
+      message: 'Account deletion request submitted. Our team will contact you within 7 business days.',
+    })
+  } catch (err) {
+    console.error('POST /api/users/request-account-deletion error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+
 app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, kycUpload, async (req, res) => {
   try {
     const govFile = req.files?.['governmentIdUrl']?.[0]
+
     const collegeFile = req.files?.['collegeIdUrl']?.[0]
 
     if (!govFile && !collegeFile && !req.body.governmentIdUrl && !req.body.collegeIdUrl) {
@@ -1745,50 +1896,463 @@ app.get('/api/payments/owner/earnings', verifyFirebaseToken, requireMongoUser, a
   }
 })
 
-// ── Payment & Financial Records Endpoints ───────────────────
+// ── Offline Cash Payment Record System ──────────────────────
+//
+// LUPU payments are direct between renter and vehicle owner.
+// LUPU does not receive, hold, process, or transfer payments.
+// The backend provides an immutable audit trail of payments
+// that BOTH parties and the admin can see.
+//
 
-// Gateway status placeholder (Gateway is OFF; bookings confirm directly)
+// Helper: generate human-readable payment reference ID
+function generatePaymentRefId() {
+  const now = new Date()
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  const randomPart = Math.random().toString(36).toUpperCase().slice(2, 8)
+  return `LUPU-PAY-${datePart}-${randomPart}`
+}
+
+// Gateway status placeholder (Gateway is OFF; all payments are direct cash)
 app.post('/api/payments/create-order', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   return res.status(200).json({
-    message: 'Online payment gateway is temporarily disabled. Bookings are confirmed directly with zero commission.',
+    message: 'Online payment gateway is not used. All LUPU payments are made directly in cash between renter and owner.',
     status: 'not_integrated'
   })
 })
 
 app.post('/api/payments/verify', verifyFirebaseToken, requireMongoUser, async (req, res) => {
   return res.status(200).json({
-    message: 'Online payment gateway verification is temporarily disabled.',
+    message: 'Online payment gateway verification is not used.',
     status: 'not_integrated'
   })
 })
 
-// Create financial payment record in pending state
+// ─────────────────────────────────────────────────────────────
+// DEPRECATED: Renter-claims-payment flow is REMOVED.
+// Only the vehicle owner can authoritatively record cash payments.
+// ─────────────────────────────────────────────────────────────
+
+app.post('/api/payments/mark-paid', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  return res.status(410).json({
+    error: 'DEPRECATED',
+    message: 'This endpoint has been removed. Payment recording is now done exclusively by the vehicle owner. Contact your owner to record the payment.',
+    code: 'FLOW_CHANGED'
+  })
+})
+
+app.post('/api/payments/confirm-received', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  return res.status(410).json({
+    error: 'DEPRECATED',
+    message: 'This endpoint has been removed. Use POST /api/payments/record-offline instead.',
+    code: 'FLOW_CHANGED'
+  })
+})
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/payments/record-offline
+// Vehicle owner records a direct cash payment received from renter.
+//
+// Security Rules:
+//  1. Authenticated user must be the booking's owner (server-verified)
+//  2. Booking must exist
+//  3. Booking must be in a valid state (accepted / active / ongoing / completed)
+//  4. Cancelled / rejected bookings: blocked
+//  5. Amount must be a positive finite number
+//  6. paymentPurpose must be in the allowed enum
+//  7. ownerId / renterId derived from booking — never trusted from body
+//  8. recordedBy set server-side from req.user._id
+//  9. referenceId generated server-side (crypto-safe unique)
+// 10. Idempotency: blocks duplicate submission within 60 seconds
+//     (same booking + same purpose + same amount)
+// 11. Server timestamps (Mongoose createdAt/updatedAt)
+// 12. Admin email protected — cannot masquerade as owner
+// ─────────────────────────────────────────────────────────────
+app.post('/api/payments/record-offline', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    const { bookingId, amount, paymentPurpose, notes } = req.body
+
+    // ── Validate required fields ────────────────────────────
+    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
+      return res.status(400).json({ message: 'Valid bookingId is required.' })
+    }
+
+    const VALID_PURPOSES = ['advance', 'rental', 'security_deposit', 'damage', 'other']
+    if (!paymentPurpose || !VALID_PURPOSES.includes(paymentPurpose)) {
+      return res.status(400).json({
+        message: `paymentPurpose must be one of: ${VALID_PURPOSES.join(', ')}`
+      })
+    }
+
+    const parsedAmount = Number(amount)
+    if (!isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ message: 'Amount must be a positive number.' })
+    }
+    // Enforce max 2 decimal places (INR paise)
+    if (Math.round(parsedAmount * 100) !== parsedAmount * 100) {
+      return res.status(400).json({ message: 'Amount cannot have more than 2 decimal places.' })
+    }
+    if (parsedAmount > 10_00_000) {
+      return res.status(400).json({ message: 'Amount cannot exceed ₹10,00,000 per record.' })
+    }
+
+    // ── Fetch and validate booking ──────────────────────────
+    const booking = await Booking.findById(bookingId).lean()
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found.' })
+    }
+
+    // Rule 1: Only the vehicle's owner can record this payment
+    if (booking.ownerId?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        message: 'Forbidden: Only the vehicle owner can record payments for this booking.'
+      })
+    }
+
+    // Rule 3/4: Booking must be in a valid state
+    const validStatuses = ['accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed', 'completed']
+    const bStatus = (booking.status || '').toLowerCase().trim()
+    if (!validStatuses.includes(bStatus)) {
+      return res.status(400).json({
+        message: `Cannot record a payment for a booking in "${booking.status}" status. Booking must be accepted or active.`
+      })
+    }
+
+    // Rule 10: Idempotency — block duplicate within 60 seconds (same booking + purpose + amount)
+    const sixtySecondsAgo = new Date(Date.now() - 60 * 1000)
+    const recentDuplicate = await Payment.findOne({
+      bookingId: booking._id,
+      paymentPurpose,
+      amount: parsedAmount,
+      status: 'recorded',
+      createdAt: { $gte: sixtySecondsAgo },
+    })
+    if (recentDuplicate) {
+      return res.status(409).json({
+        message: 'A payment with the same amount and purpose was just recorded for this booking. Please wait before submitting again.',
+        existingPaymentId: recentDuplicate._id,
+        referenceId: recentDuplicate.referenceId,
+      })
+    }
+
+    // ── Generate unique reference ID (server-side, no client input) ─
+    let referenceId
+    let attempts = 0
+    do {
+      referenceId = generatePaymentRefId()
+      attempts++
+    } while (await Payment.exists({ referenceId }) && attempts < 10)
+
+    // ── Create immutable payment record ────────────────────
+    const payment = await Payment.create({
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      renterId: booking.renterId || booking.userId,  // server-derived
+      ownerId:  booking.ownerId,                      // server-derived
+      amount: parsedAmount,
+      currency: 'INR',
+      paymentMethod: 'cash',
+      paymentPurpose,
+      status: 'recorded',
+      referenceId,
+      recordedBy: req.user._id,         // server-set from authenticated token
+      recordedByName: req.user.name || 'Vehicle Owner',
+      notes: typeof notes === 'string' ? notes.trim().slice(0, 500) : undefined,
+      // Legacy fields for backward compat
+      rentalAmount: paymentPurpose === 'rental' ? parsedAmount : 0,
+      securityDeposit: paymentPurpose === 'security_deposit' ? parsedAmount : 0,
+      platformFee: 0,
+      ownerPayoutAmount: parsedAmount,
+      payoutStatus: 'unsettled',
+    })
+
+    // ── Update booking-level payment status summary ─────────
+    // Only upgrade — don't downgrade if already 'paid'
+    const currentBookingPayStatus = (booking.paymentStatus || '').toLowerCase()
+    if (!['paid'].includes(currentBookingPayStatus)) {
+      await Booking.findByIdAndUpdate(booking._id, {
+        paymentStatus: 'paid',
+        paymentMethod: 'cash',
+      })
+    }
+
+    // ── Notify renter ───────────────────────────────────────
+    const purposeLabels = {
+      advance: 'Advance',
+      rental: 'Rental',
+      security_deposit: 'Security Deposit',
+      damage: 'Damage',
+      other: 'Payment',
+    }
+    const purposeLabel = purposeLabels[paymentPurpose] || paymentPurpose
+    const renterId = booking.renterId || booking.userId
+
+    await sendNotification(renterId, {
+      type: 'payment',
+      title: `Cash Payment Recorded — ₹${parsedAmount.toLocaleString('en-IN')}`,
+      message: `Your owner has recorded a ₹${parsedAmount.toLocaleString('en-IN')} cash ${purposeLabel} payment for your booking. Ref: ${referenceId}`,
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      link: '/my-bookings',
+    })
+
+    // ── Notify admin ────────────────────────────────────────
+    try {
+      const adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' }).lean()
+      if (adminUser) {
+        await sendNotification(adminUser._id, {
+          type: 'payment',
+          title: `Cash Payment Recorded — Booking #${String(booking._id).slice(-6).toUpperCase()}`,
+          message: `A ₹${parsedAmount.toLocaleString('en-IN')} cash ${purposeLabel} payment has been recorded by owner ${req.user.name || 'Owner'}. Ref: ${referenceId}`,
+          bookingId: booking._id,
+          vehicleId: booking.vehicleId,
+          link: '/admin',
+        })
+      }
+    } catch (_) {
+      // Non-critical — admin notification failure should not block the response
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Cash payment of ₹${parsedAmount.toLocaleString('en-IN')} recorded successfully.`,
+      payment: {
+        _id: payment._id,
+        referenceId: payment.referenceId,
+        amount: payment.amount,
+        paymentPurpose: payment.paymentPurpose,
+        paymentMethod: payment.paymentMethod,
+        status: payment.status,
+        recordedByName: payment.recordedByName,
+        notes: payment.notes,
+        createdAt: payment.createdAt,
+      },
+      disclaimer: 'This payment was made directly between the renter and the vehicle owner. LUPU does not receive, hold, process, or transfer this payment.',
+    })
+  } catch (err) {
+    console.error('POST /api/payments/record-offline error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'A payment reference ID collision occurred. Please try again.' })
+    }
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/payments/:id/dispute
+// Renter (or admin) flags a recorded payment as disputed.
+// The payment is NOT deleted. Status changes to 'disputed'.
+// Owner and admin are notified.
+// ─────────────────────────────────────────────────────────────
+app.post('/api/payments/:id/dispute', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid payment ID.' })
+    }
+
+    const payment = await Payment.findById(req.params.id)
+    if (!payment) return res.status(404).json({ message: 'Payment record not found.' })
+
+    // Only renter or admin can dispute
+    const isRenter = payment.renterId?.toString() === req.user._id.toString()
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
+                    req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+
+    if (!isRenter && !isAdmin) {
+      return res.status(403).json({ message: 'Forbidden: Only the renter or admin can dispute a payment.' })
+    }
+
+    if (payment.status === 'reversed') {
+      return res.status(400).json({ message: 'This payment has already been reversed and cannot be disputed.' })
+    }
+    if (payment.status === 'disputed') {
+      return res.status(409).json({ message: 'This payment is already flagged as disputed.' })
+    }
+
+    const { reason } = req.body
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ message: 'A dispute reason is required.' })
+    }
+
+    payment.status = 'disputed'
+    payment.disputeReason = String(reason).trim().slice(0, 500)
+    payment.disputedBy = req.user._id
+    payment.disputedAt = new Date()
+    await payment.save()
+
+    // Notify owner
+    await sendNotification(payment.ownerId, {
+      type: 'payment',
+      title: `Payment Disputed — ${payment.referenceId || payment._id}`,
+      message: `A payment of ₹${payment.amount?.toLocaleString('en-IN')} (Ref: ${payment.referenceId}) has been disputed. Reason: ${reason}`,
+      bookingId: payment.bookingId,
+      link: '/dashboard',
+    })
+
+    // Notify admin
+    try {
+      const adminUser = await User.findOne({ email: 'dasstranger421@gmail.com' }).lean()
+      if (adminUser) {
+        await sendNotification(adminUser._id, {
+          type: 'payment',
+          title: `Payment Disputed — ${payment.referenceId}`,
+          message: `Payment ${payment.referenceId} (₹${payment.amount}) has been disputed by ${req.user.name || 'a user'}. Reason: ${reason}`,
+          bookingId: payment.bookingId,
+          link: '/admin',
+        })
+      }
+    } catch (_) {}
+
+    res.json({
+      success: true,
+      message: 'Payment flagged as disputed. The LUPU team will investigate.',
+      payment: { _id: payment._id, referenceId: payment.referenceId, status: payment.status }
+    })
+  } catch (err) {
+    console.error('POST /api/payments/:id/dispute error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/payments/:id/reverse
+// Admin-only: Mark a payment as reversed. Creates a correction
+// record if correctAmount is provided. Original record is NEVER
+// deleted — isReversed=true is set on the original.
+// ─────────────────────────────────────────────────────────────
+app.post('/api/payments/:id/reverse', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Invalid payment ID.' })
+    }
+
+    const original = await Payment.findById(req.params.id)
+    if (!original) return res.status(404).json({ message: 'Payment record not found.' })
+
+    if (original.isReversed) {
+      return res.status(409).json({ message: 'This payment has already been reversed.' })
+    }
+
+    const { reason, correctAmount, correctPurpose, correctNotes } = req.body
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ message: 'A reversal reason is required.' })
+    }
+
+    // Mark original as reversed (immutable — never deleted)
+    original.isReversed = true
+    original.status = 'reversed'
+    original.reversalReason = String(reason).trim().slice(0, 500)
+    original.reversedAt = new Date()
+    original.reversedBy = req.user._id
+    await original.save()
+
+    // Audit log
+    await logAdminAction(
+      { _id: req.user._id, name: req.user.name, email: req.user.email, role: req.user.role },
+      'payment_reversed',
+      { collectionName: 'payments', docId: original._id.toString(), name: original.referenceId },
+      `Payment ${original.referenceId} reversed. Reason: ${reason}`
+    )
+
+    let correctionPayment = null
+
+    // Create correction record if a new correct amount is provided
+    if (correctAmount !== undefined) {
+      const parsedCorrect = Number(correctAmount)
+      if (!isFinite(parsedCorrect) || parsedCorrect <= 0) {
+        return res.status(400).json({ message: 'correctAmount must be a positive number if provided.' })
+      }
+      const VALID_PURPOSES = ['advance', 'rental', 'security_deposit', 'damage', 'other']
+      const corrPurpose = correctPurpose && VALID_PURPOSES.includes(correctPurpose)
+        ? correctPurpose
+        : original.paymentPurpose
+
+      let corrRefId
+      do { corrRefId = generatePaymentRefId() } while (await Payment.exists({ referenceId: corrRefId }))
+
+      correctionPayment = await Payment.create({
+        bookingId: original.bookingId,
+        vehicleId: original.vehicleId,
+        renterId: original.renterId,
+        ownerId: original.ownerId,
+        amount: parsedCorrect,
+        currency: 'INR',
+        paymentMethod: 'cash',
+        paymentPurpose: corrPurpose,
+        status: 'recorded',
+        referenceId: corrRefId,
+        recordedBy: req.user._id,
+        recordedByName: `Admin (correction of ${original.referenceId})`,
+        correctionOf: original._id,
+        notes: correctNotes || `Correction of ${original.referenceId}. Reason: ${reason}`,
+        platformFee: 0,
+        ownerPayoutAmount: parsedCorrect,
+        payoutStatus: 'unsettled',
+      })
+    }
+
+    // Notify renter and owner
+    const notifyMsg = `Payment ${original.referenceId} (₹${original.amount}) has been reversed by LUPU admin. Reason: ${reason}`
+    await sendNotification(original.renterId, {
+      type: 'payment',
+      title: `Payment Reversed — ${original.referenceId}`,
+      message: notifyMsg,
+      bookingId: original.bookingId,
+      link: '/my-bookings',
+    })
+    await sendNotification(original.ownerId, {
+      type: 'payment',
+      title: `Payment Reversed — ${original.referenceId}`,
+      message: notifyMsg,
+      bookingId: original.bookingId,
+      link: '/dashboard',
+    })
+
+    res.json({
+      success: true,
+      message: `Payment ${original.referenceId} reversed successfully.`,
+      reversedPayment: { _id: original._id, referenceId: original.referenceId, status: original.status },
+      correctionPayment: correctionPayment ? {
+        _id: correctionPayment._id,
+        referenceId: correctionPayment.referenceId,
+        amount: correctionPayment.amount,
+        status: correctionPayment.status,
+      } : null,
+    })
+  } catch (err) {
+    console.error('POST /api/payments/:id/reverse error:', err)
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Reference ID collision. Please try again.' })
+    }
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/payments/records — legacy endpoint kept for backward compat
+// Now creates a pending record (used by old mobile code if any)
+// ─────────────────────────────────────────────────────────────
 app.post('/api/payments/records', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
     const { bookingId, rentalAmount, securityDeposit } = req.body
-    if (!bookingId) {
-      return res.status(400).json({ message: 'bookingId is required' })
-    }
+    if (!bookingId) return res.status(400).json({ message: 'bookingId is required' })
 
     const booking = await Booking.findById(bookingId)
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' })
-    }
+    if (!booking) return res.status(404).json({ message: 'Booking not found' })
 
     const isRenter = (booking.userId || booking.renterId)?.toString() === req.user._id.toString()
-    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isOwner  = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdminU = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
+                     req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
 
-    if (!isRenter && !isOwner && !isAdmin) {
+    if (!isRenter && !isOwner && !isAdminU) {
       return res.status(403).json({ message: 'Forbidden: You cannot create financial records for this booking' })
     }
 
     const rentAmt = Number(rentalAmount !== undefined ? rentalAmount : (booking.rentalAmount || booking.price || 0))
-    const secDep = Number(securityDeposit !== undefined ? securityDeposit : (booking.deposit || 0))
+    const secDep  = Number(securityDeposit !== undefined ? securityDeposit : (booking.deposit || 0))
     const totalAmt = rentAmt + secDep
     const txId = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
-    // Payment record is ALWAYS created as pending — cannot be marked as paid by client
     const payment = await Payment.create({
       bookingId: booking._id,
       vehicleId: booking.vehicleId,
@@ -1796,7 +2360,7 @@ app.post('/api/payments/records', verifyFirebaseToken, requireMongoUser, async (
       ownerId: booking.ownerId,
       rentalAmount: rentAmt,
       securityDeposit: secDep,
-      platformFee: 0, // Commission = 0 for now
+      platformFee: 0,
       ownerPayoutAmount: rentAmt,
       amount: totalAmt,
       currency: 'INR',
@@ -1812,209 +2376,52 @@ app.post('/api/payments/records', verifyFirebaseToken, requireMongoUser, async (
   }
 })
 
-// Renter marks offline payment as done
-app.post('/api/payments/mark-paid', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  try {
-    const { bookingId } = req.body
-    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Valid bookingId is required' })
-    }
-
-    const booking = await Booking.findById(bookingId)
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' })
-    }
-
-    // Security Check: Customer can ONLY mark their own booking as payment done
-    const isRenter = (booking.renterId || booking.userId)?.toString() === req.user._id.toString()
-    if (!isRenter) {
-      return res.status(403).json({ message: 'Forbidden: You can only mark payment for your own booking.' })
-    }
-
-    // Validation: Booking must not be rejected or cancelled
-    const bStatus = (booking.status || '').toLowerCase().trim()
-    if (['rejected', 'cancelled'].includes(bStatus)) {
-      return res.status(400).json({ message: `Cannot mark payment for a ${bStatus} booking.` })
-    }
-
-    // Validation: Payment cannot already be paid
-    const currentPayStatus = (booking.paymentStatus || '').toLowerCase().trim()
-    if (currentPayStatus === 'paid') {
-      return res.status(400).json({ message: 'Payment has already been confirmed as received.' })
-    }
-
-    booking.paymentStatus = 'customer_marked_paid'
-    booking.paymentMethod = 'offline'
-    await booking.save()
-
-    // Upsert financial payment record
-    let payment = await Payment.findOne({ bookingId: booking._id })
-    if (payment) {
-      payment.status = 'customer_marked_paid'
-      payment.paymentMethod = 'offline'
-      await payment.save()
-    } else {
-      const rentAmt = booking.rentalAmount || booking.price || 0
-      const secDep = booking.deposit || 0
-      payment = await Payment.create({
-        bookingId: booking._id,
-        vehicleId: booking.vehicleId,
-        renterId: booking.renterId || booking.userId,
-        ownerId: booking.ownerId,
-        rentalAmount: rentAmt,
-        securityDeposit: secDep,
-        platformFee: 0,
-        ownerPayoutAmount: rentAmt,
-        amount: rentAmt + secDep,
-        currency: 'INR',
-        status: 'customer_marked_paid',
-        paymentMethod: 'offline',
-        transactionId: `tx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        payoutStatus: 'unsettled'
-      })
-    }
-
-    // Notification requirement:
-    // When renter marks payment done: Notify owner: "[Renter name] has marked the payment as done. Please confirm receipt."
-    const renterName = req.user.name || booking.renterName || 'Renter'
-    await sendNotification(booking.ownerId, {
-      type: 'payment',
-      title: 'Payment Marked Done 💳',
-      message: `${renterName} has marked the payment as done. Please confirm receipt.`,
-      bookingId: booking._id,
-      vehicleId: booking.vehicleId,
-      link: '/dashboard'
-    })
-
-    return res.status(200).json({
-      success: true,
-      message: 'Payment marked as done. Waiting for owner confirmation.',
-      booking
-    })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// Owner confirms offline payment received
-app.post('/api/payments/confirm-received', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
-  try {
-    const { bookingId } = req.body
-    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
-      return res.status(400).json({ message: 'Valid bookingId is required' })
-    }
-
-    const booking = await Booking.findById(bookingId)
-    if (!booking) {
-      return res.status(404).json({ message: 'Booking not found' })
-    }
-
-    // Security Check: Owner can ONLY confirm payment for a booking belonging to their own vehicle
-    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
-    if (!isOwner) {
-      return res.status(403).json({ message: 'Forbidden: You can only confirm payment for your own vehicle bookings.' })
-    }
-
-    // Validation: Booking must be in customer_marked_paid status (cannot skip or confirm if pending)
-    const currentPayStatus = (booking.paymentStatus || '').toLowerCase().trim()
-    if (currentPayStatus !== 'customer_marked_paid') {
-      if (currentPayStatus === 'paid') {
-        return res.status(400).json({ message: 'Payment has already been confirmed as received.' })
-      }
-      return res.status(400).json({ message: 'Renter has not marked the payment as done yet.' })
-    }
-
-    // Validation: Booking must not be rejected or cancelled
-    const bStatus = (booking.status || '').toLowerCase().trim()
-    if (['rejected', 'cancelled'].includes(bStatus)) {
-      return res.status(400).json({ message: `Cannot confirm payment for a ${bStatus} booking.` })
-    }
-
-    booking.paymentStatus = 'paid'
-    booking.paymentMethod = 'offline'
-    await booking.save()
-
-    // Upsert financial payment record
-    let payment = await Payment.findOne({ bookingId: booking._id })
-    if (payment) {
-      payment.status = 'paid'
-      payment.paymentMethod = 'offline'
-      await payment.save()
-    } else {
-      const rentAmt = booking.rentalAmount || booking.price || 0
-      const secDep = booking.deposit || 0
-      payment = await Payment.create({
-        bookingId: booking._id,
-        vehicleId: booking.vehicleId,
-        renterId: booking.renterId || booking.userId,
-        ownerId: booking.ownerId,
-        rentalAmount: rentAmt,
-        securityDeposit: secDep,
-        platformFee: 0,
-        ownerPayoutAmount: rentAmt,
-        amount: rentAmt + secDep,
-        currency: 'INR',
-        status: 'paid',
-        paymentMethod: 'offline',
-        transactionId: `tx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        payoutStatus: 'unsettled'
-      })
-    }
-
-    // Notification requirement:
-    // When owner confirms: Notify renter: "Payment received has been confirmed by the owner."
-    await sendNotification(booking.renterId || booking.userId, {
-      type: 'payment',
-      title: 'Payment Confirmed ✅',
-      message: 'Payment received has been confirmed by the owner.',
-      bookingId: booking._id,
-      vehicleId: booking.vehicleId,
-      link: '/my-bookings'
-    })
-
-    return res.status(200).json({
-      success: true,
-      message: 'Payment Received',
-      booking
-    })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// Booking payments inquiry
+// ─────────────────────────────────────────────────────────────
+// GET /api/payments/booking/:bookingId
+// Returns all payment records for a booking.
+// Visible to: renter, owner, or admin.
+// ─────────────────────────────────────────────────────────────
 app.get('/api/payments/booking/:bookingId', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const booking = await Booking.findById(req.params.bookingId)
+    if (!mongoose.Types.ObjectId.isValid(req.params.bookingId)) {
+      return res.status(400).json({ message: 'Invalid booking ID.' })
+    }
+    const booking = await Booking.findById(req.params.bookingId).lean()
     if (!booking) return res.status(404).json({ message: 'Booking not found' })
 
     const isRenter = (booking.userId || booking.renterId)?.toString() === req.user._id.toString()
-    const isOwner = booking.ownerId?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isOwner  = booking.ownerId?.toString() === req.user._id.toString()
+    const isAdmin  = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
+                     req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
 
     if (!isRenter && !isOwner && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: You cannot access payment details for this booking' })
     }
 
-    const payments = await Payment.find({ bookingId: req.params.bookingId }).sort({ createdAt: -1 }).lean()
-    res.json({ success: true, payments })
+    const payments = await Payment.find({ bookingId: req.params.bookingId })
+      .sort({ createdAt: 1 })  // chronological order (oldest first for timeline)
+      .lean()
+
+    res.json({
+      success: true,
+      payments,
+      disclaimer: 'All payments are direct cash transactions between the renter and vehicle owner. LUPU does not receive, hold, or process any payments.',
+    })
   } catch (err) {
     next(err)
   }
 })
 
-// Payment history (Caller's transactions or all if admin)
+// ─────────────────────────────────────────────────────────────
+// GET /api/payments/history
+// Returns payment history for the authenticated user (or all if admin)
+// ─────────────────────────────────────────────────────────────
 app.get('/api/payments/history', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
-    let query = {}
-    if (!isAdmin) {
-      query = {
-        $or: [
-          { renterId: req.user._id },
-          { ownerId: req.user._id }
-        ]
-      }
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
+                    req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const query = isAdmin ? {} : {
+      $or: [{ renterId: req.user._id }, { ownerId: req.user._id }]
     }
     const history = await Payment.find(query)
       .sort({ createdAt: -1 })
@@ -2025,6 +2432,34 @@ app.get('/api/payments/history', verifyFirebaseToken, requireMongoUser, async (r
     next(err)
   }
 })
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/admin/payments
+// Full admin payment ledger with populated renter/owner/vehicle
+// ─────────────────────────────────────────────────────────────
+app.get('/api/admin/payments', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res, next) => {
+  try {
+    const payments = await Payment.find()
+      .sort({ createdAt: -1 })
+      .populate('renterId', 'name email')
+      .populate('ownerId', 'name email')
+      .populate('vehicleId', 'name brand model')
+      .populate('bookingId', 'status startTime endTime vehicleName')
+      .populate('recordedBy', 'name email')
+      .populate('disputedBy', 'name email')
+      .populate('reversedBy', 'name email')
+      .lean()
+
+    res.json({ success: true, payments })
+  } catch (err) {
+    next(err)
+  }
+})
+// ─────────────────────────────────────────────────────────────
+// Admin Financial Endpoints
+// ─────────────────────────────────────────────────────────────
+
+
 
 // ── Admin Financial Endpoints ───────────────────────────────
 
