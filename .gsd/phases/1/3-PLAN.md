@@ -7,7 +7,7 @@ wave: 3
 # Plan 1.3: Privacy Filter and Multer Migration Plan
 
 ## Objective
-Strip sensitive owner/renter contact information from default API GET responses, and prepare a detailed plan to migrate remaining backend Multer uploads to Firebase Storage in a future phase.
+Enforce strict privacy rules on owner phone numbers and vehicle documents based on booking status, and prepare documentation for migrating backend Multer uploads to Firebase Storage without executing the migration yet.
 
 ## Context
 - .gsd/SPEC.md
@@ -16,29 +16,37 @@ Strip sensitive owner/renter contact information from default API GET responses,
 ## Tasks
 
 <task type="auto">
-  <name>Apply Privacy Filter on API Responses</name>
+  <name>Enforce Context-Aware Privacy Filter</name>
   <files>backend/server.js</files>
   <action>
-    - Audit the `/api/vehicles` (GET list and GET single) and `/api/bookings` responses.
-    - Remove `ownerName`, `ownerPhone`, and `documents` fields from the standard response payloads for unauthenticated or non-involved users.
-    - Ensure contact information is *only* revealed when explicitly permitted (e.g., to the confirmed renter or the owner themselves).
+    - Audit vehicle and booking GET responses.
+    - Protect `ownerPhone` and sensitive vehicle documents (RC, Insurance, PUC) from public/default responses.
+    - Do NOT blindly remove `ownerName`.
+    - Do NOT replace existing authorization/enrichment logic with a generic filter that breaks the accepted-booking contact workflow.
+    - Enforce the following visibility rules:
+      - Pending/Unaccepted Booking: renter must NOT receive owner phone.
+      - Rejected/Cancelled Booking: renter must NOT receive owner phone.
+      - Accepted/Authorized Booking: permitted renter may receive owner phone.
+      - Owners may access their own relevant contact information.
+      - Unrelated users must not access another user's contact information.
+    - Do NOT delete documents from MongoDB or storage.
   </action>
-  <verify>grep -n "ownerPhone" backend/server.js</verify>
-  <done>Sensitive contact information is no longer leaked in public API responses.</done>
+  <verify>npm run build --prefix backend || true</verify>
+  <done>Privacy rules are strictly enforced without breaking valid contact workflows.</done>
 </task>
 
 <task type="auto">
-  <name>Prepare Multer Migration Plan</name>
+  <name>Document Multer Migration Strategy</name>
   <files>.gsd/phases/1/MULTER_MIGRATION_PLAN.md</files>
   <action>
-    - Write a detailed document mapping out the required changes in frontend forms (`OwnerDashboard.jsx`, etc.) to migrate RC, Insurance, PUC, and Avatar uploads directly to Firebase Storage.
-    - Identify backend routes to eventually remove/deprecate.
-    - Do NOT execute the migration; just document the plan for Phase 2/3.
+    - Write a detailed document mapping out the required changes in frontend forms to migrate RC, Insurance, PUC, and Avatar uploads directly to Firebase Storage.
+    - Keep this as documentation only in Phase 1. Do NOT remove Multer or its backend routes yet.
   </action>
-  <verify>cat .gsd/phases/1/MULTER_MIGRATION_PLAN.md | grep "Migration Plan"</verify>
-  <done>MULTER_MIGRATION_PLAN.md exists and contains the migration strategy.</done>
+  <verify>test -f .gsd/phases/1/MULTER_MIGRATION_PLAN.md</verify>
+  <done>MULTER_MIGRATION_PLAN.md exists and outlines the future migration.</done>
 </task>
 
 ## Success Criteria
-- [ ] Public API requests for vehicles do not expose `ownerPhone` or `documents`.
-- [ ] Multer migration plan is fully documented and ready for a later phase.
+- [ ] `ownerPhone` is hidden in pending/rejected states and revealed in accepted states.
+- [ ] RC, Insurance, and PUC are never exposed in public vehicle APIs.
+- [ ] Multer logic remains fully intact for current workflows.

@@ -7,39 +7,48 @@ wave: 2
 # Plan 1.2: API Security and Authorization Lock Down
 
 ## Objective
-Audit and secure the `server.js` monolith to ensure all endpoints have appropriate authentication and authorization middleware properly applied, preventing unauthenticated access to sensitive data and mutating actions.
+Audit and secure the `server.js` monolith to ensure all endpoints have appropriate authentication and authorization middleware properly applied.
 
 ## Context
 - .gsd/SPEC.md
 - backend/server.js
 - backend/middleware/authMiddleware.js
+- backend/test-api.js
 
 ## Tasks
 
 <task type="auto">
-  <name>Security Audit of API Endpoints</name>
+  <name>Explicit Security Audit of API Endpoints</name>
   <files>backend/server.js</files>
   <action>
-    - Review all `app.post`, `app.put`, `app.delete`, and sensitive `app.get` routes in `server.js`.
-    - Ensure `verifyFirebaseToken` and `requireMongoUser` are applied to all routes that require a logged-in user.
-    - Ensure `authorize(...)` is properly applied to admin/owner specific routes.
-    - Classify routes explicitly and do NOT blindly protect public endpoints (like `/api/vehicles` GET without specific constraints).
+    - Inspect each backend route individually and classify it (public, authenticated, owner-only, renter-only, admin-only, or other explicit access).
+    - Ensure `verifyFirebaseToken`, `requireMongoUser`, and `authorize(...)` are applied appropriately to the sensitive routes based on the classification.
+    - Do not blindly add authentication to legitimate public endpoints (such as public vehicle browsing).
+    - Verify the actual middleware chain for every sensitive route to ensure there are no bypasses.
+    - Do not change working behavior unnecessarily.
   </action>
-  <verify>grep -n "app\.post\|app\.put\|app\.delete" backend/server.js | grep -v verifyFirebaseToken</verify>
-  <done>All mutating endpoints properly enforce authentication.</done>
+  <verify>node backend/test-api.js || true</verify>
+  <done>All endpoints are correctly classified and secured based on role requirements.</done>
 </task>
 
 <task type="auto">
-  <name>Test Backend Security Changes</name>
-  <files>backend/server.js</files>
+  <name>Test Backend Security Constraints</name>
+  <files>
+    backend/server.js
+    backend/test-api.js
+  </files>
   <action>
-    - Add tests (or use existing test scripts like `test-vehicle-post.js`) to verify that unauthenticated requests fail with 401.
-    - Ensure valid token requests still succeed.
+    - Ensure tests (or create new ones) verify the security matrix for changed protected routes:
+      1. Unauthenticated request (should fail).
+      2. Authenticated unauthorized user (should fail).
+      3. Authorized user (should succeed).
+      4. Correct owner/admin access where applicable.
   </action>
   <verify>node backend/test-api.js || true</verify>
-  <done>Security changes are verified not to break core authenticated functionalities.</done>
+  <done>Security matrix is empirically verified.</done>
 </task>
 
 ## Success Criteria
-- [ ] No unprotected state-changing routes remain in `server.js`.
-- [ ] Valid authenticated API requests still function correctly.
+- [ ] Sensitive routes properly reject unauthenticated and unauthorized requests.
+- [ ] Public routes remain accessible without authentication.
+- [ ] Existing frontend functionalities (like viewing vehicles) continue to work flawlessly.
