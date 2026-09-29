@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { FiSearch, FiAlertTriangle, FiCheckCircle, FiFileText, FiXCircle } from 'react-icons/fi'
 import useAuthStore from '../../store/authStore'
-import { ADMIN_ROLES } from '../../lib/roleUtils'
+import { ADMIN_ROLES, isSuperAdmin } from '../../lib/roleUtils'
 import toast from 'react-hot-toast'
 import { adminSafetyAPI, userAPI } from '../../api/endpoints'
 import axiosInstance from '../../api/axiosInstance'
@@ -43,6 +43,10 @@ export default function UsersView() {
   )
 
   const handleRoleChange = async (userId, newRole) => {
+    if (!isSuperAdmin(currentAdmin)) {
+      toast.error('Only Super Admins and Founders can change user roles.')
+      return
+    }
     try {
       await userAPI.updateRole(userId, newRole)
       toast.success(`Role updated to ${newRole}`)
@@ -156,21 +160,31 @@ export default function UsersView() {
                         </div>
                       </td>
                       <td className="p-4">
-                        <select
-                          value={u?.role || 'user'}
-                          onChange={(e) => handleRoleChange(u?._id, e.target.value)}
-                          className={`px-2 py-1 rounded text-[10px] font-bold border cursor-pointer outline-none ${
+                        {isSuperAdmin(currentAdmin) ? (
+                          <select
+                            value={u?.role || 'user'}
+                            onChange={(e) => handleRoleChange(u?._id, e.target.value)}
+                            className={`px-2 py-1 rounded text-[10px] font-bold border cursor-pointer outline-none ${
+                              ADMIN_ROLES.includes(u?.role)
+                                ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                                : 'bg-blue-500/10 text-blue-400 border-white/10'
+                            }`}
+                          >
+                            <option value="user" className="bg-[#12141A] text-white">User</option>
+                            <option value="owner" className="bg-[#12141A] text-white">Owner</option>
+                            <option value="admin" className="bg-[#12141A] text-white">Admin</option>
+                            <option value="super_admin" className="bg-[#12141A] text-white">Super Admin</option>
+                            <option value="founder" className="bg-[#12141A] text-white">Founder</option>
+                          </select>
+                        ) : (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                             ADMIN_ROLES.includes(u?.role)
-                              ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
-                              : 'bg-blue-500/10 text-blue-400 border-white/10'
-                          }`}
-                        >
-                          <option value="user" className="bg-[#12141A] text-white">User</option>
-                          <option value="owner" className="bg-[#12141A] text-white">Owner</option>
-                          <option value="admin" className="bg-[#12141A] text-white">Admin</option>
-                          <option value="super_admin" className="bg-[#12141A] text-white">Super Admin</option>
-                          <option value="founder" className="bg-[#12141A] text-white">Founder</option>
-                        </select>
+                              ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                              : 'bg-blue-500/10 text-blue-400'
+                          }`}>
+                            {u?.role || 'user'}
+                          </span>
+                        )}
                       </td>
                       <td className="p-4">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${

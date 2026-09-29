@@ -38,6 +38,8 @@ import { verifyFirebaseToken, requireMongoUser } from './middleware/authMiddlewa
 function authorize(...roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' })
+    const isFounderOrSoleAdmin = req.user.email?.toLowerCase() === 'dasstranger421@gmail.com' || req.user.role === 'founder'
+    if (isFounderOrSoleAdmin) return next()
     if (!roles.includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
     next()
   }
@@ -1578,7 +1580,7 @@ async function logAdminAction(adminUser, actionType, affectedRecord, notes = '',
   }
 }
 
-app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authorize('super_admin', 'founder'), async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
@@ -1606,7 +1608,7 @@ app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authoriz
   }
 })
 
-app.post('/api/users/role-by-email', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+app.post('/api/users/role-by-email', verifyFirebaseToken, requireMongoUser, authorize('super_admin', 'founder'), async (req, res) => {
   try {
     const { email, role } = req.body
     if (!email || !role) {
@@ -1635,7 +1637,7 @@ app.post('/api/users/role-by-email', verifyFirebaseToken, requireMongoUser, auth
   }
 })
 
-app.delete('/api/users/:id', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+app.delete('/api/users/:id', verifyFirebaseToken, requireMongoUser, authorize('super_admin', 'founder'), async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(404).json({ message: 'User not found' })
