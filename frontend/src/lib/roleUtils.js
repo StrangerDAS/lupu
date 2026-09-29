@@ -28,7 +28,7 @@ export const isFounder     = (user) => ['founder', 'admin'].includes(user?.role)
 export const isSuperAdmin  = (user) => ['founder', 'super_admin', 'admin'].includes(user?.role) || user?.email?.toLowerCase() === 'dasstranger421@gmail.com'
 
 /** Returns true if the user holds any administrative role */
-export const isAdmin       = (user) => (['admin', 'super_admin', 'founder'].includes(user?.role) && user?.email?.toLowerCase() === 'dasstranger421@gmail.com')
+export const isAdmin       = (user) => ['admin', 'super_admin', 'founder'].includes(user?.role)
 
 /** Returns true if user's role is in the supplied list */
 export const hasRole       = (user, roles = []) => {

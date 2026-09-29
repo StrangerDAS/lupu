@@ -26,9 +26,8 @@ export default function AdminRoute() {
     return <Navigate to="/auth/login" state={{ from: location }} replace />
   }
 
-  // Admin role check — ONLY dasstranger421@gmail.com with admin role
-  const isSoleAdmin = user.email?.toLowerCase() === 'dasstranger421@gmail.com' && ADMIN_ROLES.includes(user.role)
-  if (isSoleAdmin) {
+  // Admin role check — any role in ADMIN_ROLES (founder, super_admin, admin)
+  if (ADMIN_ROLES.includes(user.role)) {
     return <Outlet />
   }
 

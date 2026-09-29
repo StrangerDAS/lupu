@@ -63,18 +63,11 @@ export const verifyFirebaseToken = async (req, res, next) => {
     
     if (user) {
       const isSoleAdmin = user.email?.toLowerCase() === 'dasstranger421@gmail.com'
-      if (isSoleAdmin) {
-        if (user.role !== 'admin') {
-          user.role = 'admin'
-          user.isOwner = true
-          user.isRider = true
-          await user.save()
-        }
-      } else {
-        if (['admin', 'super_admin', 'founder'].includes(user.role)) {
-          user.role = user.isOwner ? 'owner' : 'user'
-          await user.save()
-        }
+      if (isSoleAdmin && user.role !== 'admin') {
+        user.role = 'admin'
+        user.isOwner = true
+        user.isRider = true
+        await user.save()
       }
       req.user = user
     }

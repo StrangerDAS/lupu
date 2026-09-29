@@ -39,16 +39,6 @@ function authorize(...roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' })
     if (!roles.includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' })
-    
-    // Strict Admin Constraint: If caller has admin role or endpoint is admin-exclusive, enforce sole admin identity
-    const isAdminRole = ['admin', 'super_admin', 'founder'].includes(req.user.role)
-    const requiresAdminOnly = roles.every(r => ['admin', 'super_admin', 'founder'].includes(r))
-    
-    if (isAdminRole || requiresAdminOnly) {
-      if (req.user.email?.toLowerCase() !== 'dasstranger421@gmail.com' || req.user.role !== 'admin') {
-        return res.status(403).json({ message: 'Forbidden: Admin access strictly restricted to platform administrator' })
-      }
-    }
     next()
   }
 }
@@ -1597,12 +1587,6 @@ app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authoriz
     if (!targetUser) return res.status(404).json({ message: 'User not found' })
 
     const newRole = req.body.role
-    // Enforce Admin Invariant: NO other email can be promoted to admin/super_admin/founder
-    if (['admin', 'super_admin', 'founder'].includes(newRole)) {
-      if (targetUser.email?.toLowerCase() !== 'dasstranger421@gmail.com') {
-        return res.status(403).json({ message: 'Forbidden: Cannot promote user to admin. Admin privileges are strictly restricted.' })
-      }
-    }
 
     targetUser.role = newRole
     if (newRole === 'owner') targetUser.isOwner = true
@@ -2212,8 +2196,7 @@ app.post('/api/payments/:id/dispute', verifyFirebaseToken, requireMongoUser, asy
 
     // Only renter or admin can dispute
     const isRenter = payment.renterId?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
-                    req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
 
     if (!isRenter && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: Only the renter or admin can dispute a payment.' })
@@ -2399,8 +2382,7 @@ app.post('/api/payments/records', verifyFirebaseToken, requireMongoUser, async (
 
     const isRenter = (booking.userId || booking.renterId)?.toString() === req.user._id.toString()
     const isOwner  = booking.ownerId?.toString() === req.user._id.toString()
-    const isAdminU = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
-                     req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdminU = ['admin', 'super_admin', 'founder'].includes(req.user.role)
 
     if (!isRenter && !isOwner && !isAdminU) {
       return res.status(403).json({ message: 'Forbidden: You cannot create financial records for this booking' })
@@ -2449,8 +2431,7 @@ app.get('/api/payments/booking/:bookingId', verifyFirebaseToken, requireMongoUse
 
     const isRenter = (booking.userId || booking.renterId)?.toString() === req.user._id.toString()
     const isOwner  = booking.ownerId?.toString() === req.user._id.toString()
-    const isAdmin  = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
-                     req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin  = ['admin', 'super_admin', 'founder'].includes(req.user.role)
 
     if (!isRenter && !isOwner && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: You cannot access payment details for this booking' })
@@ -2476,8 +2457,7 @@ app.get('/api/payments/booking/:bookingId', verifyFirebaseToken, requireMongoUse
 // ─────────────────────────────────────────────────────────────
 app.get('/api/payments/history', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
   try {
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) &&
-                    req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
     const query = isAdmin ? {} : {
       $or: [{ renterId: req.user._id }, { ownerId: req.user._id }]
     }
@@ -3075,7 +3055,7 @@ app.delete('/api/reviews/:id', verifyFirebaseToken, requireMongoUser, async (req
     if (!review) return res.status(404).json({ message: 'Review not found' })
 
     const isAuthor = review.reviewerId?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
 
     if (!isAuthor && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: You cannot delete another user\'s review' })
@@ -3178,7 +3158,7 @@ app.get('/api/safety/reports/:id', verifyFirebaseToken, requireMongoUser, async 
     if (!report) return res.status(404).json({ message: 'Report not found' })
 
     const isCreator = report.reporterId?._id?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
     if (!isCreator && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: You cannot access another user\'s report' })
     }
@@ -3255,7 +3235,7 @@ app.get('/api/safety/disputes/:id', verifyFirebaseToken, requireMongoUser, async
     if (!dispute) return res.status(404).json({ message: 'Dispute not found' })
 
     const isCreator = dispute.raisedBy?._id?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
     if (!isCreator && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: You cannot access another user\'s dispute' })
     }
@@ -3281,7 +3261,7 @@ app.post('/api/safety/disputes/:id/messages', verifyFirebaseToken, requireMongoU
     if (!dispute) return res.status(404).json({ message: 'Dispute not found' })
 
     const isCreator = dispute.raisedBy?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
     if (!isCreator && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden' })
     }
@@ -3416,7 +3396,7 @@ app.get('/api/support/tickets/:id', verifyFirebaseToken, requireMongoUser, async
     if (!ticket) return res.status(404).json({ message: 'Ticket not found' })
 
     const isCreator = ticket.userId?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
     if (!isCreator && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden: You cannot access another user\'s support ticket' })
     }
@@ -3440,7 +3420,7 @@ app.post('/api/support/tickets/:id/reply', verifyFirebaseToken, requireMongoUser
     if (!ticket) return res.status(404).json({ message: 'Ticket not found' })
 
     const isCreator = ticket.userId?.toString() === req.user._id.toString()
-    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role) && req.user.email?.toLowerCase() === 'dasstranger421@gmail.com'
+    const isAdmin = ['admin', 'super_admin', 'founder'].includes(req.user.role)
     if (!isCreator && !isAdmin) {
       return res.status(403).json({ message: 'Forbidden' })
     }

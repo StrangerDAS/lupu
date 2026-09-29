@@ -57,7 +57,7 @@ export default function Login() {
       setAuth(data.user, userCredential.user)
       
       toast.success("Welcome back!")
-      if (data.user?.role === 'admin' || data.user?.email === 'dasstranger421@gmail.com') {
+      if (['admin', 'super_admin', 'founder'].includes(data.user?.role) || data.user?.email === 'dasstranger421@gmail.com') {
         navigate('/admin')
       } else {
         navigate('/explore')
@@ -83,7 +83,7 @@ export default function Login() {
       setAuth(data.user, userCredential.user)
       
       toast.success("Welcome back!")
-      if (data.user?.role === 'admin' || data.user?.email === 'dasstranger421@gmail.com') {
+      if (['admin', 'super_admin', 'founder'].includes(data.user?.role) || data.user?.email === 'dasstranger421@gmail.com') {
         navigate('/admin')
       } else {
         navigate('/explore')
