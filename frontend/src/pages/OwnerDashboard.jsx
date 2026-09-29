@@ -360,7 +360,7 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
               <FiUser /> Owner Contact Information (Confidential)
             </div>
             <p className="text-[11px] text-white/50 leading-relaxed">
-              Confirm your real full name and active 10-digit mobile number. This information is confidential and is only revealed to renters after you accept their booking.
+              Confirm your real full name and a valid 10-digit Indian mobile number starting with 6–9. This information is confidential and is only revealed to renters after you accept their booking.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>

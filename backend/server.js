@@ -127,14 +127,9 @@ function validateIndianPhoneNumber(input) {
   const raw = input.trim().replace(/[\s\-\(\)]/g, '')
   const match = raw.match(/^(?:\+?91|0)?([6-9]\d{9})$/)
   if (!match) {
-    return { valid: false, message: 'Please enter a valid 10-digit Indian phone number (starting with 6, 7, 8, or 9).' }
+    return { valid: false, message: 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.' }
   }
   const digits = match[1]
-  const isRepeating = /^(\d)\1{9}$/.test(digits)
-  const isSequential = ['0123456789', '1234567890', '9876543210'].includes(digits)
-  if (isRepeating || isSequential) {
-    return { valid: false, message: 'Please enter a valid, active phone number (dummy sequences are not allowed).' }
-  }
   return { valid: true, cleanDigits: digits, formatted: `+91${digits}` }
 }
 

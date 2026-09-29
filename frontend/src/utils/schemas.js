@@ -30,11 +30,16 @@ export const vehicleSchema = z.object({
   transmission: z.enum(['Manual', 'Automatic']).optional(),
   helmetAvailable: z.boolean().optional(),
   ownerName: z.string().min(2, "Owner's full name is required (min 2 characters)"),
-  ownerPhone: z.string().min(10, 'Valid 10-digit Indian phone number is required')
+  ownerPhone: z.string().min(1, 'Valid 10-digit Indian phone number is required')
     .refine((val) => {
-      const clean = (val || '').replace(/[\s\-\(\)\+]/g, '').replace(/^91/, '')
-      return /^[6-9]\d{9}$/.test(clean) && !/^(\d)\1{9}$/.test(clean) && !['0123456789', '1234567890', '9876543210'].includes(clean)
-    }, { message: 'Enter a valid, active 10-digit Indian mobile number (starting with 6-9)' }),
+      // Strip common formatting characters and optional +91 / 91 country-code prefix.
+      // IMPORTANT: Only strip the '91' prefix when the total digit count is > 10
+      // (i.e., the input is in +91XXXXXXXXXX / 91XXXXXXXXXX format).
+      // Stripping it unconditionally would corrupt numbers like 9101097945.
+      const stripped = (val || '').replace(/[\s\-\(\)\+]/g, '')
+      const clean = stripped.length > 10 ? stripped.replace(/^91/, '') : stripped
+      return /^[6-9]\d{9}$/.test(clean)
+    }, { message: 'Enter a valid 10-digit Indian mobile number starting with 6-9.' }),
 })
 
 export const addVehicleSchema = vehicleSchema
