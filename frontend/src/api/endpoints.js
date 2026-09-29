@@ -40,6 +40,7 @@ export const userAPI = {
   updateProfile: (data) => api.put('/users/profile', data),
   getAll: () => api.get('/users'),            // admin
   updateRole: (id, role) => api.patch(`/users/${id}/role`, { role }),
+  updateRoleByEmail: (email, role) => api.post('/users/role-by-email', { email, role }),
   deleteUser: (id) => api.delete(`/users/${id}`),
   submitKyc: (data) => {
     if (data instanceof FormData) {

@@ -1606,6 +1606,35 @@ app.patch('/api/users/:id/role', verifyFirebaseToken, requireMongoUser, authoriz
   }
 })
 
+app.post('/api/users/role-by-email', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+  try {
+    const { email, role } = req.body
+    if (!email || !role) {
+      return res.status(400).json({ message: 'Email and role are required' })
+    }
+    const emailRegex = new RegExp(`^${email.trim().replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\\\$&')}$`, 'i')
+    const targetUser = await User.findOne({ email: emailRegex })
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User not found with this email in database' })
+    }
+    targetUser.role = role
+    if (role === 'owner') targetUser.isOwner = true
+    await targetUser.save()
+
+    await logAdminAction(
+      req.user,
+      'update_role',
+      { collectionName: 'users', docId: targetUser._id.toString(), name: targetUser.name },
+      `Changed role to ${role} for ${email}`
+    )
+
+    res.json({ success: true, user: safeUser(targetUser.toObject()) })
+  } catch (err) {
+    console.error('POST /api/users/role-by-email error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
 app.delete('/api/users/:id', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {

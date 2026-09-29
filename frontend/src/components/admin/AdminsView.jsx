@@ -4,6 +4,7 @@ import { FiUserPlus, FiTrash2, FiShield } from 'react-icons/fi'
 import { addAdminAccount, deleteAdminAccount, subscribeToAdmins } from '../../firebase/firestoreService'
 import useAuthStore from '../../store/authStore'
 import { isSuperAdmin } from '../../lib/roleUtils'
+import { userAPI } from '../../api/endpoints'
 import toast from 'react-hot-toast'
 
 export default function AdminsView() {
@@ -27,7 +28,14 @@ export default function AdminsView() {
       return
     }
     try {
-      await addAdminAccount(email, name, role, user._id, user.name)
+      // 1. Sync Firestore
+      await addAdminAccount(email.trim(), name.trim(), role, user._id, user.name)
+      // 2. Sync MongoDB database
+      try {
+        await userAPI.updateRoleByEmail(email.trim(), role)
+      } catch (dbErr) {
+        console.warn('MongoDB role sync note:', dbErr?.response?.data?.message || dbErr.message)
+      }
       toast.success('Admin added successfully!')
       setName('')
       setEmail('')
@@ -37,10 +45,19 @@ export default function AdminsView() {
     }
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to remove administrative access for this user?')) return
+  const handleDelete = async (adminItem) => {
+    if (!confirm(`Are you sure you want to remove administrative access for ${adminItem?.name || adminItem?.email}?`)) return
     try {
-      await deleteAdminAccount(id, user._id, user.name)
+      // 1. Remove from Firestore
+      await deleteAdminAccount(adminItem._id, user._id, user.name)
+      // 2. Demote in MongoDB
+      if (adminItem?.email) {
+        try {
+          await userAPI.updateRoleByEmail(adminItem.email, 'user')
+        } catch (dbErr) {
+          console.warn('MongoDB role demote note:', dbErr?.response?.data?.message || dbErr.message)
+        }
+      }
       toast.success('Admin access revoked.')
     } catch (err) {
       toast.error('Failed to revoke access: ' + err.message)
@@ -141,7 +158,7 @@ export default function AdminsView() {
                     <td className="p-4 text-right">
                       {a?.email !== user?.email && (
                         <button
-                          onClick={() => handleDelete(a?._id)}
+                          onClick={() => handleDelete(a)}
                           className="p-1.5 bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white rounded-lg transition"
                           title="Revoke Admin Access"
                         >
