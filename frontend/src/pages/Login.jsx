@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiMail, FiLoader, FiLock } from 'react-icons/fi'
+import { FiMail, FiLoader, FiLock, FiEye, FiEyeOff } from 'react-icons/fi'
 import { FcGoogle } from 'react-icons/fc'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
@@ -16,6 +16,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [unverifiedUser, setUnverifiedUser] = useState(null)
   
   const handleResendVerification = async () => {
@@ -125,13 +126,22 @@ export default function Login() {
               <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-white/30" />
               <input
                 id="password"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="input-field pl-11"
+                className="input-field pl-11 pr-11"
+                autoComplete="current-password"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/5 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-brand/50"
+              >
+                {showPassword ? <FiEyeOff size={17} /> : <FiEye size={17} />}
+              </button>
             </div>
             <div className="text-right mt-1">
               <Link to="/auth/forgot-password" className="text-xs text-brand hover:underline">Forgot password?</Link>

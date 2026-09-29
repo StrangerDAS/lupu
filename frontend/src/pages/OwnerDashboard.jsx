@@ -639,10 +639,15 @@ export default function OwnerDashboard() {
 
   const [confirmingPaymentId, setConfirmingPaymentId] = useState(null)
 
-  const handleConfirmPaymentReceived = async (bookingId) => {
+  const handleConfirmPaymentReceived = async (booking) => {
+    const bookingId = booking._id || booking.bookingId;
     try {
       setConfirmingPaymentId(bookingId)
-      const { data } = await paymentAPI.confirmReceived(bookingId)
+      const { data } = await paymentAPI.recordOffline({
+        bookingId,
+        amount: booking.totalPrice || 0,
+        paymentPurpose: 'rental'
+      })
       toast.success(data.message || 'Payment Received! 🎉')
       setBookings(prev => prev.map(b => (b._id === bookingId || b.bookingId === bookingId) ? { ...b, paymentStatus: 'paid' } : b))
     } catch (err) {
@@ -1192,7 +1197,7 @@ export default function OwnerDashboard() {
                                           <FiClock /> Renter marked payment as done
                                         </span>
                                         <button
-                                          onClick={() => handleConfirmPaymentReceived(b._id || b.bookingId)}
+                                          onClick={() => handleConfirmPaymentReceived(b)}
                                           disabled={confirmingPaymentId === (b._id || b.bookingId)}
                                           className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 text-sm font-semibold transition"
                                         >
