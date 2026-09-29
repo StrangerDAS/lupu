@@ -83,6 +83,38 @@ export default function Navbar() {
 
   const dashLink = getDashboardLink()
 
+  /* ─────────────────────────────────────────────────────────
+     SHARED: Notification Bell Button
+     Rendered in BOTH desktop Actions bar and mobile header row.
+     Single source of truth — no logic duplication.
+  ────────────────────────────────────────────────────────── */
+  const NotificationBell = () => (
+    <div className="relative">
+      <button
+        onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+        aria-label="Notifications"
+        className="relative flex items-center justify-center w-11 h-11 rounded-xl text-white/60 hover:text-white hover:bg-white/5 transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-brand/50"
+      >
+        <FiBell size={18} />
+        {unreadCount > 0 && (
+          <span
+            className="absolute top-1.5 right-1.5 min-w-[16px] h-4 bg-brand text-[9px] text-white font-bold rounded-full flex items-center justify-center px-0.5 animate-bounce pointer-events-none"
+            aria-label={`${unreadCount} unread notifications`}
+          >
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
+        )}
+      </button>
+      <NotificationCenter
+        isOpen={showNotifDropdown}
+        onClose={() => setShowNotifDropdown(false)}
+        notifications={notifications}
+        userId={user?._id}
+        onRefresh={fetchNotifications}
+      />
+    </div>
+  )
+
   return (
     <motion.header
       initial={{ y: -80, opacity: 0 }}
@@ -134,27 +166,9 @@ export default function Navbar() {
                   My Bookings
                 </NavLink>
 
-{/* Notifications Bell */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowNotifDropdown(!showNotifDropdown)}
-                    className="btn-ghost p-2 text-white/60 hover:text-white relative flex items-center justify-center rounded-xl"
-                  >
-                    <FiBell size={18} />
-                    {unreadCount > 0 && (
-                      <span className="absolute top-1 right-1 w-4.5 h-4.5 bg-brand text-[10px] text-white font-bold rounded-full flex items-center justify-center animate-bounce">
-                        {unreadCount}
-                      </span>
-                    )}
-                  </button>
-                  <NotificationCenter
-                    isOpen={showNotifDropdown}
-                    onClose={() => setShowNotifDropdown(false)}
-                    notifications={notifications}
-                    userId={user?._id}
-                    onRefresh={fetchNotifications}
-                  />
-                </div>
+                {/* Notifications Bell — shared component */}
+                <NotificationBell />
+
                 {dashLink && (
                   <Link to={dashLink.to} className="btn-ghost text-sm text-white/70">
                     {dashLink.label}
@@ -188,14 +202,20 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* Mobile menu toggle */}
-          <button
-            className="md:hidden p-2 rounded-lg hover:bg-white/5 transition"
-            onClick={() => setMenuOpen(!menuOpen)}
-            aria-label="Toggle menu"
-          >
-            {menuOpen ? <HiX size={24} /> : <HiMenuAlt3 size={24} />}
-          </button>
+          {/* ── Mobile: Bell + Hamburger ──────────────────────────
+              Bell is visible on ALL screen sizes when authenticated.
+              Sits between logo and the hamburger toggle.
+          ───────────────────────────────────────────────────── */}
+          <div className="flex items-center gap-1 md:hidden">
+            {isAuthenticated() && <NotificationBell />}
+            <button
+              className="p-2 rounded-lg hover:bg-white/5 transition focus:outline-none focus:ring-2 focus:ring-brand/50"
+              onClick={() => setMenuOpen(!menuOpen)}
+              aria-label="Toggle menu"
+            >
+              {menuOpen ? <HiX size={24} /> : <HiMenuAlt3 size={24} />}
+            </button>
+          </div>
         </div>
       </div>
 
