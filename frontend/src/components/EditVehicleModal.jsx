@@ -8,6 +8,7 @@ import toast from 'react-hot-toast'
 import { editVehicleSchema } from '../utils/schemas'
 import { vehicleAPI } from '../api/endpoints'
 import { uploadVehicleImages } from '../firebase/firestoreService'
+import imageCompression from 'browser-image-compression'
 
 export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
   const { register, handleSubmit, formState: { errors } } = useForm({
@@ -77,11 +78,29 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
         formData.append('photos', img)
       })
 
-      // Upload new photo files to Firebase Storage to get permanent download URLs
+      // Compress and upload new photo files to Firebase Storage
       let uploadedNewUrls = []
       if (newFiles.length > 0) {
+        toast.loading('Compressing new photos...', { id: toastId })
         try {
-          uploadedNewUrls = await uploadVehicleImages(vehicle._id || vehicle.id || `veh_${Date.now()}`, newFiles)
+          const compressedFiles = []
+          for (let i = 0; i < newFiles.length; i += 2) {
+            const chunk = newFiles.slice(i, i + 2)
+            const chunkPromises = chunk.map(async (file) => {
+              try {
+                return await imageCompression(file, { maxSizeMB: 1.5, maxWidthOrHeight: 2048, useWebWorker: true })
+              } catch (err) {
+                console.warn('Compression failed for', file.name, err)
+                return file
+              }
+            })
+            const results = await Promise.all(chunkPromises)
+            compressedFiles.push(...results)
+            toast.loading(`Compressing new photos... (${Math.min(i + 2, newFiles.length)}/${newFiles.length})`, { id: toastId })
+          }
+          toast.loading('Uploading compressed photos to Firebase...', { id: toastId })
+          uploadedNewUrls = await uploadVehicleImages(vehicle._id || vehicle.id || `veh_${Date.now()}`, compressedFiles)
+          toast.loading('Photos uploaded. Updating vehicle...', { id: toastId })
         } catch (uploadErr) {
           console.warn('[EditVehicleModal] Firebase Storage upload error, falling back:', uploadErr)
         }

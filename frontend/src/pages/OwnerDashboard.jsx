@@ -23,6 +23,7 @@ import { vehicleAPI, bookingAPI, notificationAPI, paymentAPI } from '../api/endp
 import { auth } from '../config/firebase'
 import ReviewModal from '../components/ReviewModal'
 import EditVehicleModal from '../components/EditVehicleModal'
+import imageCompression from 'browser-image-compression'
 import DisputeModal from '../components/DisputeModal'
 import { getImageUrl } from '../utils/urlUtils'
 import OwnerSettings from './OwnerSettings'
@@ -184,13 +185,29 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
     }
 
     setSubmitting(true)
-    const toastId = toast.loading('Uploading vehicle photos...')
+    const toastId = toast.loading('Compressing vehicle photos...')
     try {
-      // Step 1: Upload photos to Firebase Storage first
+      // Step 1: Compress and upload photos to Firebase Storage first
       setSubmitStep('uploading')
       let photoUrls = []
       try {
-        photoUrls = await uploadVehicleImages(`veh_${Date.now()}`, photoFiles)
+        const compressedFiles = []
+        for (let i = 0; i < photoFiles.length; i += 2) {
+          const chunk = photoFiles.slice(i, i + 2)
+          const chunkPromises = chunk.map(async (file) => {
+            try {
+              return await imageCompression(file, { maxSizeMB: 1.5, maxWidthOrHeight: 2048, useWebWorker: true })
+            } catch (err) {
+              console.warn('Compression failed for', file.name, err)
+              return file
+            }
+          })
+          const results = await Promise.all(chunkPromises)
+          compressedFiles.push(...results)
+          toast.loading(`Compressing images... (${Math.min(i + 2, photoFiles.length)}/${photoFiles.length})`, { id: toastId })
+        }
+        toast.loading('Uploading compressed photos to Firebase...', { id: toastId })
+        photoUrls = await uploadVehicleImages(`veh_${Date.now()}`, compressedFiles)
         toast.loading(`Photos uploaded (${photoUrls.length}). Saving vehicle...`, { id: toastId })
       } catch (uploadErr) {
         console.warn('[AddVehicle] Firebase Storage upload failed, using local upload:', uploadErr.message)
