@@ -36,10 +36,11 @@ export default function UsersView() {
   }, [])
 
   const safeUsers = Array.isArray(users) ? users : []
+  const q = (search || '').toLowerCase().trim()
   const filteredUsers = safeUsers.filter(u =>
-    u?.name?.toLowerCase().includes(search.toLowerCase()) ||
-    u?.email?.toLowerCase().includes(search.toLowerCase()) ||
-    u?._id?.toLowerCase().includes(search.toLowerCase())
+    String(u?.name || '').toLowerCase().includes(q) ||
+    String(u?.email || '').toLowerCase().includes(q) ||
+    String(u?._id || u?.id || '').toLowerCase().includes(q)
   )
 
   const handleRoleChange = async (userId, newRole) => {

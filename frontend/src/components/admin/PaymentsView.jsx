@@ -4,12 +4,21 @@ import { FiSearch, FiDollarSign } from 'react-icons/fi'
 export default function PaymentsView({ payments = [] }) {
   const [search, setSearch] = useState('')
 
+  const getBookingIdStr = (bookingId) => {
+    if (!bookingId) return ''
+    if (typeof bookingId === 'object') return String(bookingId._id || bookingId.id || '')
+    return String(bookingId)
+  }
+
   const safePayments = Array.isArray(payments) ? payments : []
-  const filteredPayments = safePayments.filter(p =>
-    (p?.bookingId || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p?._id || p?.id || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p?.type || '').toLowerCase().includes(search.toLowerCase())
-  )
+  const q = (search || '').toLowerCase().trim()
+  const filteredPayments = safePayments.filter(p => {
+    const bookingIdStr = getBookingIdStr(p?.bookingId).toLowerCase()
+    const txIdStr = String(p?.transactionId || p?._id || p?.id || '').toLowerCase()
+    const typeStr = String(p?.type || '').toLowerCase()
+    const statusStr = String(p?.status || '').toLowerCase()
+    return bookingIdStr.includes(q) || txIdStr.includes(q) || typeStr.includes(q) || statusStr.includes(q)
+  })
 
   return (
     <div className="space-y-6">
@@ -62,7 +71,7 @@ export default function PaymentsView({ payments = [] }) {
                   return (
                     <tr key={p?._id || p?.id} className="hover:bg-white/5 transition-colors">
                       <td className="p-4 font-mono text-white/50">{p?.transactionId || p?._id || p?.id}</td>
-                      <td className="p-4 font-mono font-bold text-white/80">{p?.bookingId?._id || p?.bookingId || 'Unknown'}</td>
+                      <td className="p-4 font-mono font-bold text-white/80">{getBookingIdStr(p?.bookingId) || 'Unknown'}</td>
                       <td className={`p-4 font-semibold ${isRefund ? 'text-red-400' : 'text-white'}`}>
                         {isRefund ? '-' : ''}₹{amt.toLocaleString()}
                         {secDeposit > 0 && <div className="text-[10px] text-white/40">Dep: ₹{secDeposit}</div>}
