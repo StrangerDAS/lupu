@@ -82,17 +82,16 @@ export async function permanentDeleteVehicle(vehicleId) {
   await deleteDoc(doc(db, 'vehicles', vehicleId))
 }
 
-/** Upload vehicle images to Firebase Storage and return download URLs */
+/** Upload vehicle images to Firebase Storage concurrently and return download URLs */
 export async function uploadVehicleImages(vehicleId, files) {
-  const urls = []
-  for (let i = 0; i < files.length; i++) {
-    const filePath = `vehicles/${vehicleId}/image_${Date.now()}_${i}`
+  const timestamp = Date.now()
+  const uploadPromises = files.map(async (file, i) => {
+    const filePath = `vehicles/${vehicleId}/image_${timestamp}_${i}`
     const fileRef = ref(storage, filePath)
-    await uploadBytes(fileRef, files[i])
-    const url = await getDownloadURL(fileRef)
-    urls.push(url)
-  }
-  return urls
+    await uploadBytes(fileRef, file)
+    return await getDownloadURL(fileRef)
+  })
+  return await Promise.all(uploadPromises)
 }
 
 

@@ -592,7 +592,14 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
   } catch (err) {
     console.error('POST /api/vehicles error:', err)
     if (err.code === 11000) {
-      return res.status(409).json({ message: 'Vehicle registration number already registered' })
+      const keyPattern = err.keyPattern || {}
+      if (keyPattern.registrationNumber) {
+        return res.status(409).json({ message: 'Vehicle registration number already registered' })
+      }
+      if (keyPattern.phone) {
+        return res.status(409).json({ message: 'Owner phone number is already registered with another account.' })
+      }
+      return res.status(409).json({ message: 'Duplicate entry detected: vehicle or owner details already exist.' })
     }
     res.status(500).json({ message: 'Internal server error' })
   }
@@ -1281,7 +1288,20 @@ app.put('/api/users/profile', verifyFirebaseToken, requireMongoUser, avatarUploa
     const updates = {}
     if (name !== undefined && name.trim()) updates.name = name.trim()
     if (email !== undefined && email.trim()) updates.email = email.trim()
-    if (phone !== undefined) updates.phone = phone.trim()
+    if (phone !== undefined) {
+      const cleanPhone = typeof phone === 'string' ? phone.trim() : ''
+      if (!cleanPhone) {
+        updates.phone = null
+        updates.phoneVerified = false
+      } else {
+        const validation = validateIndianPhoneNumber(cleanPhone)
+        if (validation.valid) {
+          updates.phone = validation.formatted
+        } else {
+          updates.phone = cleanPhone
+        }
+      }
+    }
     if (avatar !== undefined) updates.avatar = avatar
     if (college !== undefined) updates.college = college
     if (address !== undefined) updates.address = address

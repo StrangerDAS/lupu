@@ -190,28 +190,24 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
       // Step 1: Compress and upload photos to Firebase Storage first
       setSubmitStep('uploading')
       let photoUrls = []
+      let processedPhotos = photoFiles
       try {
-        const compressedFiles = []
-        for (let i = 0; i < photoFiles.length; i += 2) {
-          const chunk = photoFiles.slice(i, i + 2)
-          const chunkPromises = chunk.map(async (file) => {
-            try {
-              return await imageCompression(file, { maxSizeMB: 1.5, maxWidthOrHeight: 2048, useWebWorker: true })
-            } catch (err) {
-              console.warn('Compression failed for', file.name, err)
-              return file
-            }
-          })
-          const results = await Promise.all(chunkPromises)
-          compressedFiles.push(...results)
-          toast.loading(`Compressing images... (${Math.min(i + 2, photoFiles.length)}/${photoFiles.length})`, { id: toastId })
-        }
-        toast.loading('Uploading compressed photos to Firebase...', { id: toastId })
-        photoUrls = await uploadVehicleImages(`veh_${Date.now()}`, compressedFiles)
+        const compressionOptions = { maxSizeMB: 1.0, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 }
+        const compressionPromises = photoFiles.map(async (file) => {
+          try {
+            return await imageCompression(file, compressionOptions)
+          } catch (err) {
+            console.warn('Compression failed for', file.name, err)
+            return file
+          }
+        })
+        processedPhotos = await Promise.all(compressionPromises)
+        toast.loading('Uploading vehicle photos...', { id: toastId })
+        photoUrls = await uploadVehicleImages(`veh_${Date.now()}`, processedPhotos)
         toast.loading(`Photos uploaded (${photoUrls.length}). Saving vehicle...`, { id: toastId })
       } catch (uploadErr) {
         console.warn('[AddVehicle] Firebase Storage upload failed, using local upload:', uploadErr.message)
-        // Fall through — local disk upload will happen via FormData binary
+        // Fall through — local disk upload will happen via FormData binary using compressed photos
       }
 
       // Step 2: Build FormData and submit to backend
@@ -244,8 +240,8 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
         // Firebase Storage URLs — append as strings to body
         photoUrls.forEach(url => formData.append('photos', url))
       } else {
-        // Fallback: send binary files so multer saves them to disk
-        photoFiles.forEach(file => formData.append('photos', file))
+        // Fallback: send compressed binary files so multer saves them to disk quickly
+        processedPhotos.forEach(file => formData.append('photos', file))
       }
 
       await vehicleAPI.create(formData)

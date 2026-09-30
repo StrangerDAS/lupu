@@ -80,26 +80,22 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
 
       // Compress and upload new photo files to Firebase Storage
       let uploadedNewUrls = []
+      let processedNewPhotos = newFiles
       if (newFiles.length > 0) {
         toast.loading('Compressing new photos...', { id: toastId })
         try {
-          const compressedFiles = []
-          for (let i = 0; i < newFiles.length; i += 2) {
-            const chunk = newFiles.slice(i, i + 2)
-            const chunkPromises = chunk.map(async (file) => {
-              try {
-                return await imageCompression(file, { maxSizeMB: 1.5, maxWidthOrHeight: 2048, useWebWorker: true })
-              } catch (err) {
-                console.warn('Compression failed for', file.name, err)
-                return file
-              }
-            })
-            const results = await Promise.all(chunkPromises)
-            compressedFiles.push(...results)
-            toast.loading(`Compressing new photos... (${Math.min(i + 2, newFiles.length)}/${newFiles.length})`, { id: toastId })
-          }
+          const compressionOptions = { maxSizeMB: 1.0, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 }
+          const compressionPromises = newFiles.map(async (file) => {
+            try {
+              return await imageCompression(file, compressionOptions)
+            } catch (err) {
+              console.warn('Compression failed for', file.name, err)
+              return file
+            }
+          })
+          processedNewPhotos = await Promise.all(compressionPromises)
           toast.loading('Uploading compressed photos to Firebase...', { id: toastId })
-          uploadedNewUrls = await uploadVehicleImages(vehicle._id || vehicle.id || `veh_${Date.now()}`, compressedFiles)
+          uploadedNewUrls = await uploadVehicleImages(vehicle._id || vehicle.id || `veh_${Date.now()}`, processedNewPhotos)
           toast.loading('Photos uploaded. Updating vehicle...', { id: toastId })
         } catch (uploadErr) {
           console.warn('[EditVehicleModal] Firebase Storage upload error, falling back:', uploadErr)
@@ -109,7 +105,7 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
       if (uploadedNewUrls.length > 0) {
         uploadedNewUrls.forEach(url => formData.append('photos', url))
       } else {
-        newFiles.forEach(file => {
+        processedNewPhotos.forEach(file => {
           formData.append('photos', file)
         })
       }

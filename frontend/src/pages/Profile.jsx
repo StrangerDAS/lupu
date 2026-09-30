@@ -14,6 +14,7 @@ import EmergencyContacts from '../components/EmergencyContacts'
 
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { storage } from '../firebase/config'
+import { getImageUrl } from '../utils/urlUtils'
 
 import { userAPI, bookingAPI, vehicleAPI, roleAPI, authAPI } from '../api/endpoints'
 
@@ -103,11 +104,13 @@ export default function Profile() {
   // 4. Update Profile Info
   const onSubmit = async (data) => {
     try {
-      const res = await userAPI.updateProfile({
-        name: data.name,
-        email: data.email,
-        phone: data.phone || ''
-      })
+      const payload = {
+        name: data.name.trim(),
+      }
+      if (data.email && data.email.trim()) payload.email = data.email.trim()
+      if (data.phone !== undefined) payload.phone = data.phone.trim()
+
+      const res = await userAPI.updateProfile(payload)
       
       const updatedUser = res.data.user || res.data
       updateUser(updatedUser)
@@ -218,7 +221,7 @@ export default function Profile() {
           <div className="flex flex-col sm:flex-row sm:items-center gap-5 mb-6">
             <div className="relative group w-20 h-20 shrink-0">
               {user?.photoURL || user?.avatar ? (
-                <img src={user.photoURL || user.avatar} alt="Profile" className="w-20 h-20 rounded-2xl object-cover shadow-lg border border-white/10" />
+                <img src={getImageUrl(user.photoURL || user.avatar)} alt="Profile" className="w-20 h-20 rounded-2xl object-cover shadow-lg border border-white/10" />
               ) : (
                 <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand to-brand-light flex items-center justify-center text-3xl font-bold text-white shrink-0 shadow-lg shadow-brand/20">
                   {user?.displayName?.[0]?.toUpperCase() || user?.name?.[0]?.toUpperCase() || '?'}
