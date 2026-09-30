@@ -17,12 +17,14 @@ export default function VehiclesView({ vehicles = [], onRefresh }) {
 
 
   const safeVehicles = Array.isArray(vehicles) ? vehicles : []
+  const q = (search || '').toLowerCase().trim()
   const filteredVehicles = safeVehicles.filter(v => {
-    const nameMatch = v?.name?.toLowerCase().includes(search.toLowerCase())
-    const brandMatch = v?.brand?.toLowerCase().includes(search.toLowerCase())
-    const modelMatch = v?.model?.toLowerCase().includes(search.toLowerCase())
-    const regMatch = v?.registrationNumber?.toLowerCase().includes(search.toLowerCase())
-    const ownerMatch = v?.owner?.name?.toLowerCase().includes(search.toLowerCase()) || v?.ownerName?.toLowerCase().includes(search.toLowerCase())
+    const ownerNameStr = typeof v?.owner === 'object' ? String(v?.owner?.name || '') : String(v?.owner || v?.ownerName || '')
+    const nameMatch = String(v?.name || '').toLowerCase().includes(q)
+    const brandMatch = String(v?.brand || '').toLowerCase().includes(q)
+    const modelMatch = String(v?.model || '').toLowerCase().includes(q)
+    const regMatch = String(v?.registrationNumber || '').toLowerCase().includes(q)
+    const ownerMatch = ownerNameStr.toLowerCase().includes(q) || String(v?.ownerName || '').toLowerCase().includes(q)
     const matchesSearch = nameMatch || brandMatch || modelMatch || regMatch || ownerMatch
     if (!matchesSearch) return false
 

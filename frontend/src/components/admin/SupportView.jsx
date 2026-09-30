@@ -12,10 +12,11 @@ export default function SupportView({ tickets = [], onRefresh }) {
   const [message, setMessage] = useState('')
 
   const safeTickets = Array.isArray(tickets) ? tickets : []
+  const q = (search || '').toLowerCase().trim()
   const filteredTickets = safeTickets.filter(t =>
-    (t?.subject || '').toLowerCase().includes(search.toLowerCase()) ||
-    (t?.userName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (t?._id || t?.id || '').toLowerCase().includes(search.toLowerCase())
+    String(t?.subject || '').toLowerCase().includes(q) ||
+    String(t?.userName || '').toLowerCase().includes(q) ||
+    String(t?._id || t?.id || '').toLowerCase().includes(q)
   )
 
   const handleReply = async (e) => {

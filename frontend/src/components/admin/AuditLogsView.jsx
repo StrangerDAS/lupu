@@ -5,10 +5,12 @@ export default function AuditLogsView({ adminActions = [] }) {
   const [search, setSearch] = useState('')
 
   const safeLogs = Array.isArray(adminActions) ? adminActions : []
+  const q = (search || '').toLowerCase().trim()
   const filteredLogs = safeLogs.filter(log =>
-    (log?.adminName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (log?.actionType || '').toLowerCase().includes(search.toLowerCase()) ||
-    (log?.notes || '').toLowerCase().includes(search.toLowerCase())
+    String(log?.adminName || '').toLowerCase().includes(q) ||
+    String(log?.actionType || '').toLowerCase().includes(q) ||
+    String(log?.notes || '').toLowerCase().includes(q) ||
+    String(log?._id || log?.id || '').toLowerCase().includes(q)
   )
 
   return (

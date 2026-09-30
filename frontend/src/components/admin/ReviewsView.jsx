@@ -10,10 +10,12 @@ export default function ReviewsView({ reviews = [], onRefresh }) {
   const [search, setSearch] = useState('')
 
   const safeReviews = Array.isArray(reviews) ? reviews : []
+  const q = (search || '').toLowerCase().trim()
   const filteredReviews = safeReviews.filter(r =>
-    (r?.comment || '').toLowerCase().includes(search.toLowerCase()) ||
-    (r?.reviewerName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (r?.vehicleName || '').toLowerCase().includes(search.toLowerCase())
+    String(r?.comment || '').toLowerCase().includes(q) ||
+    String(r?.reviewerName || '').toLowerCase().includes(q) ||
+    String(r?.vehicleName || '').toLowerCase().includes(q) ||
+    String(r?._id || r?.id || '').toLowerCase().includes(q)
   )
 
   const handleDelete = async (id) => {

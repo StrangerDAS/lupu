@@ -29,11 +29,12 @@ export default function BookingsView({ bookings = [] }) {
     return false
   })
 
+  const q = (search || '').toLowerCase().trim()
   const filteredBookings = categorizedBookings.filter(b =>
-    b?.vehicleName?.toLowerCase().includes(search.toLowerCase()) ||
-    b?.renterName?.toLowerCase().includes(search.toLowerCase()) ||
-    b?.ownerName?.toLowerCase().includes(search.toLowerCase()) ||
-    (b?._id || b?.id || '').toLowerCase().includes(search.toLowerCase())
+    String(b?.vehicleName || '').toLowerCase().includes(q) ||
+    String(b?.renterName || '').toLowerCase().includes(q) ||
+    String(b?.ownerName || '').toLowerCase().includes(q) ||
+    String(b?._id || b?.id || '').toLowerCase().includes(q)
   )
 
   const getStatusBadge = (status) => {
