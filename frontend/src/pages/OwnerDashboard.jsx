@@ -16,14 +16,11 @@ import PageWrapper from '../components/PageWrapper'
 import { addVehicleSchema } from '../utils/schemas'
 import useAuthStore from '../store/authStore'
 import { StatCardSkeleton, BookingCardSkeleton } from '../components/Skeletons'
-import {
-  uploadVehicleImages
-} from '../firebase/firestoreService'
 import { vehicleAPI, bookingAPI, notificationAPI, paymentAPI } from '../api/endpoints'
 import { auth } from '../config/firebase'
 import ReviewModal from '../components/ReviewModal'
 import EditVehicleModal from '../components/EditVehicleModal'
-import imageCompression from 'browser-image-compression'
+import VehiclePhotoUploader from '../components/VehiclePhotoUploader'
 import DisputeModal from '../components/DisputeModal'
 import { getImageUrl } from '../utils/urlUtils'
 import OwnerSettings from './OwnerSettings'
@@ -163,17 +160,11 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
   const [rcFile, setRcFile] = useState(null)
   const [insFile, setInsFile] = useState(null)
   const [pucFile, setPucFile] = useState(null)
-  const [photoFiles, setPhotoFiles] = useState([])
-  const [photoPreviews, setPhotoPreviews] = useState([])
-  const [submitStep, setSubmitStep] = useState('') // 'uploading' | 'saving' | ''
-
-  // Generate previews when photos are selected
-  const handlePhotoChange = (e) => {
-    const files = Array.from(e.target.files)
-    setPhotoFiles(files)
-    const previews = files.map(f => URL.createObjectURL(f))
-    setPhotoPreviews(previews)
-  }
+  // Cloudinary-uploaded photo results [{ secure_url, public_id }, ...]
+  const [uploadedPhotos, setUploadedPhotos] = useState([])
+  // Temp vehicleId used for Cloudinary folder before real vehicle ID exists
+  const [tempVehicleId] = useState(() => `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`)
+  const [submitStep, setSubmitStep] = useState('') // 'saving' | ''
 
   const onSubmit = async (data) => {
     if (!rcFile) { toast.error('Registration Certificate (RC) is required'); return }
@@ -183,35 +174,17 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
       toast.error('Authentication session expired. Please refresh or log in again.')
       return
     }
+    if (uploadedPhotos.length < 3) {
+      toast.error(`Minimum 3 photos required. ${uploadedPhotos.length} uploaded so far.`)
+      return
+    }
 
     setSubmitting(true)
-    const toastId = toast.loading('Compressing vehicle photos...')
+    setSubmitStep('saving')
+    const toastId = toast.loading('Saving vehicle...')
     try {
-      // Step 1: Compress and upload photos to Firebase Storage first
-      setSubmitStep('uploading')
-      let photoUrls = []
-      let processedPhotos = photoFiles
-      try {
-        const compressionOptions = { maxSizeMB: 1.0, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 }
-        const compressionPromises = photoFiles.map(async (file) => {
-          try {
-            return await imageCompression(file, compressionOptions)
-          } catch (err) {
-            console.warn('Compression failed for', file.name, err)
-            return file
-          }
-        })
-        processedPhotos = await Promise.all(compressionPromises)
-        toast.loading('Uploading vehicle photos...', { id: toastId })
-        photoUrls = await uploadVehicleImages(`veh_${Date.now()}`, processedPhotos)
-        toast.loading(`Photos uploaded (${photoUrls.length}). Saving vehicle...`, { id: toastId })
-      } catch (uploadErr) {
-        console.warn('[AddVehicle] Firebase Storage upload failed, using local upload:', uploadErr.message)
-        // Fall through — local disk upload will happen via FormData binary using compressed photos
-      }
-
-      // Step 2: Build FormData and submit to backend
-      setSubmitStep('saving')
+      // Cloudinary photos are already uploaded by VehiclePhotoUploader.
+      // Send their secure_urls as strings to the backend.
       const formData = new FormData()
       formData.append('name', data.name)
       formData.append('brand', data.brand)
@@ -231,18 +204,13 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
       formData.append('ownerPhone', data.ownerPhone)
       formData.append('verificationStatus', 'submitted')
 
-      // Documents (binary files)
+      // Documents (binary files — stay on LUPU server / local storage, not Cloudinary)
       formData.append('RC', rcFile)
       formData.append('Insurance', insFile)
       formData.append('PUC', pucFile)
 
-      if (photoUrls.length >= 3) {
-        // Firebase Storage URLs — append as strings to body
-        photoUrls.forEach(url => formData.append('photos', url))
-      } else {
-        // Fallback: send compressed binary files so multer saves them to disk quickly
-        processedPhotos.forEach(file => formData.append('photos', file))
-      }
+      // Cloudinary secure_urls — backend treats any http(s) string as a valid photo URL
+      uploadedPhotos.forEach(p => formData.append('photos', p.secure_url))
 
       await vehicleAPI.create(formData)
       toast.success(
@@ -395,39 +363,31 @@ function AddVehicleModal({ onClose, onSuccess, userId, userName }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="text-[10px] text-white/40 block mb-1">Registration (RC) *</label>
-                <input type="file" accept="image/*,.pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setRcFile(e.target.files[0])} />
+                <input type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setRcFile(e.target.files[0])} />
               </div>
               <div>
                 <label className="text-[10px] text-white/40 block mb-1">Insurance Policy *</label>
-                <input type="file" accept="image/*,.pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setInsFile(e.target.files[0])} />
+                <input type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setInsFile(e.target.files[0])} />
               </div>
               <div>
                 <label className="text-[10px] text-white/40 block mb-1">Pollution (PUC) *</label>
-                <input type="file" accept="image/*,.pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setPucFile(e.target.files[0])} />
+                <input type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" required className="input-field p-1 text-[10px]" onChange={(e) => setPucFile(e.target.files[0])} />
               </div>
             </div>
           </div>
 
-          {/* Upload Photos */}
+          {/* Upload Photos — Cloudinary direct upload with progress */}
           <div>
             <label className="label">Photos (Minimum 3) *</label>
-            <label
-              htmlFor="veh-images"
-              className="flex flex-col items-center gap-1.5 border-2 border-dashed border-white/10 rounded-xl p-4 cursor-pointer hover:border-white/20 bg-surface-2 transition text-center"
-            >
-              <FiUpload className="text-white/30 text-lg" />
-              <span className="text-xs text-white/40">
-                {photoFiles.length > 0 ? `${photoFiles.length} photo(s) selected` : 'Click to select vehicle photos (min 3)'}
-              </span>
-              <input id="veh-images" type="file" accept="image/*" multiple className="hidden" onChange={handlePhotoChange} />
-            </label>
-            {/* Photo previews */}
-            {photoPreviews.length > 0 && (
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {photoPreviews.map((src, i) => (
-                  <img key={i} src={src} alt={`preview-${i}`} className="w-14 h-14 object-cover rounded-lg border border-white/10" />
-                ))}
-              </div>
+            <VehiclePhotoUploader
+              vehicleId={tempVehicleId}
+              onChange={setUploadedPhotos}
+              minPhotos={3}
+              maxPhotos={10}
+              disabled={submitting}
+            />
+            {uploadedPhotos.length > 0 && uploadedPhotos.length < 3 && (
+              <p className="text-yellow-400 text-[10px] mt-1">Add at least {3 - uploadedPhotos.length} more photo(s)</p>
             )}
           </div>
 

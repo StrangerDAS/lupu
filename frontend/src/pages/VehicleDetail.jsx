@@ -238,7 +238,7 @@ export default function VehicleDetail() {
             <div className="card h-72 md:h-96 flex items-center justify-center bg-surface-2 overflow-hidden relative">
               {allImages[activeImg] ? (
                 <img
-                  src={getImageUrl(allImages[activeImg])}
+                  src={getImageUrl(allImages[activeImg], 'detail')}
                   alt={vehicle.name}
                   onError={(e) => {
                     e.target.onerror = null;
@@ -294,7 +294,8 @@ export default function VehicleDetail() {
                       activeImg === i ? 'border-brand' : 'border-white/10'
                     }`}
                   >
-                    <img src={getImageUrl(img)} alt="" className="w-full h-full object-cover" />
+                    <img src={getImageUrl(img, 'thumb')} alt="" className="w-full h-full object-cover" loading="lazy" />
+
                   </button>
                 ))}
               </div>

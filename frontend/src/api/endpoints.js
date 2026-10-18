@@ -19,7 +19,14 @@ export const vehicleAPI = {
   delete: (id) => api.delete(`/vehicles/${id}`),
   myVehicles: () => api.get('/vehicles/my'),
   toggleStatus: (id) => api.patch(`/vehicles/${id}/toggle-status`),
+  // Cloudinary: request a short-lived signed upload credential from the backend
+  getUploadSignature: (vehicleId, photoIndex) =>
+    api.post('/vehicles/upload-signature', { vehicleId, photoIndex }),
+  // Cloudinary: safe server-confirmed delete of an old photo
+  cleanupPhoto: (vehicleId, publicId) =>
+    api.post(`/vehicles/${vehicleId}/cleanup-photo`, { publicId }),
 }
+
 
 /* ── Bookings ───────────────────────────────────────────── */
 export const bookingAPI = {

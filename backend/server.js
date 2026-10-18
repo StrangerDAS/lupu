@@ -11,6 +11,7 @@ import express from 'express'
 import cors from 'cors'
 import mongoose from 'mongoose'
 import path from 'path'
+import fs from 'fs'
 import { fileURLToPath } from 'url'
 
 import User from './models/User.js'
@@ -33,6 +34,38 @@ import { logger } from './utils/logger.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { rateLimiter } from './middleware/rateLimiter.js'
 import { verifyFirebaseToken, requireMongoUser } from './middleware/authMiddleware.js'
+import {
+  generateVehiclePhotoSignature,
+  deleteCloudinaryAsset,
+  extractPublicIdFromUrl,
+  VEHICLE_PHOTOS_FOLDER,
+  cloudinary,
+  ensureCloudinaryConfigured
+} from './utils/cloudinaryConfig.js'
+
+/**
+ * Upload a verification document file to Cloudinary so it is permanently hosted in the cloud
+ * (persisting across Render deploys/restarts, accessible everywhere without 404).
+ */
+async function uploadDocumentFileToCloud(file, fallbackUrl) {
+  if (!file) return fallbackUrl || null
+  try {
+    ensureCloudinaryConfigured()
+    const isPdf = file.mimetype === 'application/pdf' || (file.originalname && file.originalname.toLowerCase().endsWith('.pdf'))
+    const uploadOptions = {
+      folder: 'lupu/vehicle-documents',
+      resource_type: 'image',
+      ...(isPdf ? { format: 'png' } : {})
+    }
+    const result = await cloudinary.uploader.upload(file.path, uploadOptions)
+    // Clean up local temp file
+    try { fs.unlinkSync(file.path) } catch (_) {}
+    return result.secure_url
+  } catch (err) {
+    console.warn('[Documents] Cloudinary upload fallback to local disk:', err.message)
+    return `/uploads/${file.filename}`
+  }
+}
 
 // Role-based authorization helper
 function authorize(...roles) {
@@ -466,6 +499,81 @@ app.get('/api/vehicles/:id', async (req, res) => {
   }
 })
 
+// ── Cloudinary: Generate signed upload parameters for vehicle photos ──────────
+// The browser uploads images DIRECTLY to Cloudinary — no binary passes through
+// this server. The API Secret is never sent to the client.
+app.post('/api/vehicles/upload-signature', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin', 'user'), async (req, res) => {
+  try {
+    const { vehicleId, photoIndex } = req.body
+
+    // Validate input
+    if (!vehicleId || typeof vehicleId !== 'string' || vehicleId.length < 3) {
+      return res.status(400).json({ message: 'vehicleId is required (min 3 chars)' })
+    }
+    const idx = photoIndex !== undefined ? String(photoIndex) : undefined
+
+    // Ensure Cloudinary is configured (env vars present)
+    let sig
+    try {
+      sig = generateVehiclePhotoSignature(vehicleId, idx)
+    } catch (configErr) {
+      console.error('[Cloudinary] Configuration error:', configErr.message)
+      return res.status(503).json({ message: 'Image upload service is not configured. Contact support.' })
+    }
+
+    // Log for audit (never log the secret itself)
+    console.log(`[Cloudinary] Signature issued for vehicle=${vehicleId} owner=${req.user.email} idx=${idx ?? 'auto'}`)
+
+    res.json(sig)
+  } catch (err) {
+    console.error('POST /api/vehicles/upload-signature error:', err)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+})
+
+// ── Cloudinary: Safe delete of a vehicle photo confirmed by server ────────────
+// Only called AFTER the vehicle document has been updated to remove the photo reference.
+app.post('/api/vehicles/:id/cleanup-photo', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Vehicle not found' })
+    }
+    const vehicle = await Vehicle.findById(req.params.id)
+    if (!vehicle) return res.status(404).json({ message: 'Vehicle not found' })
+
+    const ownerId = vehicle.ownerId?.toString()
+    if (ownerId !== req.user._id.toString() && !['admin', 'super_admin', 'founder'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Forbidden: not your vehicle' })
+    }
+
+    const { publicId } = req.body
+    if (!publicId || typeof publicId !== 'string') {
+      return res.status(400).json({ message: 'publicId is required' })
+    }
+
+    // Safety: only allow deletion of Cloudinary assets in the vehicle-photos folder
+    if (!publicId.startsWith(VEHICLE_PHOTOS_FOLDER)) {
+      return res.status(403).json({ message: 'Forbidden: can only delete vehicle-photo assets' })
+    }
+
+    // Double-check: asset must NOT be referenced by the current vehicle document
+    const allVehiclePhotos = [...(vehicle.photos || []), ...(vehicle.images || [])]
+    const isStillReferenced = allVehiclePhotos.some(url => {
+      const pid = extractPublicIdFromUrl(url)
+      return pid && (pid === publicId || url.includes(publicId))
+    })
+    if (isStillReferenced) {
+      return res.status(409).json({ message: 'Photo is still referenced by the vehicle — save vehicle first.' })
+    }
+
+    await deleteCloudinaryAsset(publicId)
+    res.json({ deleted: true, publicId })
+  } catch (err) {
+    console.error('POST /api/vehicles/:id/cleanup-photo error:', err)
+    res.status(500).json({ message: 'Failed to delete photo' })
+  }
+})
+
 app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin', 'user'), kycPlaceholder, vehicleUpload, async (req, res) => {
   try {
     const {
@@ -505,9 +613,9 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
     const pucFile = req.files?.['PUC']?.[0]
     const photoFiles = req.files?.['photos'] || []
 
-    const rcUrl = rcFile ? `/uploads/${rcFile.filename}` : (req.body.RC || req.body.documents?.RC)
-    const insUrl = insFile ? `/uploads/${insFile.filename}` : (req.body.Insurance || req.body.documents?.Insurance)
-    const pucUrl = pucFile ? `/uploads/${pucFile.filename}` : (req.body.PUC || req.body.documents?.PUC)
+    const rcUrl = await uploadDocumentFileToCloud(rcFile, req.body.RC || req.body.documents?.RC)
+    const insUrl = await uploadDocumentFileToCloud(insFile, req.body.Insurance || req.body.documents?.Insurance)
+    const pucUrl = await uploadDocumentFileToCloud(pucFile, req.body.PUC || req.body.documents?.PUC)
 
     const uploadedFileUrls = photoFiles.map(f => `/uploads/${f.filename}`)
     // bodyPhotos are the Firebase Storage https:// URLs sent as strings
@@ -629,13 +737,16 @@ app.put('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, authorize('o
     const pucFile = req.files?.['PUC']?.[0]
     const photoFiles = req.files?.['photos'] || []
 
-    const rcUrl = rcFile ? `/uploads/${rcFile.filename}` : (req.body.RC || req.body.documents?.RC || vehicle.documents?.RC)
-    const insUrl = insFile ? `/uploads/${insFile.filename}` : (req.body.Insurance || req.body.documents?.Insurance || vehicle.documents?.Insurance)
-    const pucUrl = pucFile ? `/uploads/${pucFile.filename}` : (req.body.PUC || req.body.documents?.PUC || vehicle.documents?.PUC)
+    const rcUrl = await uploadDocumentFileToCloud(rcFile, req.body.RC || req.body.documents?.RC || vehicle.documents?.RC)
+    const insUrl = await uploadDocumentFileToCloud(insFile, req.body.Insurance || req.body.documents?.Insurance || vehicle.documents?.Insurance)
+    const pucUrl = await uploadDocumentFileToCloud(pucFile, req.body.PUC || req.body.documents?.PUC || vehicle.documents?.PUC)
     
     const uploadedFileUrls = photoFiles.map(f => `/uploads/${f.filename}`)
+    // bodyPhotos = the photos the client wants to KEEP (existing URLs) + any new local uploads
+    // We do NOT merge vehicle.photos here — the client sends the exact desired final list.
+    // This fixes the bug where removed photos were re-added from the DB record.
     const bodyPhotos = Array.isArray(req.body.photos) ? req.body.photos : (req.body.photos ? [req.body.photos] : [])
-    const photoUrls = Array.from(new Set([...uploadedFileUrls, ...bodyPhotos, ...(vehicle.photos || [])])).filter(p => typeof p === 'string' && p.trim())
+    const photoUrls = Array.from(new Set([...uploadedFileUrls, ...bodyPhotos])).filter(p => typeof p === 'string' && p.trim())
 
     const isSubmitting = verificationStatus === 'submitted' || (vehicle.verificationStatus === 'rejected' && verificationStatus === 'submitted')
 

@@ -58,7 +58,7 @@ export default function VehicleCard({ vehicle, index = 0 }) {
           <div className="relative h-48 bg-surface-2 overflow-hidden">
             {allImages[0] ? (
               <img
-                src={getImageUrl(allImages[0])}
+                src={getImageUrl(allImages[0], 'card')}
                 alt={name}
                 onError={(e) => {
                   e.target.onerror = null;

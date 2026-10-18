@@ -19,12 +19,50 @@ const storage = multer.diskStorage({
   }
 })
 
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence',
+  'image/pjpeg',
+  'image/x-png',
+  'application/pdf',
+  'application/octet-stream', // often sent by Safari/macOS for .heic/.heif files
+]
+
+const ALLOWED_EXTENSIONS = [
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.heic',
+  '.heif',
+  '.pdf',
+]
+
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
-  if (allowedTypes.includes(file.mimetype)) {
+  const mime = (file.mimetype || '').toLowerCase()
+  const ext = path.extname(file.originalname || '').toLowerCase()
+
+  const isMimeAllowed = ALLOWED_MIME_TYPES.includes(mime)
+  const isExtAllowed = ALLOWED_EXTENSIONS.includes(ext)
+
+  // If MIME is octet-stream, require a recognized extension
+  if (mime === 'application/octet-stream') {
+    if (isExtAllowed) {
+      return cb(null, true)
+    }
+    return cb(new Error('Only JPEG, PNG, WEBP, HEIC images and PDF files are allowed'), false)
+  }
+
+  // Allow if either MIME is recognized or extension is recognized
+  if (isMimeAllowed || isExtAllowed) {
     cb(null, true)
   } else {
-    cb(new Error('Only JPEG, PNG, WEBP images and PDF files are allowed'), false)
+    cb(new Error('Only JPEG, PNG, WEBP, HEIC images and PDF files are allowed'), false)
   }
 }
 
@@ -32,7 +70,7 @@ export const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB max
+    fileSize: 25 * 1024 * 1024 // 25MB max to support high-res mobile photos
   }
 })
 

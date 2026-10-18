@@ -16,3 +16,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Temp dev helper to get token via browser console
+if (import.meta.env.DEV) {
+  window.__FIREBASE_AUTH__ = auth;
+}

@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { FiX, FiUploadCloud, FiUpload, FiTrash2 } from 'react-icons/fi'
+import { FiX, FiTrash2 } from 'react-icons/fi'
 import { getImageUrl } from '../utils/urlUtils'
 import toast from 'react-hot-toast'
 import { editVehicleSchema } from '../utils/schemas'
 import { vehicleAPI } from '../api/endpoints'
-import { uploadVehicleImages } from '../firebase/firestoreService'
-import imageCompression from 'browser-image-compression'
+import VehiclePhotoUploader from './VehiclePhotoUploader'
+import { isCloudinaryUrl, extractPublicIdFromUrl } from '../utils/cloudinaryImageUrl'
+
 
 export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
   const { register, handleSubmit, formState: { errors } } = useForm({
@@ -32,11 +33,15 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
   })
 
   const [submitting, setSubmitting] = useState(false)
+  // existingImages: only the URLs the owner has NOT removed via the trash button
   const [existingImages, setExistingImages] = useState(vehicle.photos || vehicle.images || [])
-  const [newFiles, setNewFiles] = useState([])
+  // Cloudinary-uploaded new photos [{ secure_url, public_id }, ...]
+  const [newCloudinaryPhotos, setNewCloudinaryPhotos] = useState([])
   const [rcFile, setRcFile] = useState(null)
   const [insFile, setInsFile] = useState(null)
   const [pucFile, setPucFile] = useState(null)
+
+  const vehicleId = vehicle._id || vehicle.id
 
   const removeExistingImage = (index) => {
     setExistingImages((prev) => prev.filter((_, i) => i !== index))
@@ -62,7 +67,7 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
       formData.append('transmission', data.transmission)
       formData.append('helmetAvailable', data.helmetAvailable ? 'true' : 'false')
 
-      // If editing a rejected/under_review vehicle, submit it back for review
+      // If editing a rejected/draft vehicle, re-submit for review
       if (vehicle.verificationStatus === 'rejected' || vehicle.verificationStatus === 'draft') {
         formData.append('verificationStatus', 'submitted')
       } else {
@@ -73,44 +78,35 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
       if (insFile) formData.append('Insurance', insFile)
       if (pucFile) formData.append('PUC', pucFile)
 
-      // Append existing photos we decided to keep
+      // ── Photo list sent to backend ─────────────────────────────────────────
+      // 1. Existing photos the owner kept (not trashed) — sent as URL strings
       existingImages.forEach(img => {
         formData.append('photos', img)
       })
+      // 2. New Cloudinary-uploaded photos — also URL strings
+      newCloudinaryPhotos.forEach(p => {
+        formData.append('photos', p.secure_url)
+      })
+      // NOTE: The backend PUT handler now takes only what the client sends
+      // (the old bug of merging vehicle.photos back in has been fixed).
 
-      // Compress and upload new photo files to Firebase Storage
-      let uploadedNewUrls = []
-      let processedNewPhotos = newFiles
-      if (newFiles.length > 0) {
-        toast.loading('Compressing new photos...', { id: toastId })
-        try {
-          const compressionOptions = { maxSizeMB: 1.0, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 }
-          const compressionPromises = newFiles.map(async (file) => {
-            try {
-              return await imageCompression(file, compressionOptions)
-            } catch (err) {
-              console.warn('Compression failed for', file.name, err)
-              return file
-            }
-          })
-          processedNewPhotos = await Promise.all(compressionPromises)
-          toast.loading('Uploading compressed photos to Firebase...', { id: toastId })
-          uploadedNewUrls = await uploadVehicleImages(vehicle._id || vehicle.id || `veh_${Date.now()}`, processedNewPhotos)
-          toast.loading('Photos uploaded. Updating vehicle...', { id: toastId })
-        } catch (uploadErr) {
-          console.warn('[EditVehicleModal] Firebase Storage upload error, falling back:', uploadErr)
+      // Identify any photos removed by user
+      const originalPhotos = vehicle.photos || vehicle.images || []
+      const removedPhotos = originalPhotos.filter(url => !existingImages.includes(url))
+
+      await vehicleAPI.update(vehicleId, formData)
+
+      // Clean up removed Cloudinary photos after vehicle has persisted
+      for (const url of removedPhotos) {
+        if (isCloudinaryUrl(url)) {
+          const publicId = extractPublicIdFromUrl(url)
+          if (publicId) {
+            vehicleAPI.cleanupPhoto(vehicleId, publicId).catch(err => {
+              console.warn('[EditVehicle] Cleanup failed for old photo:', publicId, err?.response?.data || err.message)
+            })
+          }
         }
       }
-
-      if (uploadedNewUrls.length > 0) {
-        uploadedNewUrls.forEach(url => formData.append('photos', url))
-      } else {
-        processedNewPhotos.forEach(file => {
-          formData.append('photos', file)
-        })
-      }
-
-      await vehicleAPI.update(vehicle._id || vehicle.id, formData)
 
       toast.success('Vehicle updated successfully!', { id: toastId })
       onSuccess?.()
@@ -122,6 +118,8 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
       setSubmitting(false)
     }
   }
+
+  const totalPhotoCount = existingImages.length + newCloudinaryPhotos.length
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -263,20 +261,20 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="text-[10px] text-white/40 block mb-1">Registration (RC)</label>
-                <input type="file" accept="image/*,.pdf" className="input-field p-1 text-[10px]" onChange={(e) => setRcFile(e.target.files[0])} />
+                <input type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" className="input-field p-1 text-[10px]" onChange={(e) => setRcFile(e.target.files[0])} />
               </div>
               <div>
                 <label className="text-[10px] text-white/40 block mb-1">Insurance Policy</label>
-                <input type="file" accept="image/*,.pdf" className="input-field p-1 text-[10px]" onChange={(e) => setInsFile(e.target.files[0])} />
+                <input type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" className="input-field p-1 text-[10px]" onChange={(e) => setInsFile(e.target.files[0])} />
               </div>
               <div>
                 <label className="text-[10px] text-white/40 block mb-1">Pollution (PUC)</label>
-                <input type="file" accept="image/*,.pdf" className="input-field p-1 text-[10px]" onChange={(e) => setPucFile(e.target.files[0])} />
+                <input type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" className="input-field p-1 text-[10px]" onChange={(e) => setPucFile(e.target.files[0])} />
               </div>
             </div>
           </div>
 
-          {/* Existing images */}
+          {/* Existing photos — owner can trash individual ones */}
           {existingImages.length > 0 && (
             <div>
               <label className="label">Current Photos</label>
@@ -294,29 +292,27 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
                   </div>
                 ))}
               </div>
+              <p className="text-[10px] text-white/30 mt-1">
+                {existingImages.length} photo{existingImages.length !== 1 ? 's' : ''} kept · hover to remove
+              </p>
             </div>
           )}
 
-          {/* Upload new photos */}
+          {/* Upload new photos via Cloudinary */}
           <div>
-            <label className="label">Add Photos</label>
-            <label
-              htmlFor="edit-images"
-              className="flex flex-col items-center gap-1.5 border-2 border-dashed border-white/10 rounded-xl p-4 cursor-pointer hover:border-white/20 bg-surface-2 transition text-center"
-            >
-              <FiUpload className="text-white/30 text-lg" />
-              <span className="text-xs text-white/40">
-                {newFiles.length > 0 ? `${newFiles.length} new photo(s) selected` : 'Upload additional photos'}
-              </span>
-              <input
-                id="edit-images"
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => setNewFiles(Array.from(e.target.files))}
-              />
-            </label>
+            <label className="label">Add New Photos</label>
+            <VehiclePhotoUploader
+              vehicleId={vehicleId}
+              onChange={setNewCloudinaryPhotos}
+              minPhotos={0}
+              maxPhotos={Math.max(0, 10 - existingImages.length)}
+              disabled={submitting}
+            />
+            {totalPhotoCount > 0 && totalPhotoCount < 3 && (
+              <p className="text-yellow-400 text-[10px] mt-1">
+                At least 3 photos required total ({totalPhotoCount} so far)
+              </p>
+            )}
           </div>
 
           <div className="flex gap-3 pt-3">
