@@ -933,7 +933,7 @@ export default function OwnerDashboard() {
                               <div className="sm:w-48 h-40 sm:h-auto bg-surface-2 relative shrink-0">
                                 {(v.photos?.[0] || v.images?.[0]) ? (
                                   <img
-                                    src={getImageUrl(v.photos?.[0] || v.images?.[0])}
+                                    src={getImageUrl(v.photos?.[0] || v.images?.[0], 'card')}
                                     alt={v.name}
                                     onError={(e) => {
                                       e.target.onerror = null;
@@ -1111,7 +1111,7 @@ export default function OwnerDashboard() {
                               {/* Vehicle thumbnail */}
                               <div className="w-16 h-16 bg-surface-2 rounded-xl flex items-center justify-center shrink-0 overflow-hidden">
                                 {veh?.images?.[0] ? (
-                                  <img src={getImageUrl(veh.images[0])} alt="" className="w-full h-full object-cover" />
+                                  <img src={getImageUrl(veh.images[0], 'thumb')} alt="" className="w-full h-full object-cover" />
                                 ) : b.vehicleType === 'scooty' ? (
                                   <RiEBikeLine className="text-brand text-xl" />
                                 ) : (

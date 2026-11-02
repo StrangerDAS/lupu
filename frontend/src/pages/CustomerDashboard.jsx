@@ -1255,7 +1255,7 @@ export default function CustomerDashboard() {
                             <Link to={`/vehicles/${v._id}`} className="block space-y-3">
                               <div className="w-full aspect-video rounded-xl bg-surface-2 overflow-hidden relative">
                                 {v.images?.[0] ? (
-                                  <img src={getImageUrl(v.images[0])} alt={v.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                                  <img src={getImageUrl(v.images[0], 'card')} alt={v.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center">
                                     <Icon className="text-white/10 text-4xl" />

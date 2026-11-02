@@ -20,7 +20,7 @@
  */
 import { useState, useRef, useCallback } from 'react'
 import { FiUploadCloud, FiX, FiRefreshCw, FiCheck, FiAlertCircle } from 'react-icons/fi'
-import { uploadSingleVehiclePhoto } from '../utils/cloudinaryUpload'
+import { uploadSingleVehiclePhoto, requestBatchUploadSignatures } from '../utils/cloudinaryUpload'
 
 const STATUS = {
   PENDING: 'pending',
@@ -32,7 +32,7 @@ const STATUS = {
 
 const MAX_FILE_SIZE_MB = 25
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
-const CONCURRENCY = 3
+const CONCURRENCY = 2 // Tuned for mobile cellular uplink stability
 
 export default function VehiclePhotoUploader({
   vehicleId,
@@ -44,9 +44,16 @@ export default function VehiclePhotoUploader({
 }) {
   const [photos, setPhotos] = useState([]) // Array of photo state objects
   const fileInputRef = useRef(null)
-  const uploadQueueRef = useRef([]) // pending indexes to upload
+  const uploadQueueRef = useRef([]) // pending items to upload
   const activeUploadsRef = useRef(0) // current active upload count
   const photosRef = useRef([]) // ref mirror to avoid stale closure issues
+  const sessionTempIdRef = useRef(null)
+
+  // Ensure all photos in this form session share the same folder if vehicleId is not yet created
+  if (!sessionTempIdRef.current) {
+    sessionTempIdRef.current = vehicleId || `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  }
+  const effectiveVehicleId = vehicleId || sessionTempIdRef.current
 
   // Keep ref in sync
   photosRef.current = photos
@@ -69,19 +76,20 @@ export default function VehiclePhotoUploader({
 
   const startUpload = useCallback(async (photoQueueItem) => {
     activeUploadsRef.current++
-    const { id: photoId, file, index } = photoQueueItem
+    const { id: photoId, file, index, sigParams } = photoQueueItem
 
     updatePhoto(photoId, { status: STATUS.RESIZING, progress: 0 })
 
     try {
       const result = await uploadSingleVehiclePhoto(
         file,
-        vehicleId || `tmp_${Date.now()}`,
+        effectiveVehicleId,
         index,
         {
+          sigParams,
           onProgress: (pct) => {
             updatePhoto(photoId, {
-              status: pct < 10 ? STATUS.RESIZING : STATUS.UPLOADING,
+              status: pct < 15 ? STATUS.RESIZING : STATUS.UPLOADING,
               progress: pct,
             })
           },
@@ -100,7 +108,7 @@ export default function VehiclePhotoUploader({
       activeUploadsRef.current--
       drainQueue()
     }
-  }, [vehicleId, updatePhoto])
+  }, [effectiveVehicleId, updatePhoto])
 
   function drainQueue() {
     while (activeUploadsRef.current < CONCURRENCY && uploadQueueRef.current.length > 0) {
@@ -109,7 +117,7 @@ export default function VehiclePhotoUploader({
     }
   }
 
-  const handleFilesSelected = useCallback((files) => {
+  const handleFilesSelected = useCallback(async (files) => {
     if (disabled) return
     const currentCount = photosRef.current.length
     const remaining = maxPhotos - currentCount
@@ -125,9 +133,10 @@ export default function VehiclePhotoUploader({
       const key = `${file.name}_${file.size}`
       if (existingKeys.has(key)) continue
 
-      // Type check
-      const type = file.type.toLowerCase()
-      if (!ALLOWED_TYPES.some(t => type === t || type.startsWith('image/'))) continue
+      // Type check (support MIME types and common camera extensions)
+      const type = (file.type || '').toLowerCase()
+      const extMatch = /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || '')
+      if (!ALLOWED_TYPES.some(t => type === t || type.startsWith('image/')) && !extMatch) continue
 
       // Size check
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) continue
@@ -155,12 +164,21 @@ export default function VehiclePhotoUploader({
       return next
     })
 
-    // Queue uploads
-    for (const photo of newPhotoObjects) {
-      uploadQueueRef.current.push({ id: photo.id, file: photo.file, index: photo.index })
+    // Batch pre-fetch signatures in 1 single network request over mobile connection
+    const batchSigs = await requestBatchUploadSignatures(effectiveVehicleId, newFiles.length)
+
+    // Queue uploads with pre-obtained signatures
+    for (let i = 0; i < newPhotoObjects.length; i++) {
+      const photo = newPhotoObjects[i]
+      uploadQueueRef.current.push({
+        id: photo.id,
+        file: photo.file,
+        index: photo.index,
+        sigParams: batchSigs?.[i] || null,
+      })
     }
     drainQueue()
-  }, [disabled, maxPhotos, startUpload])
+  }, [disabled, maxPhotos, effectiveVehicleId, startUpload])
 
   const handleDrop = useCallback((e) => {
     e.preventDefault()
@@ -178,15 +196,21 @@ export default function VehiclePhotoUploader({
       const photo = prev.find(p => p.id === id)
       if (photo?.previewUrl) URL.revokeObjectURL(photo.previewUrl)
       const next = prev.filter(p => p.id !== id)
-      // Re-index remaining photos
       notifyParent(next)
       return next
     })
   }
 
   const retryPhoto = (id) => {
+    const photo = photosRef.current.find(p => p.id === id)
+    if (!photo) return
     updatePhoto(id, { status: STATUS.PENDING, progress: 0, errorMsg: null })
-    uploadQueueRef.current.unshift(id)
+    uploadQueueRef.current.unshift({
+      id: photo.id,
+      file: photo.file,
+      index: photo.index,
+      sigParams: null, // will request fresh signature
+    })
     drainQueue()
   }
 
@@ -194,6 +218,9 @@ export default function VehiclePhotoUploader({
   const errorCount = photos.filter(p => p.status === STATUS.ERROR).length
   const uploadingCount = photos.filter(p => p.status === STATUS.UPLOADING || p.status === STATUS.RESIZING).length
   const canAddMore = photos.length < maxPhotos && !disabled
+  const overallProgress = photos.length > 0
+    ? Math.round(photos.reduce((sum, p) => sum + (p.progress || 0), 0) / photos.length)
+    : 0
 
   return (
     <div className={`space-y-3 ${className}`}>
@@ -210,19 +237,35 @@ export default function VehiclePhotoUploader({
             <span className="text-white/70 font-medium">Click to select</span> or drag &amp; drop
           </div>
           <div className="text-[10px] text-white/30">
-            JPEG · PNG · WEBP · up to {MAX_FILE_SIZE_MB}MB · max {maxPhotos} photos
+            JPEG · PNG · WEBP · HEIC · auto-compressed for fast upload
           </div>
           <input
             ref={fileInputRef}
             id="cloudinary-photo-input"
             type="file"
-            accept="image/*"
+            accept="image/*,.heic,.heif"
             multiple
             className="hidden"
             onChange={handleInputChange}
             disabled={disabled}
           />
         </label>
+      )}
+
+      {/* Overall Progress Bar during active upload */}
+      {uploadingCount > 0 && (
+        <div className="space-y-1 bg-surface-2 p-2.5 rounded-lg border border-brand/20">
+          <div className="flex justify-between text-[11px] text-white/70">
+            <span className="text-brand font-medium animate-pulse">Uploading photos ({doneCount}/{photos.length})…</span>
+            <span className="font-semibold text-brand">{overallProgress}%</span>
+          </div>
+          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-brand transition-all duration-200 rounded-full"
+              style={{ width: `${overallProgress}%` }}
+            />
+          </div>
+        </div>
       )}
 
       {/* Status summary */}

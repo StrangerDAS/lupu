@@ -281,7 +281,7 @@ export default function EditVehicleModal({ vehicle, onClose, onSuccess }) {
               <div className="grid grid-cols-3 gap-2">
                 {existingImages.map((url, i) => (
                   <div key={i} className="relative group aspect-video rounded-lg overflow-hidden bg-surface-2 border border-white/5">
-                    <img src={getImageUrl(url)} alt={`Vehicle ${i + 1}`} className="w-full h-full object-cover" />
+                    <img src={getImageUrl(url, 'thumb')} alt={`Vehicle ${i + 1}`} className="w-full h-full object-cover" />
                     <button
                       type="button"
                       onClick={() => removeExistingImage(i)}

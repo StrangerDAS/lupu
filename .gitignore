@@ -46,3 +46,6 @@ backend/test-*.js
 backend/test-*.mjs
 scratch/
 .venv/
+
+# Firebase configuration
+*google-services.json

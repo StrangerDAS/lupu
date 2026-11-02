@@ -80,6 +80,26 @@ export function generateVehiclePhotoSignature(vehicleId, publicIdPrefix = '') {
 }
 
 /**
+ * Generate a batch of short-lived signed upload credentials for multiple photos.
+ * Avoids N separate HTTP round trips over high-latency mobile networks.
+ *
+ * @param {string} vehicleId
+ * @param {number} count - number of signatures to generate (max 10)
+ * @returns {Array<{ signature, timestamp, cloudName, apiKey, folder, publicId, tags, photoIndex }>}
+ */
+export function generateVehiclePhotoBatchSignatures(vehicleId, count = 1) {
+  const safeCount = Math.min(Math.max(1, parseInt(count, 10) || 1), 10)
+  const signatures = []
+  for (let i = 0; i < safeCount; i++) {
+    signatures.push({
+      ...generateVehiclePhotoSignature(vehicleId, String(i)),
+      photoIndex: i,
+    })
+  }
+  return signatures
+}
+
+/**
  * Delete a single Cloudinary asset by public_id.
  * Only call this after confirming the image is no longer referenced in MongoDB.
  *

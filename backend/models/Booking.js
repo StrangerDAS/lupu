@@ -81,7 +81,19 @@ const bookingSchema = new mongoose.Schema(
       enum: ['Online Payment', 'Pending', 'Paid', 'Failed', 'Refunded', 'not_integrated', 'customer_marked_paid', 'pending', 'paid'],
       default: 'Pending',
     },
-    paymentMethod: { type: String, default: 'none' },
+    paymentMethod: {
+      type: String,
+      enum: ['cash', 'online', 'none'],
+      default: 'none',
+    },
+    pickupLocation: {
+      type: String,
+      default: 'Dibrugarh University Campus',
+    },
+    returnLocation: {
+      type: String,
+      default: 'Dibrugarh University Campus',
+    },
     ownerPaymentStatus: {
       type: String,
       enum: ['Pending Pickup', 'Pending Owner Payment', 'Paid To Owner', 'Completed'],

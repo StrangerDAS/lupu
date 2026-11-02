@@ -36,6 +36,7 @@ import { rateLimiter } from './middleware/rateLimiter.js'
 import { verifyFirebaseToken, requireMongoUser } from './middleware/authMiddleware.js'
 import {
   generateVehiclePhotoSignature,
+  generateVehiclePhotoBatchSignatures,
   deleteCloudinaryAsset,
   extractPublicIdFromUrl,
   VEHICLE_PHOTOS_FOLDER,
@@ -504,22 +505,31 @@ app.get('/api/vehicles/:id', async (req, res) => {
 // this server. The API Secret is never sent to the client.
 app.post('/api/vehicles/upload-signature', verifyFirebaseToken, requireMongoUser, authorize('owner', 'admin', 'user'), async (req, res) => {
   try {
-    const { vehicleId, photoIndex } = req.body
+    const { vehicleId, photoIndex, count } = req.body
 
     // Validate input
     if (!vehicleId || typeof vehicleId !== 'string' || vehicleId.length < 3) {
       return res.status(400).json({ message: 'vehicleId is required (min 3 chars)' })
     }
-    const idx = photoIndex !== undefined ? String(photoIndex) : undefined
 
     // Ensure Cloudinary is configured (env vars present)
-    let sig
     try {
-      sig = generateVehiclePhotoSignature(vehicleId, idx)
+      ensureCloudinaryConfigured()
     } catch (configErr) {
       console.error('[Cloudinary] Configuration error:', configErr.message)
       return res.status(503).json({ message: 'Image upload service is not configured. Contact support.' })
     }
+
+    // Batch mode: client requests multiple signatures in a single network round-trip
+    if (count !== undefined && parseInt(count, 10) > 1) {
+      const batchSignatures = generateVehiclePhotoBatchSignatures(vehicleId, count)
+      console.log(`[Cloudinary] Batch signatures (${batchSignatures.length}) issued for vehicle=${vehicleId} owner=${req.user.email}`)
+      return res.json({ signatures: batchSignatures })
+    }
+
+    // Single signature mode (backward compatible)
+    const idx = photoIndex !== undefined ? String(photoIndex) : undefined
+    const sig = generateVehiclePhotoSignature(vehicleId, idx)
 
     // Log for audit (never log the secret itself)
     console.log(`[Cloudinary] Signature issued for vehicle=${vehicleId} owner=${req.user.email} idx=${idx ?? 'auto'}`)
@@ -613,9 +623,12 @@ app.post('/api/vehicles', verifyFirebaseToken, requireMongoUser, authorize('owne
     const pucFile = req.files?.['PUC']?.[0]
     const photoFiles = req.files?.['photos'] || []
 
-    const rcUrl = await uploadDocumentFileToCloud(rcFile, req.body.RC || req.body.documents?.RC)
-    const insUrl = await uploadDocumentFileToCloud(insFile, req.body.Insurance || req.body.documents?.Insurance)
-    const pucUrl = await uploadDocumentFileToCloud(pucFile, req.body.PUC || req.body.documents?.PUC)
+    // Parallelize document uploads to Cloudinary to eliminate sequential network latency
+    const [rcUrl, insUrl, pucUrl] = await Promise.all([
+      uploadDocumentFileToCloud(rcFile, req.body.RC || req.body.documents?.RC),
+      uploadDocumentFileToCloud(insFile, req.body.Insurance || req.body.documents?.Insurance),
+      uploadDocumentFileToCloud(pucFile, req.body.PUC || req.body.documents?.PUC),
+    ])
 
     const uploadedFileUrls = photoFiles.map(f => `/uploads/${f.filename}`)
     // bodyPhotos are the Firebase Storage https:// URLs sent as strings
@@ -737,9 +750,12 @@ app.put('/api/vehicles/:id', verifyFirebaseToken, requireMongoUser, authorize('o
     const pucFile = req.files?.['PUC']?.[0]
     const photoFiles = req.files?.['photos'] || []
 
-    const rcUrl = await uploadDocumentFileToCloud(rcFile, req.body.RC || req.body.documents?.RC || vehicle.documents?.RC)
-    const insUrl = await uploadDocumentFileToCloud(insFile, req.body.Insurance || req.body.documents?.Insurance || vehicle.documents?.Insurance)
-    const pucUrl = await uploadDocumentFileToCloud(pucFile, req.body.PUC || req.body.documents?.PUC || vehicle.documents?.PUC)
+    // Parallelize document uploads to Cloudinary to eliminate sequential network latency
+    const [rcUrl, insUrl, pucUrl] = await Promise.all([
+      uploadDocumentFileToCloud(rcFile, req.body.RC || req.body.documents?.RC || vehicle.documents?.RC),
+      uploadDocumentFileToCloud(insFile, req.body.Insurance || req.body.documents?.Insurance || vehicle.documents?.Insurance),
+      uploadDocumentFileToCloud(pucFile, req.body.PUC || req.body.documents?.PUC || vehicle.documents?.PUC),
+    ])
     
     const uploadedFileUrls = photoFiles.map(f => `/uploads/${f.filename}`)
     // bodyPhotos = the photos the client wants to KEEP (existing URLs) + any new local uploads
@@ -1242,6 +1258,13 @@ app.patch('/api/bookings/:id/status', verifyFirebaseToken, requireMongoUser, asy
     if (['accepted', 'rejected', 'active', 'completed'].includes(status)) {
       if (!isOwner && !isAdmin) {
         return res.status(403).json({ message: 'Only the vehicle owner or admin can update this booking status.' })
+      }
+    }
+
+    if (['accepted', 'rejected'].includes(status)) {
+      const current = (booking.status || '').toLowerCase().trim()
+      if (!['pending', 'requested'].includes(current)) {
+        return res.status(400).json({ message: `Cannot ${status} a booking that is already "${booking.status}".` })
       }
     }
 
@@ -2187,18 +2210,6 @@ app.post('/api/payments/record-offline', verifyFirebaseToken, requireMongoUser, 
       })
     }
 
-    const parsedAmount = Number(amount)
-    if (!isFinite(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({ message: 'Amount must be a positive number.' })
-    }
-    // Enforce max 2 decimal places (INR paise)
-    if (Math.round(parsedAmount * 100) !== parsedAmount * 100) {
-      return res.status(400).json({ message: 'Amount cannot have more than 2 decimal places.' })
-    }
-    if (parsedAmount > 10_00_000) {
-      return res.status(400).json({ message: 'Amount cannot exceed ₹10,00,000 per record.' })
-    }
-
     // ── Fetch and validate booking ──────────────────────────
     const booking = await Booking.findById(bookingId).lean()
     if (!booking) {
@@ -2212,13 +2223,54 @@ app.post('/api/payments/record-offline', verifyFirebaseToken, requireMongoUser, 
       })
     }
 
-    // Rule 3/4: Booking must be in a valid state
-    const validStatuses = ['accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed', 'completed']
+    // Rule 3/4: Booking must be in a valid state (accepted or active)
+    const validStatuses = ['accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed']
     const bStatus = (booking.status || '').toLowerCase().trim()
     if (!validStatuses.includes(bStatus)) {
       return res.status(400).json({
-        message: `Cannot record a payment for a booking in "${booking.status}" status. Booking must be accepted or active.`
+        message: `Cannot record payment for a booking in "${booking.status}" status. Booking must be accepted or active.`
       })
+    }
+
+    // Rule 4b: Prevent duplicate payment records and repeated confirmations
+    const currentBookingPayStatus = (booking.paymentStatus || '').toLowerCase()
+    if (paymentPurpose === 'rental' && currentBookingPayStatus === 'paid') {
+      return res.status(400).json({
+        message: 'This booking has already been marked as paid. Duplicate payment confirmation is blocked.'
+      })
+    }
+
+    // Authoritative amount calculation: do not trust a client-supplied amount
+    let parsedAmount = Number(amount)
+    const authoritativeRentalAmount = Number(booking.totalAmount || booking.price || 0)
+    if (paymentPurpose === 'rental' && authoritativeRentalAmount > 0) {
+      parsedAmount = authoritativeRentalAmount
+    } else {
+      if (!isFinite(parsedAmount) || parsedAmount <= 0) {
+        return res.status(400).json({ message: 'Amount must be a positive number.' })
+      }
+      if (Math.round(parsedAmount * 100) !== parsedAmount * 100) {
+        return res.status(400).json({ message: 'Amount cannot have more than 2 decimal places.' })
+      }
+      if (parsedAmount > 10_00_000) {
+        return res.status(400).json({ message: 'Amount cannot exceed ₹10,00,000 per record.' })
+      }
+    }
+
+    // Duplicate check for rental payments
+    if (paymentPurpose === 'rental') {
+      const existingRecordedPayment = await Payment.findOne({
+        bookingId: booking._id,
+        paymentPurpose: 'rental',
+        status: 'recorded',
+      })
+      if (existingRecordedPayment) {
+        return res.status(409).json({
+          message: 'A cash rental payment has already been recorded for this booking.',
+          existingPaymentId: existingRecordedPayment._id,
+          referenceId: existingRecordedPayment.referenceId,
+        })
+      }
     }
 
     // Rule 10: Idempotency — block duplicate within 60 seconds (same booking + purpose + amount)
@@ -2271,7 +2323,6 @@ app.post('/api/payments/record-offline', verifyFirebaseToken, requireMongoUser, 
 
     // ── Update booking-level payment status summary ─────────
     // Only upgrade — don't downgrade if already 'paid'
-    const currentBookingPayStatus = (booking.paymentStatus || '').toLowerCase()
     if (!['paid'].includes(currentBookingPayStatus)) {
       await Booking.findByIdAndUpdate(booking._id, {
         paymentStatus: 'paid',
