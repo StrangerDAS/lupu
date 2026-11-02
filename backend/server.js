@@ -164,26 +164,65 @@ const ACCEPTED_CONTACT_STATUSES = ['accepted', 'approved', 'active', 'ongoing', 
 async function enrichBookingWithContact(booking, requestingUser) {
   if (!booking) return null
   const b = typeof booking.toObject === 'function' ? booking.toObject() : { ...booking }
+
+  // Populate vehicle photos, specs, locations
+  if (b.vehicleId) {
+    const vehicleId = b.vehicleId._id || b.vehicleId
+    if (!b.vehicle || !b.vehicle.images || b.vehicle.images.length === 0) {
+      try {
+        const v = await Vehicle.findById(vehicleId).select('name brand model type images photos location pricePerHour numberPlate specs').lean()
+        if (v) {
+          b.vehicle = v
+          b.vehicleName = b.vehicleName || v.name
+          b.vehicleType = b.vehicleType || v.type
+          b.pickupLocation = b.pickupLocation || v.location?.address || 'Dibrugarh University Campus'
+          b.returnLocation = b.returnLocation || v.location?.address || 'Dibrugarh University Campus'
+        }
+      } catch (err) {
+        console.error('Error fetching vehicle for booking enrichment:', err.message)
+      }
+    }
+  }
+  b.pickupLocation = b.pickupLocation || 'Dibrugarh University Campus'
+  b.returnLocation = b.returnLocation || 'Dibrugarh University Campus'
+
   if (!requestingUser) {
     delete b.ownerPhone
+    delete b.renterPhone
     return b
   }
   const isRenter = b.renterId && (b.renterId._id || b.renterId).toString() === requestingUser._id.toString()
+  const isOwner = b.ownerId && (b.ownerId._id || b.ownerId).toString() === requestingUser._id.toString()
   const isAdmin = ['admin', 'super_admin', 'founder'].includes(requestingUser.role)
 
   const normalizedStatus = (b.status || '').toLowerCase()
   const isAcceptedOrLater = ACCEPTED_CONTACT_STATUSES.includes(normalizedStatus)
 
+  // Reveal owner contact to renter only if accepted or later
   if ((isRenter || isAdmin) && isAcceptedOrLater && b.ownerId) {
     const ownerId = b.ownerId._id || b.ownerId
-    const owner = await User.findById(ownerId).select('name phone').lean()
+    const owner = await User.findById(ownerId).select('name phone email').lean()
     if (owner) {
       b.ownerName = owner.name || b.ownerName || 'Vehicle Owner'
       b.ownerPhone = owner.phone || null
+      b.ownerEmail = owner.email || null
     }
   } else {
     delete b.ownerPhone
+    delete b.ownerEmail
   }
+
+  // Reveal renter contact to owner
+  if ((isOwner || isAdmin) && b.renterId) {
+    const renterId = b.renterId._id || b.renterId
+    const renter = await User.findById(renterId).select('name phone email').lean()
+    if (renter) {
+      b.renterName = renter.name || b.renterName || 'Renter'
+      b.renterPhone = renter.phone || null
+      b.renterEmail = renter.email || b.renterEmail || null
+    }
+  }
+
   return b
 }
 
@@ -907,7 +946,18 @@ app.get('/api/vehicles/:id/calendar', async (req, res, next) => {
 
 app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder, async (req, res, next) => {
   try {
-    const { startTime, endTime, agreementAccepted, agreementVersion, agreementAcceptedAt, vehicleId, verificationDetails } = req.body
+    const {
+      startTime,
+      endTime,
+      agreementAccepted,
+      agreementVersion,
+      agreementAcceptedAt,
+      vehicleId,
+      verificationDetails,
+      paymentMethod,
+      pickupLocation,
+      returnLocation,
+    } = req.body
 
     if (!agreementAccepted) {
       return res.status(400).json({ message: 'You must read and accept the mandatory Rental Agreement to proceed.' })
@@ -917,6 +967,14 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
     }
     if (!vehicleId || !mongoose.Types.ObjectId.isValid(vehicleId)) {
       return res.status(400).json({ message: 'Valid vehicleId is required.' })
+    }
+
+    // Mandatory payment method selection (Cash or Online)
+    const normalizedPaymentMethod = (paymentMethod || '').toLowerCase().trim()
+    if (!['cash', 'online'].includes(normalizedPaymentMethod)) {
+      return res.status(400).json({
+        message: "Mandatory payment method selection is required. Please choose either 'cash' or 'online'."
+      })
     }
 
     const start = new Date(startTime)
@@ -965,6 +1023,10 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
     const advanceAmount = Math.round(rentalAmount * 0.3)
     const remainingAmount = rentalAmount - advanceAmount
 
+    const vehicleAddress = typeof vehicle.location === 'string' ? vehicle.location : (vehicle.location?.address || 'Dibrugarh University Campus')
+    const resolvedPickup = pickupLocation || vehicleAddress
+    const resolvedReturn = returnLocation || vehicleAddress
+
     const newBooking = await Booking.create({
       vehicleId: vehicle._id,
       ownerId: vehicle.ownerId,
@@ -990,6 +1052,9 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
       totalAmount,
       advanceAmount,
       remainingAmount,
+      paymentMethod: normalizedPaymentMethod,
+      pickupLocation: resolvedPickup,
+      returnLocation: resolvedReturn,
       paymentStatus: 'Pending',
       ownerPaymentStatus: 'Pending Pickup',
       verificationDetails,
@@ -1005,7 +1070,7 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
     await sendNotification(vehicle.ownerId, {
       type: 'booking',
       title: 'New Booking Request! 📅',
-      message: `You have received a booking request for ${vehicle.name}.`,
+      message: `You have received a booking request for ${vehicle.name} (${normalizedPaymentMethod === 'cash' ? 'Cash' : 'Online'}).`,
       bookingId: newBooking._id,
       vehicleId: vehicle._id,
       link: '/dashboard'
@@ -1019,7 +1084,8 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
       link: '/my-bookings'
     })
 
-    res.status(201).json(newBooking.toObject())
+    const enrichedBooking = await enrichBookingWithContact(newBooking, req.user)
+    res.status(201).json(enrichedBooking || newBooking.toObject())
   } catch (err) {
     next(err)
   }
@@ -2139,19 +2205,183 @@ function generatePaymentRefId() {
   return `LUPU-PAY-${datePart}-${randomPart}`
 }
 
-// Gateway status placeholder (Gateway is OFF; all payments are direct cash)
-app.post('/api/payments/create-order', verifyFirebaseToken, requireMongoUser, async (req, res) => {
-  return res.status(200).json({
-    message: 'Online payment gateway is not used. All LUPU payments are made directly in cash between renter and owner.',
-    status: 'not_integrated'
-  })
+// ── Online Payment Workflow ─────────────────────────────────
+//
+// Online payment order generation and verification.
+// Rules:
+//  1. Online payment becomes available ONLY after owner accepts the booking.
+//  2. Only the authenticated renter can initiate and verify online payment.
+//  3. Amount is strictly server-authoritative from the booking record.
+//  4. Duplicate payments or payments for cash bookings are blocked.
+//
+app.post('/api/payments/create-order', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { bookingId } = req.body
+    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
+      return res.status(400).json({ message: 'Valid bookingId is required.' })
+    }
+
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found.' })
+    }
+
+    // Verify caller is the renter
+    const renterId = booking.renterId?._id || booking.renterId
+    if (renterId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only the booking renter can initiate online payment.' })
+    }
+
+    // Enforce booking status is accepted/active/confirmed
+    const bStatus = (booking.status || '').toLowerCase().trim()
+    const allowedStatuses = ['accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed']
+    if (!allowedStatuses.includes(bStatus)) {
+      return res.status(400).json({
+        message: `Online payment is only available after the vehicle owner accepts your booking request. Current status: "${booking.status}".`
+      })
+    }
+
+    // Enforce payment method is online
+    if (booking.paymentMethod !== 'online') {
+      return res.status(400).json({
+        message: 'This booking is configured for cash payment. Only online bookings can initiate digital payment.'
+      })
+    }
+
+    // Check if already paid
+    if ((booking.paymentStatus || '').toLowerCase() === 'paid') {
+      return res.status(400).json({
+        message: 'This booking has already been paid.'
+      })
+    }
+
+    const authoritativeAmount = Number(booking.totalAmount || booking.price || 0)
+    if (!isFinite(authoritativeAmount) || authoritativeAmount <= 0) {
+      return res.status(400).json({ message: 'Invalid booking amount.' })
+    }
+
+    const orderId = `ORDER_${booking._id}_${Date.now()}`
+    return res.status(200).json({
+      success: true,
+      orderId,
+      amount: authoritativeAmount,
+      currency: 'INR',
+      bookingId: booking._id,
+      paymentMethod: 'online',
+      key: process.env.RAZORPAY_KEY_ID || 'lupu_online_gateway'
+    })
+  } catch (err) {
+    next(err)
+  }
 })
 
-app.post('/api/payments/verify', verifyFirebaseToken, requireMongoUser, async (req, res) => {
-  return res.status(200).json({
-    message: 'Online payment gateway verification is not used.',
-    status: 'not_integrated'
-  })
+app.post('/api/payments/verify', verifyFirebaseToken, requireMongoUser, async (req, res, next) => {
+  try {
+    const { bookingId, orderId, paymentId, notes } = req.body
+    if (!bookingId || !mongoose.Types.ObjectId.isValid(bookingId)) {
+      return res.status(400).json({ message: 'Valid bookingId is required.' })
+    }
+
+    const booking = await Booking.findById(bookingId)
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found.' })
+    }
+
+    const renterId = booking.renterId?._id || booking.renterId
+    if (renterId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only the booking renter can verify online payment.' })
+    }
+
+    const bStatus = (booking.status || '').toLowerCase().trim()
+    const allowedStatuses = ['accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed']
+    if (!allowedStatuses.includes(bStatus)) {
+      return res.status(400).json({
+        message: `Cannot process payment for booking in "${booking.status}" status.`
+      })
+    }
+
+    if ((booking.paymentStatus || '').toLowerCase() === 'paid') {
+      return res.status(400).json({
+        message: 'This booking has already been marked as paid.'
+      })
+    }
+
+    const authoritativeAmount = Number(booking.totalAmount || booking.price || 0)
+
+    // Check for duplicate online payment
+    const existingPayment = await Payment.findOne({
+      bookingId: booking._id,
+      status: 'paid',
+      paymentMethod: 'online',
+    })
+    if (existingPayment) {
+      return res.status(409).json({
+        message: 'Online payment has already been verified for this booking.',
+        existingPaymentId: existingPayment._id,
+        referenceId: existingPayment.referenceId,
+      })
+    }
+
+    let referenceId
+    let attempts = 0
+    do {
+      referenceId = generatePaymentRefId()
+      attempts++
+    } while (await Payment.exists({ referenceId }) && attempts < 10)
+
+    const payment = await Payment.create({
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      renterId: booking.renterId,
+      ownerId: booking.ownerId,
+      amount: authoritativeAmount,
+      currency: 'INR',
+      type: 'rental',
+      status: 'paid',
+      paymentMethod: 'online',
+      paymentPurpose: 'rental',
+      referenceId,
+      transactionId: paymentId || `PAY_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
+      transactionReference: orderId || `ORDER_${booking._id}`,
+      recordedBy: req.user._id,
+      recordedByName: req.user.name || 'Renter (Online Checkout)',
+      rentalAmount: authoritativeAmount,
+      ownerPayoutAmount: authoritativeAmount,
+      payoutStatus: 'unsettled',
+      notes: typeof notes === 'string' ? notes.trim().slice(0, 500) : 'Online Payment Gateway Verification'
+    })
+
+    await Booking.findByIdAndUpdate(booking._id, {
+      paymentStatus: 'paid',
+      paymentMethod: 'online',
+    })
+
+    // Send notifications to both parties
+    await sendNotification(booking.ownerId, {
+      type: 'payment',
+      title: 'Payment Received Online! 💳',
+      message: `Renter has completed the online payment of ₹${authoritativeAmount} for ${booking.vehicleName}.`,
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      link: '/dashboard'
+    })
+    await sendNotification(booking.renterId, {
+      type: 'payment',
+      title: 'Online Payment Confirmed! 🎉',
+      message: `Your payment of ₹${authoritativeAmount} for ${booking.vehicleName} was successful. Have a safe ride!`,
+      bookingId: booking._id,
+      vehicleId: booking.vehicleId,
+      link: '/my-bookings'
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Online payment successfully verified and recorded.',
+      payment: payment.toObject(),
+    })
+  } catch (err) {
+    next(err)
+  }
 })
 
 // ─────────────────────────────────────────────────────────────

@@ -470,6 +470,7 @@ export default function OwnerDashboard() {
   const [inspectBooking, setInspectBooking] = useState(null)
   const [requestInfoText, setRequestInfoText] = useState('')
   const [showingRequestInput, setShowingRequestInput] = useState(false)
+  const [selectedBookingDetails, setSelectedBookingDetails] = useState(null)
 
   // Fetch owner's vehicles from Express API
   const loadOwnerVehicles = async () => {
@@ -524,7 +525,7 @@ export default function OwnerDashboard() {
     const fetchBookings = async () => {
       try {
         const { data } = await bookingAPI.getAll()
-        const ownerBookings = (data.bookings || []).filter(b => b.ownerId === user._id)
+        const ownerBookings = (data.bookings || []).filter(b => (b.ownerId?._id || b.ownerId)?.toString() === user._id?.toString())
         const adapted = ownerBookings.map(adaptBooking)
         setBookings(adapted)
         setCompletedBookings(adapted.filter(b => ['completed', 'fully_paid'].includes(b.bookingStatus)))
@@ -623,10 +624,42 @@ export default function OwnerDashboard() {
       })
       toast.success(data.message || 'Payment Received! 🎉')
       setBookings(prev => prev.map(b => (b._id === bookingId || b.bookingId === bookingId) ? { ...b, paymentStatus: 'paid' } : b))
+      if (selectedBookingDetails && (selectedBookingDetails._id === bookingId || selectedBookingDetails.bookingId === bookingId)) {
+        setSelectedBookingDetails(prev => ({ ...prev, paymentStatus: 'paid' }))
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to confirm payment')
     } finally {
       setConfirmingPaymentId(null)
+    }
+  }
+
+  const handleAcceptBooking = async (booking) => {
+    const bid = booking._id || booking.bookingId
+    try {
+      await bookingAPI.updateStatus(bid, 'accepted')
+      toast.success('Booking accepted successfully! 🎉')
+      setBookings(prev => prev.map(b => (b._id === bid || b.bookingId === bid) ? { ...b, bookingStatus: 'accepted', status: 'accepted' } : b))
+      if (selectedBookingDetails && (selectedBookingDetails._id === bid || selectedBookingDetails.bookingId === bid)) {
+        setSelectedBookingDetails(prev => ({ ...prev, bookingStatus: 'accepted', status: 'accepted' }))
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to accept booking')
+    }
+  }
+
+  const handleRejectBooking = async (booking) => {
+    const bid = booking._id || booking.bookingId
+    if (!confirm('Are you sure you want to decline this booking request?')) return
+    try {
+      await bookingAPI.updateStatus(bid, 'rejected')
+      toast.success('Booking declined.')
+      setBookings(prev => prev.map(b => (b._id === bid || b.bookingId === bid) ? { ...b, bookingStatus: 'rejected', status: 'rejected' } : b))
+      if (selectedBookingDetails && (selectedBookingDetails._id === bid || selectedBookingDetails.bookingId === bid)) {
+        setSelectedBookingDetails(null)
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to decline booking')
     }
   }
 
@@ -851,7 +884,8 @@ export default function OwnerDashboard() {
                             initial={{ opacity: 0, x: -12 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: i * 0.05 }}
-                            className="card p-4 flex items-center gap-4"
+                            onClick={() => setSelectedBookingDetails(b)}
+                            className="card p-4 flex items-center gap-4 hover:border-brand/40 cursor-pointer transition"
                           >
                             <div className="w-10 h-10 bg-surface-2 rounded-lg flex items-center justify-center shrink-0">
                               {b.vehicleType === 'scooty' ? (
@@ -1105,7 +1139,8 @@ export default function OwnerDashboard() {
                             initial={{ opacity: 0, y: 12 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: i * 0.05 }}
-                            className="card p-5"
+                            onClick={() => setSelectedBookingDetails(b)}
+                            className="card p-5 hover:border-brand/40 cursor-pointer transition"
                           >
                             <div className="flex flex-col sm:flex-row sm:items-start gap-4">
                               {/* Vehicle thumbnail */}
@@ -1605,6 +1640,170 @@ export default function OwnerDashboard() {
         onClose={() => setDisputeBookingId(null)}
         bookingId={disputeBookingId}
       />
+
+      {/* Owner Booking Details Modal */}
+      <AnimatePresence>
+        {selectedBookingDetails && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="card max-w-lg w-full p-6 space-y-5 border border-white/10 my-8"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                  <span className="text-[10px] text-white/40 uppercase tracking-widest font-mono">
+                    BOOKING #{String(selectedBookingDetails._id || selectedBookingDetails.bookingId || '').slice(-8).toUpperCase()}
+                  </span>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    {selectedBookingDetails.vehicleName || 'Vehicle Rental'}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setSelectedBookingDetails(null)}
+                  className="btn-ghost p-2 text-white/50 hover:text-white"
+                >
+                  <FiX size={18} />
+                </button>
+              </div>
+
+              {/* Status and Payment Method Badges */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <StatusBadge status={selectedBookingDetails.bookingStatus} />
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border ${
+                  (selectedBookingDetails.paymentStatus || '').toLowerCase() === 'paid'
+                    ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                    : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+                }`}>
+                  {(selectedBookingDetails.paymentStatus || '').toLowerCase() === 'paid' ? <FiCheckCircle /> : <FiClock />}
+                  {(selectedBookingDetails.paymentStatus || '').toLowerCase() === 'paid' ? 'Paid' : 'Payment Pending'}
+                </span>
+                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-white/10 text-white/90 border border-white/15 flex items-center gap-1.5">
+                  {selectedBookingDetails.paymentMethod === 'online' ? '💳 Online Payment' : '💵 Cash on Handover'}
+                </span>
+              </div>
+
+              {/* Renter Information Card */}
+              <div className="p-3.5 rounded-xl bg-surface-2 border border-white/5 space-y-2 text-xs">
+                <span className="text-[10px] text-brand uppercase tracking-wider font-bold">RENTER PROFILE</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-white font-semibold text-sm">{selectedBookingDetails.renterName || 'Renter'}</span>
+                  {selectedBookingDetails.renterPhone && (
+                    <a
+                      href={`tel:${selectedBookingDetails.renterPhone}`}
+                      className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 font-semibold"
+                    >
+                      <FiPhone /> Call Renter ({selectedBookingDetails.renterPhone})
+                    </a>
+                  )}
+                </div>
+                {selectedBookingDetails.renterEmail && (
+                  <p className="text-white/40">{selectedBookingDetails.renterEmail}</p>
+                )}
+                {selectedBookingDetails.verificationDetails?.collegeName && (
+                  <p className="text-white/60">🎓 College: {selectedBookingDetails.verificationDetails.collegeName}</p>
+                )}
+              </div>
+
+              {/* Rental Locations & Time Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📍 Pickup Location</span>
+                  <span className="text-white font-medium">
+                    {selectedBookingDetails.pickupLocation || 'Dibrugarh University Campus'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📍 Return Location</span>
+                  <span className="text-white font-medium">
+                    {selectedBookingDetails.returnLocation || 'Dibrugarh University Campus'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📅 Pickup Date</span>
+                  <span className="text-white font-medium">
+                    {formatDate(selectedBookingDetails.startTime)}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📅 Return Date</span>
+                  <span className="text-white font-medium">
+                    {formatDate(selectedBookingDetails.endTime)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Financial Summary */}
+              <div className="p-3.5 rounded-xl bg-surface-2 border border-white/5 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-white/70">
+                  <span>Total Rental Price:</span>
+                  <span className="font-bold text-base text-brand">
+                    ₹{selectedBookingDetails.totalPrice || selectedBookingDetails.totalAmount || 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-white/50 text-[11px] border-t border-white/5 pt-2">
+                  <span>Selected Payment Method:</span>
+                  <span className="font-semibold text-white">
+                    {selectedBookingDetails.paymentMethod === 'online' ? 'Online Payment Gateway' : 'Direct Cash on Pickup'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="space-y-2 pt-2">
+                {['under_review', 'pending', 'requested'].includes((selectedBookingDetails.bookingStatus || selectedBookingDetails.status || '').toLowerCase()) && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => handleAcceptBooking(selectedBookingDetails)}
+                      className="btn-primary py-2.5 flex items-center justify-center gap-1.5 font-bold text-sm bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      <FiCheck /> Accept Booking
+                    </button>
+                    <button
+                      onClick={() => handleRejectBooking(selectedBookingDetails)}
+                      className="btn-secondary py-2.5 flex items-center justify-center gap-1.5 font-bold text-sm text-red-400 border-red-500/20 hover:bg-red-500/10"
+                    >
+                      <FiX /> Decline
+                    </button>
+                  </div>
+                )}
+
+                {['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes((selectedBookingDetails.bookingStatus || selectedBookingDetails.status || '').toLowerCase()) &&
+                  selectedBookingDetails.paymentMethod !== 'online' &&
+                  (selectedBookingDetails.paymentStatus || '').toLowerCase() !== 'paid' && (
+                    <button
+                      onClick={() => handleConfirmPaymentReceived(selectedBookingDetails)}
+                      disabled={confirmingPaymentId === (selectedBookingDetails._id || selectedBookingDetails.bookingId)}
+                      className="btn-primary w-full py-3 flex items-center justify-center gap-2 font-bold text-sm bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-600/20"
+                    >
+                      <FiCheckCircle />
+                      {confirmingPaymentId === (selectedBookingDetails._id || selectedBookingDetails.bookingId)
+                        ? 'Confirming…'
+                        : `Confirm Cash Payment Received (₹${selectedBookingDetails.totalPrice || selectedBookingDetails.totalAmount || 0})`}
+                    </button>
+                )}
+
+                {selectedBookingDetails.paymentMethod === 'online' &&
+                  (selectedBookingDetails.paymentStatus || '').toLowerCase() !== 'paid' && (
+                    <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 flex items-center gap-2">
+                      <FiClock className="text-blue-400 shrink-0" />
+                      <span>Renter selected Online Payment. Payment status will update to Paid automatically once verified.</span>
+                    </div>
+                )}
+
+                {(selectedBookingDetails.paymentStatus || '').toLowerCase() === 'paid' && (
+                  <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 text-xs text-green-300 flex items-center gap-2 font-medium">
+                    <FiCheckCircle className="text-green-400 shrink-0" />
+                    <span>Payment Confirmed & Verified.</span>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </PageWrapper>
   )
 }

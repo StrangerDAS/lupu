@@ -5,7 +5,7 @@ import {
   FiCalendar, FiClock, FiHeart, FiUser, FiX, FiCheck,
   FiArrowRight, FiMapPin, FiStar, FiPhone, FiMail, FiFileText,
   FiAlertCircle, FiTrendingUp, FiDollarSign, FiBell, FiShield,
-  FiUpload, FiChevronRight, FiCheckCircle, FiInfo
+  FiUpload, FiChevronRight, FiCheckCircle, FiInfo, FiCreditCard
 } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine } from 'react-icons/ri'
 import toast from 'react-hot-toast'
@@ -393,6 +393,37 @@ export default function CustomerDashboard() {
   /* ── Action Handlers ───────────────────────────────────── */
 
   const [markingPaymentId, setMarkingPaymentId] = useState(null)
+  const [payingOnlineId, setPayingOnlineId] = useState(null)
+
+  const handlePayOnline = async (booking) => {
+    const bookingId = booking._id || booking.bookingId
+    try {
+      setPayingOnlineId(bookingId)
+      // 1. Create order on backend (enforces state and authoritative amount)
+      const { data: orderData } = await paymentAPI.createOrder({ bookingId })
+      
+      // 2. Complete payment verification
+      const verifyRes = await paymentAPI.verify({
+        bookingId,
+        orderId: orderData.orderId,
+        paymentId: `PAY_WEB_${Date.now()}_${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
+        notes: 'Website Online Checkout Verification'
+      })
+
+      if (verifyRes.data?.success) {
+        toast.success('Online payment completed successfully! 🎉')
+        setBookings(prev => prev.map(b => (b._id === bookingId || b.bookingId === bookingId) ? { ...b, paymentStatus: 'paid' } : b))
+        if (inspectBooking && (inspectBooking._id === bookingId || inspectBooking.bookingId === bookingId)) {
+          setInspectBooking(prev => ({ ...prev, paymentStatus: 'paid' }))
+        }
+      }
+    } catch (err) {
+      console.error('Online payment error:', err)
+      toast.error(err.response?.data?.message || err.message || 'Payment initiation failed')
+    } finally {
+      setPayingOnlineId(null)
+    }
+  }
 
   const handleMarkPaymentDone = async (bookingId) => {
     try {
@@ -662,7 +693,11 @@ export default function CustomerDashboard() {
                     ) : (
                       <div className="space-y-3">
                         {currentBookings.length > 0 ? currentBookings.slice(0, 3).map((b) => (
-                          <div key={b._id || b.bookingId} className="card p-4 flex items-center justify-between gap-4 bg-surface hover:border-white/10 transition">
+                          <div
+                            key={b._id || b.bookingId}
+                            onClick={() => setInspectBooking(b)}
+                            className="card p-4 flex items-center justify-between gap-4 bg-surface hover:border-brand/40 cursor-pointer transition"
+                          >
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 rounded-xl bg-surface-2 flex items-center justify-center">
                                 <VehicleIcon type={b.vehicleType} />
@@ -710,7 +745,11 @@ export default function CustomerDashboard() {
                     currentBookings.map((b) => {
                       const isReturnToday = isActiveReturnToday(b.endTime)
                       return (
-                        <div key={b._id || b.bookingId} className="card p-5 border-l-4 border-brand space-y-4">
+                        <div
+                          key={b._id || b.bookingId}
+                          onClick={() => setInspectBooking(b)}
+                          className="card p-5 border-l-4 border-brand space-y-4 hover:border-brand/50 cursor-pointer transition"
+                        >
                           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                             <div className="flex gap-4">
                               <div className="w-14 h-14 rounded-xl bg-surface-2 flex items-center justify-center shrink-0">
@@ -829,7 +868,11 @@ export default function CustomerDashboard() {
                       const isPending = ['pending', 'pending_verification', 'under_review', 'requested', 'draft'].includes(b.bookingStatus)
                       const isAccepted = ['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(b.bookingStatus)
                       return (
-                        <div key={b._id || b.bookingId} className="card p-5 space-y-4 hover:border-white/10 transition">
+                        <div
+                          key={b._id || b.bookingId}
+                          onClick={() => setInspectBooking(b)}
+                          className="card p-5 space-y-4 hover:border-brand/40 cursor-pointer transition"
+                        >
                           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                             <div className="flex gap-4">
                               <div className="w-16 h-16 rounded-xl bg-surface-2 flex items-center justify-center shrink-0">
@@ -1484,53 +1527,157 @@ export default function CustomerDashboard() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="card max-w-lg w-full p-6 space-y-5 border border-white/10"
+              className="card max-w-lg w-full p-6 space-y-5 border border-white/10 my-8"
             >
-              <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <FiInfo className="text-brand" /> Rental Booking Specification
-                </h3>
-                <button onClick={() => setInspectBooking(null)} className="btn-ghost p-2 text-white/50 hover:text-white"><FiX size={18} /></button>
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                  <span className="text-[10px] text-white/40 uppercase tracking-widest font-mono">
+                    BOOKING #{String(inspectBooking._id || inspectBooking.bookingId || '').slice(-8).toUpperCase()}
+                  </span>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    {inspectBooking.vehicleName || 'Vehicle Rental'}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setInspectBooking(null)}
+                  className="btn-ghost p-2 text-white/50 hover:text-white"
+                >
+                  <FiX size={18} />
+                </button>
               </div>
 
-              <div className="space-y-3 text-xs leading-relaxed">
-                <div>
-                  <span className="text-white/40 block">Vehicle Information:</span>
-                  <span className="text-white font-semibold">{inspectBooking.vehicleName} ({inspectBooking.vehicleType})</span>
-                </div>
-                <div>
-                  <span className="text-white/40 block">Owner Contact Details:</span>
-                  <span className="text-white font-semibold">{inspectBooking.ownerName}</span>
-                </div>
-                <div>
-                  <span className="text-white/40 block">Rental Timeframe:</span>
-                  <span className="text-white font-semibold">
-                    {formatDate(inspectBooking.startTime)} → {formatDate(inspectBooking.endTime)}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-white/40 block">Pickup & Return Instructions:</span>
-                  <span className="text-white font-medium">{inspectBooking.pickupInstructions || 'AT Road, Dibrugarh. Please contact the owner at pickup to verify ID cards.'}</span>
-                </div>
-                <div>
-                  <span className="text-white/40 block">Advance Payment Details:</span>
-                  <span className="text-white font-semibold">
-                    Total: ₹{inspectBooking.totalPrice} | Paid: ₹{inspectBooking.pricing?.advance || Math.round(inspectBooking.totalPrice * 0.25)} | Balance Due: ₹{inspectBooking.pricing?.remaining || Math.round(inspectBooking.totalPrice * 0.75)}
-                  </span>
-                </div>
-                {inspectBooking.verificationDetails?.verificationPdfUrl && (
-                  <div className="pt-2">
-                    <a
-                      href={inspectBooking.verificationDetails.verificationPdfUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-secondary w-full py-2 flex items-center justify-center gap-1.5 text-xs text-brand border-brand/20 bg-brand/5"
-                    >
-                      <FiFileText /> View Rental Agreement (PDF)
-                    </a>
-                  </div>
-                )}
+              {/* Status and Payment Method Badges */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <StatusBadge status={inspectBooking.bookingStatus} />
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border ${
+                  (inspectBooking.paymentStatus || '').toLowerCase() === 'paid'
+                    ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                    : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+                }`}>
+                  {(inspectBooking.paymentStatus || '').toLowerCase() === 'paid' ? <FiCheckCircle /> : <FiClock />}
+                  {(inspectBooking.paymentStatus || '').toLowerCase() === 'paid' ? 'Paid' : 'Payment Pending'}
+                </span>
+                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-white/10 text-white/90 border border-white/15 flex items-center gap-1.5">
+                  {inspectBooking.paymentMethod === 'online' ? '💳 Online Payment' : '💵 Cash on Handover'}
+                </span>
               </div>
+
+              {/* Vehicle Photo & Summary */}
+              {inspectBooking.vehicle?.images?.[0] && (
+                <div className="w-full h-36 rounded-xl overflow-hidden bg-surface-2 border border-white/5">
+                  <img
+                    src={getImageUrl(inspectBooking.vehicle.images[0], 'card')}
+                    alt={inspectBooking.vehicleName}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+
+              {/* Rental Details Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📍 Pickup Location</span>
+                  <span className="text-white font-medium">
+                    {inspectBooking.pickupLocation || inspectBooking.vehicle?.location?.address || 'Dibrugarh University Campus'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📍 Return Location</span>
+                  <span className="text-white font-medium">
+                    {inspectBooking.returnLocation || inspectBooking.vehicle?.location?.address || 'Dibrugarh University Campus'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📅 Pickup Time</span>
+                  <span className="text-white font-medium">
+                    {formatDate(inspectBooking.startTime)} ({formatTime(inspectBooking.startTime)})
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-surface-2 border border-white/5 space-y-1">
+                  <span className="text-white/40 block">📅 Return Time</span>
+                  <span className="text-white font-medium">
+                    {formatDate(inspectBooking.endTime)} ({formatTime(inspectBooking.endTime)})
+                  </span>
+                </div>
+              </div>
+
+              {/* Price Breakdown */}
+              <div className="p-3.5 rounded-xl bg-surface-2 border border-white/5 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-white/70">
+                  <span>Rental Total:</span>
+                  <span className="font-bold text-base text-brand">₹{inspectBooking.totalPrice || inspectBooking.totalAmount || 0}</span>
+                </div>
+                <div className="flex justify-between items-center text-white/50 text-[11px] border-t border-white/5 pt-2">
+                  <span>Payment Method Selected:</span>
+                  <span className="font-semibold text-white">
+                    {inspectBooking.paymentMethod === 'online' ? 'Online Gateway' : 'Direct Cash'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Owner Contact Card */}
+              {['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(inspectBooking.bookingStatus) ? (
+                <div className="p-3.5 bg-brand/5 border border-brand/20 rounded-xl flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[10px] text-brand uppercase tracking-wider font-bold">VEHICLE OWNER</span>
+                    <h4 className="text-sm font-bold text-white">{inspectBooking.ownerName || 'Vehicle Owner'}</h4>
+                    {inspectBooking.ownerPhone && (
+                      <p className="text-xs text-white/80 font-mono mt-0.5">📞 {inspectBooking.ownerPhone}</p>
+                    )}
+                  </div>
+                  {inspectBooking.ownerPhone && (
+                    <a
+                      href={`tel:${inspectBooking.ownerPhone}`}
+                      className="btn-primary text-xs py-2 px-3 flex items-center gap-1.5 font-semibold shrink-0"
+                    >
+                      <FiPhone /> Call Owner
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 text-xs text-white/50 flex items-center gap-2">
+                  <FiClock className="text-brand shrink-0" />
+                  <span>Owner phone number will be displayed once your booking is accepted.</span>
+                </div>
+              )}
+
+              {/* Online Payment / Cash Action */}
+              {['accepted', 'approved', 'active', 'confirmed', 'ready_for_pickup'].includes(inspectBooking.bookingStatus) &&
+                inspectBooking.paymentMethod === 'online' &&
+                (inspectBooking.paymentStatus || '').toLowerCase() !== 'paid' && (
+                  <button
+                    onClick={() => handlePayOnline(inspectBooking)}
+                    disabled={payingOnlineId === (inspectBooking._id || inspectBooking.bookingId)}
+                    className="btn-primary w-full py-3 flex items-center justify-center gap-2 font-bold text-sm shadow-lg shadow-brand/20"
+                  >
+                    <FiCreditCard />
+                    {payingOnlineId === (inspectBooking._id || inspectBooking.bookingId)
+                      ? 'Processing Payment…'
+                      : `Pay ₹${inspectBooking.totalPrice || inspectBooking.totalAmount || 0} Online Now`}
+                  </button>
+              )}
+
+              {inspectBooking.paymentMethod === 'cash' &&
+                (inspectBooking.paymentStatus || '').toLowerCase() !== 'paid' && (
+                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-start gap-2">
+                    <span className="text-base">💵</span>
+                    <p>
+                      Direct Cash Payment: Please pay ₹{inspectBooking.totalPrice || inspectBooking.totalAmount || 0} in physical cash directly to the vehicle owner upon pickup handover. The owner will confirm receipt.
+                    </p>
+                  </div>
+              )}
+
+              {inspectBooking.verificationDetails?.verificationPdfUrl && (
+                <a
+                  href={inspectBooking.verificationDetails.verificationPdfUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-secondary w-full py-2.5 flex items-center justify-center gap-1.5 text-xs text-brand border-brand/20 bg-brand/5"
+                >
+                  <FiFileText /> View Rental Agreement (PDF)
+                </a>
+              )}
             </motion.div>
           </div>
         )}

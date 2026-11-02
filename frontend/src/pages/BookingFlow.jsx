@@ -70,6 +70,9 @@ export default function BookingFlow() {
   const advanceAmount = Math.round(rentalAmount * 0.3)
   const remainingAmount = rentalAmount - advanceAmount
 
+  // Mandatory Payment Method: 'cash' | 'online'
+  const [paymentMethod, setPaymentMethod] = useState('cash')
+
   // Step 2: Verification Details
   const [currentAddress, setCurrentAddress] = useState('')
   const [permanentAddress, setPermanentAddress] = useState('')
@@ -513,6 +516,9 @@ export default function BookingFlow() {
           vehicleId: id,
           startTime,
           endTime,
+          paymentMethod,
+          pickupLocation: typeof vehicle?.location === 'string' ? vehicle.location : (vehicle?.location?.address || 'Dibrugarh University Campus'),
+          returnLocation: typeof vehicle?.location === 'string' ? vehicle.location : (vehicle?.location?.address || 'Dibrugarh University Campus'),
           agreementAccepted: true,
           agreementVersion: 'Beta v1.0',
           agreementAcceptedAt: new Date().toISOString(),
@@ -1006,10 +1012,64 @@ export default function BookingFlow() {
                 </div>
               </div>
 
+              {/* Mandatory Payment Method Selection */}
+              <div className="space-y-3 mb-6">
+                <label className="text-xs font-semibold uppercase tracking-wider text-white/70 block">
+                  Select Payment Method (Mandatory)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div
+                    onClick={() => setPaymentMethod('cash')}
+                    className={`card p-4 cursor-pointer transition border-2 ${
+                      paymentMethod === 'cash'
+                        ? 'border-brand bg-brand/10 shadow-lg shadow-brand/10'
+                        : 'border-white/10 hover:border-white/25 bg-surface-2'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-2xl">💵</span>
+                      <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        paymentMethod === 'cash' ? 'border-brand' : 'border-white/30'
+                      }`}>
+                        {paymentMethod === 'cash' && <span className="w-2 h-2 rounded-full bg-brand" />}
+                      </span>
+                    </div>
+                    <div className="font-bold text-sm text-white">Direct Cash Payment</div>
+                    <p className="text-[11px] text-white/50 mt-1 leading-relaxed">
+                      Pay physical cash directly to the vehicle owner upon pickup handover. Owner confirms receipt in system.
+                    </p>
+                  </div>
+
+                  <div
+                    onClick={() => setPaymentMethod('online')}
+                    className={`card p-4 cursor-pointer transition border-2 ${
+                      paymentMethod === 'online'
+                        ? 'border-brand bg-brand/10 shadow-lg shadow-brand/10'
+                        : 'border-white/10 hover:border-white/25 bg-surface-2'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-2xl">💳</span>
+                      <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                        paymentMethod === 'online' ? 'border-brand' : 'border-white/30'
+                      }`}>
+                        {paymentMethod === 'online' && <span className="w-2 h-2 rounded-full bg-brand" />}
+                      </span>
+                    </div>
+                    <div className="font-bold text-sm text-white">Online Payment</div>
+                    <p className="text-[11px] text-white/50 mt-1 leading-relaxed">
+                      Pay online (UPI / Card) once the vehicle owner accepts your request. No charge until approved!
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="bg-white/5 border border-white/10 rounded-xl p-4 text-xs text-white/60 leading-relaxed mb-8 flex gap-3 items-start">
                 <FiAlertCircle className="text-brand text-lg shrink-0 mt-0.5" />
                 <p>
-                  Online payment gateway is temporarily disabled. Your booking request will be sent directly to the vehicle owner for confirmation. Rental dues and deposits will be settled directly upon handover.
+                  {paymentMethod === 'online'
+                    ? 'Online payment becomes available in your dashboard immediately after the vehicle owner accepts your booking request. No payment is charged right now.'
+                    : 'Physical cash payment will be settled directly with the owner upon vehicle handover. The owner will record receipt in the app.'}
                 </p>
               </div>
 
