@@ -49,3 +49,11 @@ scratch/
 
 # Firebase configuration
 *google-services.json
+
+# Scratch & diagnostic scripts
+backend/check-*.js
+backend/fix-*.js
+
+# Mobile APK/AAB outputs
+*.apk
+*.aab
