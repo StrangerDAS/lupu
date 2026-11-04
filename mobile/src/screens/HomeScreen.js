@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   View,
@@ -27,6 +27,14 @@ import HowItWorksScreen from './HowItWorksScreen';
 import DashboardScreen from './DashboardScreen';
 import { useAuth } from '../context/AuthContext';
 import { vehicleAPI, notificationAPI, bookingAPI } from '../services/api';
+import VehicleGallery from '../components/common/VehicleGallery';
+import CustomDatePicker from '../components/common/CustomDatePicker';
+import {
+  formatLocalDateString,
+  parseLocalDateTime,
+  calculateRentalPricing,
+  checkBookingConflict,
+} from '../utils/dateUtils';
 
 const CATEGORIES = [
   { id: 'all', label: 'All', icon: null },
@@ -61,10 +69,83 @@ export default function HomeScreen() {
   // Vehicle Detail & Booking modal state
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [showVehicleDetailModal, setShowVehicleDetailModal] = useState(false);
-  const [rentalHours, setRentalHours] = useState(2);
+  const [galleryIndex, setGalleryIndex] = useState(0);
+  const [pickupDateStr, setPickupDateStr] = useState('');
+  const [pickupTimeStr, setPickupTimeStr] = useState('10:00');
+  const [returnDateStr, setReturnDateStr] = useState('');
+  const [returnTimeStr, setReturnTimeStr] = useState('12:00');
+  const [vehicleBookings, setVehicleBookings] = useState([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('cash'); // 'cash' | 'online'
   const [agreementAccepted, setAgreementAccepted] = useState(true);
   const [submittingBooking, setSubmittingBooking] = useState(false);
+
+  // Initialize pickup/return dates and fetch vehicle calendar availability
+  useEffect(() => {
+    if (selectedVehicle) {
+      const now = new Date();
+      const currentH = now.getHours();
+      let pDate;
+      let pTime;
+      let rDate;
+      let rTime;
+
+      if (currentH >= 20) {
+        // Late evening: default to tomorrow 09:00 AM to 01:00 PM
+        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        pDate = formatLocalDateString(tomorrow);
+        pTime = '09:00';
+        rDate = pDate;
+        rTime = '13:00';
+      } else {
+        const nextH = Math.min(20, Math.max(8, currentH + 1));
+        pDate = formatLocalDateString(now);
+        pTime = `${String(nextH).padStart(2, '0')}:00`;
+        const retH = Math.min(22, nextH + 2);
+        rDate = pDate;
+        rTime = `${String(retH).padStart(2, '0')}:00`;
+      }
+
+      setPickupDateStr(pDate);
+      setPickupTimeStr(pTime);
+      setReturnDateStr(rDate);
+      setReturnTimeStr(rTime);
+
+      const vId = selectedVehicle._id || selectedVehicle.id;
+      if (vId) {
+        vehicleAPI.getCalendar(vId)
+          .then((res) => {
+            if (res.ok && Array.isArray(res.data?.bookings)) {
+              setVehicleBookings(res.data.bookings);
+            } else if (Array.isArray(selectedVehicle.disabledDates)) {
+              setVehicleBookings(selectedVehicle.disabledDates);
+            }
+          })
+          .catch(() => {
+            if (Array.isArray(selectedVehicle.disabledDates)) {
+              setVehicleBookings(selectedVehicle.disabledDates);
+            }
+          });
+      }
+    }
+  }, [selectedVehicle?._id || selectedVehicle?.id]);
+
+  // Derived date objects and calculated pricing
+  const pickupDt = useMemo(
+    () => parseLocalDateTime(pickupDateStr, pickupTimeStr),
+    [pickupDateStr, pickupTimeStr]
+  );
+  const returnDt = useMemo(
+    () => parseLocalDateTime(returnDateStr, returnTimeStr),
+    [returnDateStr, returnTimeStr]
+  );
+  const rentalPricing = useMemo(
+    () => calculateRentalPricing(pickupDt, returnDt, selectedVehicle),
+    [pickupDt, returnDt, selectedVehicle]
+  );
+  const conflictInfo = useMemo(
+    () => checkBookingConflict(pickupDt, returnDt, vehicleBookings),
+    [pickupDt, returnDt, vehicleBookings]
+  );
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
@@ -233,17 +314,29 @@ export default function HomeScreen() {
       return;
     }
 
+    if (conflictInfo.hasConflict) {
+      Alert.alert(
+        'Vehicle Unavailable',
+        'This vehicle is already booked for the selected schedule. Please adjust your pickup or return date/time.'
+      );
+      return;
+    }
+
+    if (rentalPricing.durationHours <= 0 || returnDt <= pickupDt) {
+      Alert.alert('Invalid Schedule', 'Return date and time must be after pickup.');
+      return;
+    }
+
     setSubmittingBooking(true);
     try {
-      const now = new Date();
-      // Start 5 minutes in future
-      const startTime = new Date(now.getTime() + 5 * 60 * 1000).toISOString();
-      const endTime = new Date(now.getTime() + (rentalHours * 60 + 5) * 60 * 1000).toISOString();
+      const startTime = pickupDt.toISOString();
+      const endTime = returnDt.toISOString();
 
       const bookingPayload = {
         vehicleId: selectedVehicle._id || selectedVehicle.id,
         startTime,
         endTime,
+        duration: rentalPricing.durationHours,
         paymentMethod: selectedPaymentMethod,
         pickupLocation: typeof selectedVehicle.location === 'string'
           ? selectedVehicle.location
@@ -260,7 +353,7 @@ export default function HomeScreen() {
       if (res.ok) {
         Alert.alert(
           'Booking Requested! 🎉',
-          `Your booking request for ${selectedVehicle.name || 'this vehicle'} (${rentalHours}h) has been submitted to the owner for approval.`,
+          `Your booking request for ${selectedVehicle.name || 'this vehicle'} (${rentalPricing.durationLabel}) has been submitted to the owner for approval.`,
           [
             {
               text: 'View in Dashboard',
@@ -483,6 +576,7 @@ export default function HomeScreen() {
                 vehicle={vehicle}
                 onPress={() => {
                   setSelectedVehicle(vehicle);
+                  setGalleryIndex(0);
                   setShowVehicleDetailModal(true);
                 }}
               />
@@ -743,16 +837,18 @@ export default function HomeScreen() {
           onPress={() => setShowVehicleDetailModal(false)}
         >
           <Pressable
-            style={styles.detailModalContent}
+            style={[styles.detailModalContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
             onPress={(e) => e.stopPropagation()}
           >
             {/* Sheet Handle */}
             <View style={styles.sheetHandle} />
 
             {selectedVehicle && (
+              <>
               <ScrollView
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingBottom: spacing.xl }}
+                style={{ flexShrink: 1 }}
+                contentContainerStyle={{ paddingBottom: spacing.md }}
               >
                 {/* Header */}
                 <View style={styles.detailHeader}>
@@ -771,28 +867,12 @@ export default function HomeScreen() {
                   </Pressable>
                 </View>
 
-                {/* Hero Photo with Badges */}
-                <View style={styles.detailImageContainer}>
-                  <Image
-                    source={{
-                      uri:
-                        selectedVehicle.photos?.[0] ||
-                        'https://images.unsplash.com/photo-1558981403-c5f9899a28bc?w=800&auto=format&fit=crop&q=80',
-                    }}
-                    style={styles.detailImage}
-                    resizeMode="cover"
-                  />
-                  <View style={styles.detailBadgeRow}>
-                    <View style={styles.detailLiveBadge}>
-                      <View style={styles.detailLiveDot} />
-                      <Text style={styles.detailLiveBadgeText}>AVAILABLE</Text>
-                    </View>
-                    <View style={styles.detailOwnerBadge}>
-                      <Feather name="check-circle" size={12} color="#10B981" />
-                      <Text style={styles.detailOwnerBadgeText}>Verified Owner</Text>
-                    </View>
-                  </View>
-                </View>
+                {/* Swipeable Vehicle Photo Gallery with Badges & Full-Screen Viewer */}
+                <VehicleGallery
+                  vehicle={selectedVehicle}
+                  activeIndex={galleryIndex}
+                  onIndexChange={setGalleryIndex}
+                />
 
                 {/* Key Specs Row */}
                 <View style={styles.detailSpecsRow}>
@@ -842,49 +922,35 @@ export default function HomeScreen() {
                   </View>
                 </View>
 
-                {/* Duration Selector */}
-                <Text style={styles.detailSectionTitle}>Select Rental Duration</Text>
-                <View style={styles.durationSelectorRow}>
-                  {[
-                    { hours: 1, label: '1 Hr' },
-                    { hours: 2, label: '2 Hrs' },
-                    { hours: 4, label: '4 Hrs' },
-                    { hours: 8, label: '8 Hrs' },
-                    { hours: 24, label: '1 Day' },
-                  ].map((opt) => {
-                    const isSelected = rentalHours === opt.hours;
-                    return (
-                      <Pressable
-                        key={opt.hours}
-                        onPress={() => setRentalHours(opt.hours)}
-                        style={[
-                          styles.durationChip,
-                          isSelected && styles.durationChipSelected,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.durationChipText,
-                            isSelected && styles.durationChipTextSelected,
-                          ]}
-                        >
-                          {opt.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
+                {/* Custom Interactive Calendar & Time Selector */}
+                <CustomDatePicker
+                  pickupDateStr={pickupDateStr}
+                  pickupTimeStr={pickupTimeStr}
+                  returnDateStr={returnDateStr}
+                  returnTimeStr={returnTimeStr}
+                  existingBookings={vehicleBookings}
+                  onChange={({ pickupDateStr: pD, pickupTimeStr: pT, returnDateStr: rD, returnTimeStr: rT }) => {
+                    setPickupDateStr(pD);
+                    setPickupTimeStr(pT);
+                    setReturnDateStr(rD);
+                    setReturnTimeStr(rT);
+                  }}
+                />
 
                 {/* Price Breakdown */}
                 <View style={styles.priceBreakdownCard}>
                   <View style={styles.priceBreakdownRow}>
                     <Text style={styles.priceBreakdownLabel}>
-                      Rate ({rentalHours >= 24 ? '₹/day' : '₹/hr'})
+                      Rate ({rentalPricing.isDailyRate ? '₹/day' : '₹/hr'})
                     </Text>
                     <Text style={styles.priceBreakdownValue}>
-                      {rentalHours >= 24 && selectedVehicle.pricePerDay
-                        ? `₹${selectedVehicle.pricePerDay}/day`
-                        : `₹${selectedVehicle.pricePerHour || 49}/hr`}
+                      {rentalPricing.rateLabel}
+                    </Text>
+                  </View>
+                  <View style={styles.priceBreakdownRow}>
+                    <Text style={styles.priceBreakdownLabel}>Duration</Text>
+                    <Text style={[styles.priceBreakdownValue, { color: colors.brand, fontWeight: '700' }]}>
+                      {rentalPricing.durationLabel}
                     </Text>
                   </View>
                   <View style={styles.priceBreakdownRow}>
@@ -897,10 +963,7 @@ export default function HomeScreen() {
                   <View style={styles.priceBreakdownRow}>
                     <Text style={styles.priceBreakdownTotalLabel}>Estimated Total</Text>
                     <Text style={styles.priceBreakdownTotalValue}>
-                      ₹
-                      {rentalHours >= 24 && selectedVehicle.pricePerDay
-                        ? Math.ceil(rentalHours / 24) * selectedVehicle.pricePerDay
-                        : rentalHours * (selectedVehicle.pricePerHour || 49)}
+                      ₹{rentalPricing.totalPrice}
                     </Text>
                   </View>
                 </View>
@@ -980,30 +1043,39 @@ export default function HomeScreen() {
                   </Text>
                 </Pressable>
 
-                {/* Book Now Button */}
-                <Pressable
-                  onPress={handleCreateBooking}
-                  disabled={submittingBooking}
-                  style={[
-                    styles.bookNowBtn,
-                    submittingBooking && { opacity: 0.7 },
-                  ]}
-                >
-                  {submittingBooking ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Feather name="zap" size={18} color="#FFFFFF" />
-                      <Text style={styles.bookNowBtnText}>
-                        Request Ride • ₹
-                        {rentalHours >= 24 && selectedVehicle.pricePerDay
-                          ? Math.ceil(rentalHours / 24) * selectedVehicle.pricePerDay
-                          : rentalHours * (selectedVehicle.pricePerHour || 49)}
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
               </ScrollView>
+
+              {/* Book Now Button — fixed footer outside ScrollView */}
+              <Pressable
+                onPress={handleCreateBooking}
+                disabled={submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0}
+                style={[
+                  styles.bookNowBtn,
+                  { marginTop: spacing.sm },
+                  (submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0) && {
+                    opacity: 0.6,
+                    backgroundColor: conflictInfo.hasConflict ? '#2A2A2A' : colors.brand,
+                  },
+                ]}
+              >
+                {submittingBooking ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Feather
+                      name={conflictInfo.hasConflict ? 'alert-circle' : 'zap'}
+                      size={18}
+                      color="#FFFFFF"
+                    />
+                    <Text style={styles.bookNowBtnText}>
+                      {conflictInfo.hasConflict
+                        ? 'Vehicle Booked for Selected Time'
+                        : `Request Ride • ₹${rentalPricing.totalPrice}`}
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+              </>
             )}
           </Pressable>
         </Pressable>
@@ -1535,6 +1607,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
     maxHeight: '90%',
   },
   detailHeader: {

@@ -219,6 +219,15 @@ export const vehicleAPI = {
   },
 
   /**
+   * Fetches vehicle calendar availability & active bookings
+   */
+  getCalendar: async (id) => {
+    return request(`/vehicles/${id}/calendar`, {
+      method: 'GET',
+    });
+  },
+
+  /**
    * Fetches vehicles belonging to authenticated owner
    */
   getMyVehicles: async () => {

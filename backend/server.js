@@ -935,10 +935,16 @@ app.get('/api/vehicles/:id/calendar', async (req, res, next) => {
     }
     const bookings = await Booking.find({
       vehicleId: id,
-      status: { $in: ['requested', 'accepted', 'confirmed', 'ready_for_pickup', 'ongoing'] }
-    }, 'startTime endTime status').lean()
+      status: { $in: ['pending', 'requested', 'accepted', 'approved', 'active', 'ongoing', 'ready_for_pickup', 'confirmed'] },
+      endTime: { $gt: new Date() }
+    }, 'startTime endTime status').sort({ startTime: 1 }).lean()
     
-    res.json({ bookings })
+    const disabledDates = bookings.map(b => ({
+      start: b.startTime,
+      end: b.endTime
+    }))
+
+    res.json({ bookings, disabledDates })
   } catch (err) {
     next(err)
   }
@@ -1016,8 +1022,10 @@ app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder,
       return res.status(400).json({ message: 'The vehicle is already booked for these dates.' })
     }
 
-    const hours = Math.ceil((end - start) / (1000 * 60 * 60))
-    const rentalAmount = hours * vehicle.pricePerHour
+    const hours = Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60)))
+    const rentalAmount = (hours >= 24 && vehicle.pricePerDay)
+      ? Math.ceil(hours / 24) * vehicle.pricePerDay
+      : hours * (vehicle.pricePerHour || 49)
     const bookingFee = 0 // Removed for Beta
     const totalAmount = rentalAmount
     const advanceAmount = Math.round(rentalAmount * 0.3)

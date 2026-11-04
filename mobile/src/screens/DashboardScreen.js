@@ -11,6 +11,7 @@ import {
   Modal,
   TextInput,
   Image,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -2017,7 +2018,7 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
           onPress={() => setSelectedRenterBooking(null)}
         >
           <Pressable
-            style={[styles.modalCard, { maxHeight: '90%' }]}
+            style={[styles.modalCard, { maxHeight: '90%', paddingBottom: Math.max(insets.bottom, 16) }]}
             onPress={(e) => e.stopPropagation()}
           >
             {selectedRenterBooking && (
@@ -2199,7 +2200,7 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
           onPress={() => setSelectedOwnerBooking(null)}
         >
           <Pressable
-            style={[styles.modalCard, { maxHeight: '90%' }]}
+            style={[styles.modalCard, { maxHeight: '90%', paddingBottom: Math.max(insets.bottom, 16) }]}
             onPress={(e) => e.stopPropagation()}
           >
             {selectedOwnerBooking && (
@@ -3199,6 +3200,20 @@ const styles = StyleSheet.create({
     color: '#22C55E',
     fontSize: 18,
     fontWeight: '800',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    padding: spacing.lg,
+    paddingBottom: 36,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   modalRefText: {
     fontSize: 10,
