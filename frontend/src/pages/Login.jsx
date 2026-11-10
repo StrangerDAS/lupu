@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { FiMail, FiLoader, FiLock, FiEye, FiEyeOff } from 'react-icons/fi'
 import { FcGoogle } from 'react-icons/fc'
+import { IoLogoAndroid } from 'react-icons/io5'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authAPI } from '../api/endpoints'
@@ -243,6 +244,25 @@ export default function Login() {
             Sign up
           </Link>
         </div>
+      </div>
+
+      {/* Android App Download Banner */}
+      <div className="mt-6 p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex items-center justify-between gap-3 text-left">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-[#3DDC84] shrink-0">
+            <IoLogoAndroid size={20} />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-white">Using an Android phone?</p>
+            <p className="text-[11px] text-white/50">Download the official LUPU APK (~75 MB)</p>
+          </div>
+        </div>
+        <Link
+          to="/download"
+          className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold whitespace-nowrap transition"
+        >
+          Download
+        </Link>
       </div>
     </div>
   )

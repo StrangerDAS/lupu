@@ -31,8 +31,8 @@ export default function AndroidAppPrompt() {
   }
 
   useEffect(() => {
-    // Only display when user is authenticated AND on an Android device
-    if (!user || !isAndroid()) {
+    // Display when on an Android device (or test mode), for both guests and authenticated users
+    if (!isAndroid()) {
       setVisible(false)
       return
     }
@@ -65,10 +65,10 @@ export default function AndroidAppPrompt() {
         // Fallback to default metadata
       })
 
-    // Slight delay so the user lands smoothly after login
+    // Slight delay so the page loads smoothly
     const timer = setTimeout(() => {
       setVisible(true)
-    }, 1200)
+    }, 1000)
 
     return () => clearTimeout(timer)
   }, [user])

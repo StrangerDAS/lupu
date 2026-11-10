@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HiMenuAlt3, HiX } from 'react-icons/hi'
 import { RiMotorbikeLine } from 'react-icons/ri'
+import { IoLogoAndroid } from 'react-icons/io5'
 import { FiCalendar, FiBell, FiCheckSquare } from 'react-icons/fi'
 import useAuthStore from '../store/authStore'
 import { notificationAPI } from '../api/endpoints'
@@ -144,9 +145,16 @@ export default function Navbar() {
                 key={link.to}
                 to={link.to}
                 className={({ isActive }) =>
-                  `btn-ghost text-sm ${isActive ? 'text-white' : 'text-white/60'}`
+                  link.to === '/download'
+                    ? `flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition ml-1 ${
+                        isActive
+                          ? 'bg-brand text-white'
+                          : 'bg-white/10 hover:bg-white/15 text-white/90 hover:text-white border border-white/10'
+                      }`
+                    : `btn-ghost text-sm ${isActive ? 'text-white' : 'text-white/60'}`
                 }
               >
+                {link.to === '/download' && <IoLogoAndroid className="text-[#3DDC84] text-sm" />}
                 {link.label}
               </NavLink>
             ))}
@@ -203,11 +211,15 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* ── Mobile: Bell + Hamburger ──────────────────────────
-              Bell is visible on ALL screen sizes when authenticated.
-              Sits between logo and the hamburger toggle.
-          ───────────────────────────────────────────────────── */}
-          <div className="flex items-center gap-1 md:hidden">
+          {/* ── Mobile: App Pill + Bell + Hamburger ─────────── */}
+          <div className="flex items-center gap-2 md:hidden">
+            <Link
+              to="/download"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/15 border border-white/10 text-[11px] font-semibold text-white/90"
+            >
+              <IoLogoAndroid className="text-[#3DDC84] text-xs" />
+              <span>Get App</span>
+            </Link>
             {isAuthenticated() && <NotificationBell />}
             <button
               className="p-2 rounded-lg hover:bg-white/5 transition focus:outline-none focus:ring-2 focus:ring-brand/50"

@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiArrowRight, FiShield, FiStar, FiClock } from 'react-icons/fi'
+import { FiArrowRight, FiShield, FiStar, FiClock, FiDownload } from 'react-icons/fi'
 import { RiMotorbikeLine, RiEBikeLine, RiMoneyRupeeCircleLine } from 'react-icons/ri'
+import { IoLogoAndroid } from 'react-icons/io5'
 import { HiLocationMarker } from 'react-icons/hi'
 import PageWrapper from '../components/PageWrapper'
 
@@ -302,6 +303,42 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── App Download Banner ────────────────────────── */}
+      <section className="py-6 md:py-10">
+        <div className="container-main">
+          <motion.div
+            variants={fadeUp}
+            initial="hidden"
+            whileInView="show"
+            viewport={{ once: true }}
+            className="p-6 md:p-10 rounded-3xl bg-gradient-to-r from-[#141419] via-[#1b1926] to-[#141419] border border-white/10 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl"
+          >
+            <div className="flex items-center gap-5 text-left">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#1b1b24] to-[#252536] border border-white/10 flex items-center justify-center p-3 shadow-inner shrink-0">
+                <img src="/logo-icon.svg" alt="LUPU App" className="w-full h-full object-contain" />
+              </div>
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#3DDC84]/15 border border-[#3DDC84]/25 text-[#3DDC84] text-xs font-semibold mb-1.5">
+                  <IoLogoAndroid size={13} />
+                  <span>Official Android App Available</span>
+                </div>
+                <h3 className="text-xl md:text-2xl font-bold text-white">Experience LUPU on your phone</h3>
+                <p className="text-white/50 text-xs md:text-sm mt-1">Faster vehicle unlocks, live ride tracking &amp; instant notifications.</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <Link
+                to="/download"
+                className="btn-primary w-full md:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 text-sm font-semibold whitespace-nowrap"
+              >
+                <FiDownload size={16} />
+                <span>Download APK (75 MB)</span>
+              </Link>
+            </div>
+          </motion.div>
+        </div>
+      </section>
 
       {/* ── Owner CTA ──────────────────────────────────── */}
       <section className="py-20 md:py-28">
