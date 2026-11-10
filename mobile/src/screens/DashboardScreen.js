@@ -2490,7 +2490,7 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
           onPress={() => setSelectedRenterBooking(null)}
         >
           <Pressable
-            style={[styles.modalCard, { maxHeight: '90%', paddingBottom: Math.max(insets.bottom, 16) }]}
+            style={[styles.modalCard, { maxHeight: '90%', paddingBottom: Math.max(insets?.bottom || 0, Platform.OS === 'android' ? 48 : 16) }]}
             onPress={(e) => e.stopPropagation()}
           >
             {selectedRenterBooking && (
@@ -2672,7 +2672,7 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
           onPress={() => setSelectedOwnerBooking(null)}
         >
           <Pressable
-            style={[styles.modalCard, { maxHeight: '90%', paddingBottom: Math.max(insets.bottom, 16) }]}
+            style={[styles.modalCard, { maxHeight: '90%', paddingBottom: Math.max(insets?.bottom || 0, Platform.OS === 'android' ? 48 : 16) }]}
             onPress={(e) => e.stopPropagation()}
           >
             {selectedOwnerBooking && (

@@ -889,7 +889,7 @@ export default function HomeScreen() {
             style={[
               styles.detailModalContent,
               {
-                paddingBottom: Math.max(insets?.bottom || 0, Platform.OS === 'android' ? 36 : 24),
+                paddingBottom: Math.max(insets?.bottom || 0, Platform.OS === 'android' ? 56 : 24),
               },
             ]}
             onPress={(e) => e.stopPropagation()}
@@ -1100,7 +1100,7 @@ export default function HomeScreen() {
               </ScrollView>
 
               {/* Book Now Button — fixed footer outside ScrollView */}
-              <View style={{ paddingTop: spacing.xs, paddingBottom: Platform.OS === 'android' ? 12 : 4 }}>
+              <View style={{ paddingTop: spacing.xs, paddingBottom: Platform.OS === 'android' ? 24 : 6 }}>
                 <Pressable
                   onPress={handleCreateBooking}
                   disabled={submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0}

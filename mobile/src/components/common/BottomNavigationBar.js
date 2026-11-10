@@ -20,8 +20,10 @@ import { typography } from '../../theme/typography';
  */
 export function getBottomNavHeight(insets, isCompact = false) {
   const bottomInset = insets?.bottom || 0;
-  const minAndroidPadding = Platform.OS === 'android' ? 28 : spacing.sm;
-  const bottomPadding = bottomInset > 0 ? bottomInset + (isCompact ? 4 : 6) : minAndroidPadding;
+  // Android navigation bar (3-button or gesture pill) is typically 48-56dp.
+  // Guarantee a minimum of 48dp on Android so buttons & labels never get covered.
+  const minAndroidPadding = Platform.OS === 'android' ? 48 : spacing.sm;
+  const bottomPadding = Math.max(bottomInset, minAndroidPadding) + (isCompact ? 4 : 6);
   const itemHeight = isCompact ? 46 : 50;
   const topPadding = isCompact ? 6 : 8;
   return itemHeight + topPadding + bottomPadding;
@@ -44,8 +46,8 @@ export default function BottomNavigationBar({
 
   // Safe area bottom inset: respects Android 3-button nav, gesture bar, or edge-to-edge
   const bottomInset = insets?.bottom || 0;
-  const minAndroidPadding = Platform.OS === 'android' ? 28 : spacing.sm;
-  const bottomPadding = bottomInset > 0 ? bottomInset + (isCompact ? 4 : 6) : minAndroidPadding;
+  const minAndroidPadding = Platform.OS === 'android' ? 48 : spacing.sm;
+  const bottomPadding = Math.max(bottomInset, minAndroidPadding) + (isCompact ? 4 : 6);
   const horizontalPadding = Math.max(insets?.left || 0, insets?.right || 0, spacing.xs);
 
   const tabs = [
