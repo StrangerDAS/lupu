@@ -71,7 +71,7 @@ export default function Login() {
               <p className="text-[11px] text-white/70">Install our app for faster unlocks &amp; alerts</p>
             </div>
             <a
-              href="/api/app/download"
+              href="/lupu-release.apk"
               download="LUPU-Rental.apk"
               onClick={() => toast.dismiss(t.id)}
               className="ml-auto px-2.5 py-1 rounded-lg bg-[#FF5C00] text-white text-xs font-semibold hover:brightness-110 whitespace-nowrap"
@@ -121,7 +121,7 @@ export default function Login() {
               <p className="text-[11px] text-white/70">Install our app for faster unlocks &amp; alerts</p>
             </div>
             <a
-              href="/api/app/download"
+              href="/lupu-release.apk"
               download="LUPU-Rental.apk"
               onClick={() => toast.dismiss(t.id)}
               className="ml-auto px-2.5 py-1 rounded-lg bg-[#FF5C00] text-white text-xs font-semibold hover:brightness-110 whitespace-nowrap"

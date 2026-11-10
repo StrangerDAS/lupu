@@ -328,12 +328,19 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-3 w-full md:w-auto">
-              <Link
-                to="/download"
+              <a
+                href="/lupu-release.apk"
+                download="LUPU-Rental.apk"
                 className="btn-primary w-full md:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 text-sm font-semibold whitespace-nowrap"
               >
                 <FiDownload size={16} />
                 <span>Download APK (75 MB)</span>
+              </a>
+              <Link
+                to="/download"
+                className="px-4 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-xs font-semibold whitespace-nowrap transition hidden sm:inline-block"
+              >
+                Guide
               </Link>
             </div>
           </motion.div>

@@ -18,7 +18,7 @@ export default function AndroidAppPrompt() {
     version: '1.0.0',
     sizeMb: '74.7 MB',
     filename: 'LUPU-Rental.apk',
-    downloadUrl: '/api/app/download',
+    downloadUrl: '/lupu-release.apk',
   })
 
   // Detect Android or test mode query param
@@ -91,8 +91,8 @@ export default function AndroidAppPrompt() {
 
     // Trigger download via hidden anchor
     const link = document.createElement('a')
-    link.href = appInfo.downloadUrl || '/api/app/download'
-    link.download = appInfo.filename || 'LUPU-Rental.apk'
+    link.href = '/lupu-release.apk'
+    link.download = 'LUPU-Rental.apk'
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

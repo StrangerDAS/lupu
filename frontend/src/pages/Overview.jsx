@@ -1,6 +1,6 @@
 import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { FiArrowRight, FiDownload } from 'react-icons/fi'
+import { FiArrowRight } from 'react-icons/fi'
 import { RiMotorbikeLine } from 'react-icons/ri'
 import { IoLogoAndroid } from 'react-icons/io5'
 import PageWrapper from '../components/PageWrapper'
@@ -57,17 +57,6 @@ export default function Overview() {
         transition={{ duration: 0.8, ease: "easeOut" }}
         className="z-10 flex flex-col items-center text-center px-4 my-auto py-12"
       >
-        {/* Android App Announcement Pill */}
-        <Link
-          to="/download"
-          className="group inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 border border-white/10 hover:border-brand/40 text-xs sm:text-sm font-medium text-white/80 hover:text-white mb-6 transition"
-        >
-          <span className="w-2 h-2 rounded-full bg-[#3DDC84] animate-pulse" />
-          <IoLogoAndroid className="text-[#3DDC84] text-base" />
-          <span>Official LUPU Android App is here!</span>
-          <span className="text-brand group-hover:translate-x-0.5 transition-transform">Download APK →</span>
-        </Link>
-
         <div className="w-20 h-20 bg-brand rounded-2xl flex items-center justify-center shadow-lg shadow-brand/30 mb-8">
           <RiMotorbikeLine className="text-white text-4xl" />
         </div>
@@ -80,29 +69,29 @@ export default function Overview() {
           Rent. Ride. Earn.
         </h2>
 
-        <p className="text-white/50 text-lg md:text-xl max-w-md mx-auto mb-10">
+        <p className="text-white/50 text-lg md:text-xl max-w-md mx-auto mb-8">
           Your local bike &amp; scooty rental platform in Dibrugarh
         </p>
 
-        {/* Action Buttons */}
-        <div className="flex flex-col sm:flex-row items-center gap-4 w-full max-w-md justify-center">
-          <motion.button
-            onClick={() => navigate('/auth/login')}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            className="btn-primary w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-4 text-base sm:text-lg rounded-full shadow-lg shadow-brand/20 cursor-pointer"
-          >
-            Get Started <FiArrowRight />
-          </motion.button>
+        {/* Primary Action Button */}
+        <motion.button
+          onClick={() => navigate('/auth/login')}
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          className="btn-primary flex items-center justify-center gap-2 px-9 py-4 text-base sm:text-lg rounded-full shadow-lg shadow-brand/25 cursor-pointer"
+        >
+          Get Started <FiArrowRight />
+        </motion.button>
 
-          <Link
-            to="/download"
-            className="w-full sm:w-auto flex items-center justify-center gap-2.5 px-6 py-4 rounded-full bg-white/10 hover:bg-white/15 text-white/90 hover:text-white border border-white/15 text-base font-medium transition cursor-pointer"
-          >
-            <IoLogoAndroid className="text-[#3DDC84] text-xl" />
-            <span>Download App (APK)</span>
-          </Link>
-        </div>
+        {/* Small, subtle mobile APK download link */}
+        <a
+          href="/lupu-release.apk"
+          download="LUPU-Rental.apk"
+          className="mt-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-white/60 hover:text-white transition"
+        >
+          <IoLogoAndroid className="text-[#3DDC84] text-sm" />
+          <span>Prefer mobile? Download APK (~75 MB)</span>
+        </a>
       </motion.div>
 
       {/* Footer minimal info */}

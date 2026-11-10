@@ -203,7 +203,7 @@ export const adminAuditAPI = {
 /* ── App Info & Download ────────────────────────────────── */
 export const appAPI = {
   getInfo: () => api.get('/app/info'),
-  downloadUrl: '/api/app/download',
+  downloadUrl: '/lupu-release.apk',
   staticDownloadUrl: '/lupu-release.apk',
 }
 
