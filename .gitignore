@@ -57,3 +57,16 @@ backend/fix-*.js
 # Mobile APK/AAB outputs
 *.apk
 *.aab
+!frontend/public/lupu-release.apk
+
+# Backups & PII data dumps
+backend/backups/
+backups/
+*.dump
+*.tar.gz
+
+# Agent & local workflow artifacts
+.agent/
+.agents/
+.gemini/
+.gsd/

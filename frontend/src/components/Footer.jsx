@@ -8,6 +8,7 @@ const footerLinks = {
     { label: 'Explore Vehicles', modalType: 'explore' },
     { label: 'List Your Vehicle', modalType: 'list' },
     { label: 'How it Works', modalType: 'howItWorks' },
+    { label: 'Download Android App', to: '/download' },
   ],
   Company: [
     { label: 'About', to: '/about' },

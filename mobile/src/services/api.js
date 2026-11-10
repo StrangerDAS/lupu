@@ -397,17 +397,75 @@ export const notificationAPI = {
 
 export const userAPI = {
   /**
-   * Update KYC verification
+   * Submit KYC verification
    */
-  submitKyc: async ({ kycType = 'college_id', documentNumber = '' } = {}) => {
-    return request('/auth/profile', {
-      method: 'PUT',
+  submitKyc: async ({ kycType = 'student_id', documentNumber = '', institutionName = '', expiryDate = null, documentFrontUrl = '', documentBackUrl = '' } = {}) => {
+    return request('/users/verification/document', {
+      method: 'POST',
       body: JSON.stringify({
-        kycStatus: 'verified',
-        kycType,
-        kycDocumentNumber: documentNumber,
-        isVerified: true,
+        documentType: kycType === 'college_id' ? 'student_id' : kycType,
+        documentNumber,
+        institutionName,
+        expiryDate,
+        documentFrontUrl,
+        documentBackUrl,
       }),
     });
   },
 };
+
+export const verificationAPI = {
+  /**
+   * Fetch current renter verification and driving license eligibility status
+   */
+  getStatus: async () => {
+    return request('/users/verification/status', {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * Submit identity document for verification (Student ID, Aadhaar, or Driving License)
+   */
+  submitDocument: async ({
+    documentType,
+    documentNumber,
+    institutionName,
+    expiryDate,
+    categories,
+    documentFrontUrl,
+    documentBackUrl,
+  }) => {
+    return request('/users/verification/document', {
+      method: 'POST',
+      body: JSON.stringify({
+        documentType: documentType === 'college_id' ? 'student_id' : documentType,
+        documentNumber,
+        institutionName,
+        expiryDate,
+        categories,
+        documentFrontUrl,
+        documentBackUrl,
+      }),
+    });
+  },
+
+  /**
+   * Submit live selfie capture with mandatory biometric consent
+   */
+  submitFace: async ({
+    selfieDataUrl,
+    selfieUrl,
+    biometricConsent = true,
+  }) => {
+    return request('/users/verification/face', {
+      method: 'POST',
+      body: JSON.stringify({
+        selfieDataUrl,
+        selfieUrl,
+        biometricConsent,
+      }),
+    });
+  },
+};
+

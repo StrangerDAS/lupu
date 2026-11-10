@@ -3,15 +3,29 @@ import path from 'path'
 import fs from 'fs'
 
 const UPLOAD_DIR = './uploads'
+export const SECURE_UPLOAD_DIR = './secure-uploads'
 
-// Ensure upload directory exists
+// Ensure upload directories exist
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+}
+if (!fs.existsSync(SECURE_UPLOAD_DIR)) {
+  fs.mkdirSync(SECURE_UPLOAD_DIR, { recursive: true, mode: 0o700 })
 }
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, UPLOAD_DIR)
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9)
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname))
+  }
+})
+
+const secureStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, SECURE_UPLOAD_DIR)
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9)
@@ -74,6 +88,14 @@ export const upload = multer({
   }
 })
 
+export const secureUpload = multer({
+  storage: secureStorage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 25 * 1024 * 1024
+  }
+})
+
 // Configure fields
 export const vehicleUpload = upload.fields([
   { name: 'RC', maxCount: 1 },
@@ -82,13 +104,19 @@ export const vehicleUpload = upload.fields([
   { name: 'photos', maxCount: 10 }
 ])
 
-export const kycUpload = upload.fields([
-  { name: 'governmentIdUrl', maxCount: 1 },
+export const kycUpload = secureUpload.fields([
+  { name: 'documentFront', maxCount: 1 },
+  { name: 'documentBack', maxCount: 1 },
+  { name: 'studentIdFront', maxCount: 1 },
+  { name: 'studentId', maxCount: 1 },
   { name: 'collegeIdUrl', maxCount: 1 },
-  { name: 'governmentId', maxCount: 1 },
   { name: 'collegeId', maxCount: 1 },
+  { name: 'governmentIdUrl', maxCount: 1 },
+  { name: 'governmentId', maxCount: 1 },
   { name: 'drivingLicense', maxCount: 1 },
   { name: 'drivingLicenseUrl', maxCount: 1 },
+  { name: 'drivingLicenseFront', maxCount: 1 },
+  { name: 'drivingLicenseBack', maxCount: 1 },
   { name: 'aadhaarFront', maxCount: 1 },
   { name: 'aadhaarFrontUrl', maxCount: 1 },
   { name: 'aadhaarBack', maxCount: 1 },
@@ -100,5 +128,12 @@ export const kycUpload = upload.fields([
   { name: 'document', maxCount: 1 }
 ])
 
+export const faceUpload = secureUpload.fields([
+  { name: 'selfie', maxCount: 1 },
+  { name: 'liveFrame', maxCount: 1 }
+])
+
 export const avatarUpload = upload.single('avatar')
+
+
 

@@ -99,12 +99,42 @@ const userSchema = new mongoose.Schema(
         relation: String,
       }
     ],
-    // KYC fields
+    // Verification & Identity fields
+    verificationStatus: {
+      type: String,
+      enum: ['not_started', 'document_submitted', 'face_pending', 'under_review', 'verified', 'rejected', 'resubmission_required'],
+      default: 'not_started',
+    },
+    documentStatus: {
+      type: String,
+      enum: ['not_started', 'document_submitted', 'document_under_review', 'document_verified', 'document_rejected', 'resubmission_required'],
+      default: 'not_started',
+    },
+    faceStatus: {
+      type: String,
+      enum: ['not_started', 'face_pending', 'face_under_review', 'face_verified', 'face_failed', 'resubmission_required'],
+      default: 'not_started',
+    },
+    documentType: {
+      type: String,
+      enum: ['student_id', 'aadhaar', 'driving_license', 'government_id', null],
+      default: null,
+    },
+    maskedDocumentNumber: { type: String, default: null },
+    isVerified: { type: Boolean, default: false },
+    drivingLicenseVerified: { type: Boolean, default: false },
+    drivingLicenseExpiry: { type: Date, default: null },
+    drivingLicenseCategories: { type: [String], default: [] },
+    biometricConsent: { type: Boolean, default: false },
+    biometricConsentAt: { type: Date, default: null },
+
+    // KYC fields (retained for full backward compatibility)
     kycType: { type: String, default: 'government_id' },
     collegeIdUrl: { type: String, default: null },
     governmentIdUrl: { type: String, default: null },
     drivingLicenseNumber: { type: String, default: null },
     drivingLicenseUrl: { type: String, default: null },
+    drivingLicenseBackUrl: { type: String, default: null },
     aadhaarNumber: { type: String, default: null },
     aadhaarFrontUrl: { type: String, default: null },
     aadhaarBackUrl: { type: String, default: null },
@@ -135,6 +165,8 @@ const userSchema = new mongoose.Schema(
 // Indexes for common queries
 userSchema.index({ role: 1 })
 userSchema.index({ kycStatus: 1 })
+userSchema.index({ verificationStatus: 1 })
+userSchema.index({ isVerified: 1 })
 
 // Pre-validate middleware to ensure name is populated
 userSchema.pre('validate', function (next) {

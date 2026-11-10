@@ -125,12 +125,34 @@ const useAuthStore = create(
       hasRole:      (roles) => _hasRole(get().user, roles),
       hasPermission: (permission) => _hasPermission(get().user, permission),
 
+      isVerifiedRenter: () => {
+        const { user } = get()
+        if (!user) return false
+        const vStatus = (user.verificationStatus || '').toLowerCase()
+        const kycStatus = (user.kycStatus || '').toLowerCase()
+        const docStatus = (user.documentStatus || '').toLowerCase()
+        const faceStatus = (user.faceStatus || '').toLowerCase()
+        return (
+          vStatus === 'verified' ||
+          user.isVerified === true ||
+          (docStatus === 'document_verified' && faceStatus === 'face_verified') ||
+          kycStatus === 'verified'
+        )
+      },
+
       isKycComplete: () => {
         const { user } = get()
         if (!user) return false
-        if (_isAdmin(user)) return true
-        const status = (user.kycStatus || '').toLowerCase()
-        return status === 'verified'
+        const vStatus = (user.verificationStatus || '').toLowerCase()
+        const kycStatus = (user.kycStatus || '').toLowerCase()
+        const docStatus = (user.documentStatus || '').toLowerCase()
+        const faceStatus = (user.faceStatus || '').toLowerCase()
+        return (
+          vStatus === 'verified' ||
+          user.isVerified === true ||
+          (docStatus === 'document_verified' && faceStatus === 'face_verified') ||
+          kycStatus === 'verified'
+        )
       },
 
       // isOwner: admins can act as owners in the system

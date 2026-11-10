@@ -54,7 +54,7 @@ const fileToBase64 = (file) => {
 export default function BookingFlow() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuthStore()
+  const { user, isVerifiedRenter } = useAuthStore()
 
   const { vehicle, loading } = useVehicle(id)
   const isBookable = (vehicle?.status === 'approved' || vehicle?.verificationStatus === 'approved') && vehicle?.isLive !== false
@@ -255,12 +255,26 @@ export default function BookingFlow() {
         return false
       }
 
-      // KYC check removed in Step 3 to allow booking before KYC completion
-      // const kycStatus = (user?.kycStatus || '').toLowerCase()
-      // if (kycStatus !== 'verified') {
-      //   toast.error('Only KYC-verified riders can request bookings. Please complete verification on your profile page.')
-      //   return false
-      // }
+      // Mandatory Renter Verification Guard
+      const isVerified = isVerifiedRenter()
+      if (!isVerified) {
+        toast.error('Identity and live face verification are mandatory before booking. Redirecting to verification...')
+        navigate(`/verify?redirect=/book/${id}`)
+        return false
+      }
+
+      // Check vehicle-specific driving license requirement
+      if (vehicle?.requiresDrivingLicense !== false) {
+        const hasDL =
+          user?.drivingLicenseVerified === true ||
+          user?.documentType === 'driving_license' ||
+          user?.kycType === 'driving_license'
+        if (!hasDL) {
+          toast.error('This vehicle legally requires a verified Driving License. Please submit your Driving License.')
+          navigate(`/verify?redirect=/book/${id}&type=driving_license`)
+          return false
+        }
+      }
 
       return true
     }

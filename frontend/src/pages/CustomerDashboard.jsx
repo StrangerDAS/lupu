@@ -661,23 +661,60 @@ export default function CustomerDashboard() {
                         ))}
                   </div>
 
-                  {/* KYC Status Reminder Box */}
-                  {user?.kycStatus !== 'Verified' && (
-                    <div className="card p-5 bg-surface-2 border border-white/5 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  {/* Mandatory Verification Status Banner */}
+                  {(!user?.isVerified && user?.verificationStatus !== 'verified' && user?.kycStatus !== 'verified' && user?.kycStatus !== 'Verified') ? (
+                    <div className="card p-5 bg-gradient-to-r from-amber-500/10 via-brand/10 to-transparent border border-amber-500/20 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                       <div className="space-y-1">
-                        <h4 className="font-semibold text-white text-sm flex items-center gap-2">
-                          <FiShield className="text-brand" /> Document KYC Verification Required
-                        </h4>
-                        <p className="text-white/40 text-xs leading-relaxed max-w-lg">
-                          Verify your identity using either a College Student ID or Aadhaar Card to bypass file validation at checkout and list or rent vehicles immediately. Status: <strong className="text-brand capitalize">{user?.kycStatus || 'Not Submitted'}</strong>.
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                          <h4 className="font-semibold text-white text-sm flex items-center gap-2">
+                            <FiShield className="text-amber-400" /> Mandatory Renter Verification Required
+                          </h4>
+                          <span className="badge text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                            {user?.verificationStatus || user?.kycStatus || 'Not Started'}
+                          </span>
+                        </div>
+                        <p className="text-white/60 text-xs leading-relaxed max-w-xl">
+                          Before booking any vehicle on LUPU, you must complete mandatory identity document verification (Student ID, Aadhaar, or Driving License) and live face verification to ensure community safety.
                         </p>
+                        {user?.maskedDocumentNumber && (
+                          <p className="text-[11px] text-white/40 font-mono">
+                            Document on file: <span className="text-white/80">{user.maskedDocumentNumber}</span> ({user.documentType?.replace('_', ' ') || 'ID'})
+                          </p>
+                        )}
                       </div>
-                      <button
-                        onClick={() => setActiveTab('kyc')}
-                        className="btn-primary py-2 px-5 text-xs font-semibold w-fit"
+                      <Link
+                        to="/verify"
+                        className="btn-primary py-2.5 px-6 text-xs font-bold w-fit shrink-0 shadow-lg shadow-brand/20 flex items-center gap-1.5"
                       >
-                        Verify KYC Now
-                      </button>
+                        <FiShield size={14} /> Complete Verification
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="card p-4 bg-green-500/10 border border-green-500/20 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0">
+                          <FiCheckCircle className="text-lg" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold text-white text-sm">Verified LUPU Renter</h4>
+                            <span className="badge text-[10px] font-bold bg-green-500/20 text-green-400 border border-green-500/30">
+                              Active
+                            </span>
+                          </div>
+                          <p className="text-xs text-white/50 mt-0.5">
+                            Verified with {user?.documentType?.replace('_', ' ') || 'Government ID'} {user?.maskedDocumentNumber ? `(${user.maskedDocumentNumber})` : ''} • Live Face Verified
+                            {user?.drivingLicenseVerified ? ' • Driving License Verified (Motorcycle Ready)' : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <Link
+                        to="/explore"
+                        className="btn-secondary py-2 px-4 text-xs font-semibold w-fit shrink-0 text-white hover:text-brand"
+                      >
+                        Explore Vehicles
+                      </Link>
                     </div>
                   )}
 

@@ -327,6 +327,54 @@ export default function HomeScreen() {
       return;
     }
 
+    // ── Mandatory Identity & Face Verification Server & Client Guard ──
+    const isUserVerified =
+      user.isVerified === true ||
+      user.verificationStatus === 'verified' ||
+      user.kycStatus === 'verified';
+
+    if (!isUserVerified) {
+      Alert.alert(
+        'Identity Verification Required 🛡️',
+        'LUPU requires all renters to complete identity document and live face verification before booking any vehicle.\n\nPlease verify your account in your Dashboard to proceed.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Verify Identity Now',
+            onPress: () => {
+              setShowVehicleDetailModal(false);
+              setCurrentTab('dashboard');
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    // ── Driving License Requirement Check for Motor Vehicles ──
+    const requiresDL = selectedVehicle.requiresDrivingLicense !== false;
+    const hasValidDL =
+      user.drivingLicenseVerified === true ||
+      (user.documentType === 'driving_license' && (user.isVerified || user.documentStatus === 'verified'));
+
+    if (requiresDL && !hasValidDL) {
+      Alert.alert(
+        'Driving License Required 🏍️',
+        'This vehicle legally requires a valid Driving License on Indian public roads. Your profile is verified with Student ID or Aadhaar, but has no verified Driving License.\n\nPlease upload your Driving License in the verification portal.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upload Driving License',
+            onPress: () => {
+              setShowVehicleDetailModal(false);
+              setCurrentTab('dashboard');
+            },
+          },
+        ]
+      );
+      return;
+    }
+
     setSubmittingBooking(true);
     try {
       const startTime = pickupDt.toISOString();

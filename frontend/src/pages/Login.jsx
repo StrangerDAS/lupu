@@ -57,6 +57,30 @@ export default function Login() {
       setAuth(data.user, userCredential.user)
       
       toast.success("Welcome back!")
+
+      // Notify Android users about the APK download upon login
+      if (/Android/i.test(navigator.userAgent) || window.location.search.includes('test_android=true')) {
+        sessionStorage.setItem('lupu_just_logged_in_android', 'true')
+        try { localStorage.removeItem('lupu_android_prompt_dismissed_until') } catch {}
+        toast((t) => (
+          <div className="flex items-center gap-3">
+            <span className="text-xl">📱</span>
+            <div className="text-left">
+              <p className="font-bold text-xs text-white">LUPU Android App Available</p>
+              <p className="text-[11px] text-white/70">Install our app for faster unlocks &amp; alerts</p>
+            </div>
+            <a
+              href="/api/app/download"
+              download="LUPU-Rental.apk"
+              onClick={() => toast.dismiss(t.id)}
+              className="ml-auto px-2.5 py-1 rounded-lg bg-[#FF5C00] text-white text-xs font-semibold hover:brightness-110 whitespace-nowrap"
+            >
+              Get APK
+            </a>
+          </div>
+        ), { duration: 7000, style: { background: '#121217', color: '#fff', border: '1px solid rgba(255,92,0,0.4)' } })
+      }
+
       if (['admin', 'super_admin', 'founder'].includes(data.user?.role) || data.user?.email === 'dasstranger421@gmail.com') {
         navigate('/admin')
       } else {
@@ -83,6 +107,30 @@ export default function Login() {
       setAuth(data.user, userCredential.user)
       
       toast.success("Welcome back!")
+
+      // Notify Android users about the APK download upon login
+      if (/Android/i.test(navigator.userAgent) || window.location.search.includes('test_android=true')) {
+        sessionStorage.setItem('lupu_just_logged_in_android', 'true')
+        try { localStorage.removeItem('lupu_android_prompt_dismissed_until') } catch {}
+        toast((t) => (
+          <div className="flex items-center gap-3">
+            <span className="text-xl">📱</span>
+            <div className="text-left">
+              <p className="font-bold text-xs text-white">LUPU Android App Available</p>
+              <p className="text-[11px] text-white/70">Install our app for faster unlocks &amp; alerts</p>
+            </div>
+            <a
+              href="/api/app/download"
+              download="LUPU-Rental.apk"
+              onClick={() => toast.dismiss(t.id)}
+              className="ml-auto px-2.5 py-1 rounded-lg bg-[#FF5C00] text-white text-xs font-semibold hover:brightness-110 whitespace-nowrap"
+            >
+              Get APK
+            </a>
+          </div>
+        ), { duration: 7000, style: { background: '#121217', color: '#fff', border: '1px solid rgba(255,92,0,0.4)' } })
+      }
+
       if (['admin', 'super_admin', 'founder'].includes(data.user?.role) || data.user?.email === 'dasstranger421@gmail.com') {
         navigate('/admin')
       } else {

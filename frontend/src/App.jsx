@@ -18,6 +18,7 @@ import { authAPI } from './api/endpoints'
 import useAuthStore from './store/authStore'
 import { ADMIN_ROLES } from './lib/roleUtils'
 import SOSButton from './components/SOSButton'
+import AndroidAppPrompt from './components/AndroidAppPrompt'
 import { auth } from './config/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
 
@@ -46,6 +47,7 @@ const TermsOfService = lazy(() => import('./pages/TermsOfService'))
 const CustomerDashboard = lazy(() => import('./pages/CustomerDashboard'))
 const SimulatedInbox = lazy(() => import('./pages/SimulatedInbox'))
 const PaymentSuccess = lazy(() => import('./pages/PaymentSuccess'))
+const DownloadApp = lazy(() => import('./pages/DownloadApp'))
 
 export default function App() {
   const { setAuth } = useAuthStore()
@@ -139,6 +141,7 @@ return (
           <Route path="/legal" element={<LegalCenter />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<TermsOfService />} />
+          <Route path="/download" element={<DownloadApp />} />
 
           {/* ── Any authenticated user ──────────────────────────── */}
           <Route element={<ProtectedRoute />}>
@@ -189,6 +192,7 @@ return (
       </Routes>
     </ErrorBoundary>
     <SOSButton />
+    <AndroidAppPrompt />
   </Suspense>
 )
 }

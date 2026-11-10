@@ -29,7 +29,16 @@ import AuditLog from './models/AuditLog.js'
 import Ticket from './models/Ticket.js'
 import { seedDatabase } from './seed.js'
 import { attachVehicleAvailability, checkOverlap } from './utils/availability.js'
-import { kycUpload, vehicleUpload, avatarUpload } from './middleware/uploadMiddleware.js'
+import { kycUpload, vehicleUpload, avatarUpload, faceUpload } from './middleware/uploadMiddleware.js'
+import Verification from './models/Verification.js'
+import {
+  requireVerifiedRenter,
+  maskAadhaarNumber,
+  maskDrivingLicenseNumber,
+  maskStudentIdNumber,
+  maskDocumentNumber,
+  checkRenterBookingEligibility,
+} from './middleware/verificationGuard.js'
 import { logger } from './utils/logger.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { rateLimiter } from './middleware/rateLimiter.js'
@@ -43,19 +52,30 @@ import {
   cloudinary,
   ensureCloudinaryConfigured
 } from './utils/cloudinaryConfig.js'
+import {
+  generateSecureDocumentUrl,
+  resolveSecureFilePath,
+  verifyDocumentToken,
+  SECURE_UPLOAD_DIR
+} from './utils/secureStorage.js'
+import { verificationSubmissionLimiter } from './middleware/rateLimiter.js'
+import { verificationProviderManager } from './adapters/verificationProvider.js'
+
 
 /**
- * Upload a verification document file to Cloudinary so it is permanently hosted in the cloud
- * (persisting across Render deploys/restarts, accessible everywhere without 404).
+ * Upload a verification document file to Cloudinary so it is permanently hosted in the cloud.
+ * Sensitive identity documents are stored with type: 'authenticated' to prevent unauthorized public access.
  */
-async function uploadDocumentFileToCloud(file, fallbackUrl) {
+async function uploadDocumentFileToCloud(file, fallbackUrl, customFolder = 'lupu/secure-identity') {
   if (!file) return fallbackUrl || null
+  const isIdentityDoc = customFolder.includes('identity') || customFolder.includes('verification')
   try {
     ensureCloudinaryConfigured()
     const isPdf = file.mimetype === 'application/pdf' || (file.originalname && file.originalname.toLowerCase().endsWith('.pdf'))
     const uploadOptions = {
-      folder: 'lupu/vehicle-documents',
+      folder: customFolder,
       resource_type: 'image',
+      ...(isIdentityDoc ? { type: 'authenticated' } : {}),
       ...(isPdf ? { format: 'png' } : {})
     }
     const result = await cloudinary.uploader.upload(file.path, uploadOptions)
@@ -63,8 +83,64 @@ async function uploadDocumentFileToCloud(file, fallbackUrl) {
     try { fs.unlinkSync(file.path) } catch (_) {}
     return result.secure_url
   } catch (err) {
-    console.warn('[Documents] Cloudinary upload fallback to local disk:', err.message)
+    console.warn('[Documents] Cloudinary upload fallback to secure disk:', err.message)
+    if (isIdentityDoc) {
+      return `/secure-uploads/${file.filename}`
+    }
     return `/uploads/${file.filename}`
+  }
+}
+
+/**
+ * Validates that base64 payload starts with valid JPEG, PNG, or WebP magic bytes.
+ */
+function isValidImageBase64(base64Data) {
+  try {
+    const buffer = Buffer.from(base64Data.slice(0, 32), 'base64')
+    if (buffer.length < 4) return false
+    // JPEG: 0xFF, 0xD8, 0xFF
+    const isJpeg = buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF
+    // PNG: 0x89, 0x50, 0x4E, 0x47
+    const isPng = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47
+    // WebP: 'RIFF' .... 'WEBP'
+    const isWebP = buffer.slice(0, 4).toString() === 'RIFF'
+    return isJpeg || isPng || isWebP
+  } catch (_) {
+    return false
+  }
+}
+
+/**
+ * Upload base64 data URL to Cloudinary with authenticated type (used for live selfie and mobile document uploads).
+ * Validates magic bytes to prevent non-image payloads from being stored.
+ */
+async function uploadDataUrlToCloud(dataUrl, folder = 'lupu/secure-identity', prefix = 'doc') {
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) return null
+  const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '')
+  if (!isValidImageBase64(base64Data)) {
+    console.warn(`[SecureStorage] uploadDataUrlToCloud rejected: invalid image magic bytes for ${prefix}`)
+    return null
+  }
+  try {
+    ensureCloudinaryConfigured()
+    const result = await cloudinary.uploader.upload(dataUrl, {
+      folder,
+      resource_type: 'image',
+      type: 'authenticated',
+    })
+    return result.secure_url
+  } catch (err) {
+    console.warn(`[SecureStorage] Cloudinary uploadDataUrl fallback to secure disk for ${prefix}:`, err.message)
+    try {
+      const ext = dataUrl.includes('image/png') ? 'png' : 'jpg'
+      const filename = `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${ext}`
+      const filePath = path.join(SECURE_UPLOAD_DIR, filename)
+      fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'))
+      return `/secure-uploads/${filename}`
+    } catch (fsErr) {
+      console.error(`[SecureStorage] Fallback failed for ${prefix}:`, fsErr.message)
+      return null
+    }
   }
 }
 
@@ -85,6 +161,18 @@ const __dirname = path.dirname(__filename)
 import paymentRoutes from './routes/paymentRoutes.js'
 
 const app = express()
+
+// Security Shield: Block direct public static access to identity documents and selfies in /uploads
+app.use('/uploads', (req, res, next) => {
+  const sensitiveRegex = /(document|aadhaar|student|driving|license|selfie|kyc|pan|liveFrame)/i
+  if (sensitiveRegex.test(req.path)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Direct public access to identity document files is strictly forbidden. Authorized admins must use signed URLs.'
+    })
+  }
+  next()
+})
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 app.use('/api/payment', paymentRoutes)
@@ -129,16 +217,75 @@ app.use((req, _res, next) => {
 function safeUser(u, callerId = null, isAdmin = false) {
   // eslint-disable-next-line no-unused-vars
   const { password, __v, ...rest } = u
-  if (rest.payoutDetails && rest.payoutDetails.accountNumber) {
-    const rawAcc = String(rest.payoutDetails.accountNumber)
-    const isSelf = callerId && (rest._id?.toString() === callerId.toString())
-    if (!isSelf && !isAdmin) {
+  const isSelf = callerId && (rest._id?.toString() === callerId.toString())
+  if (!isSelf && !isAdmin) {
+    if (rest.payoutDetails && rest.payoutDetails.accountNumber) {
+      const rawAcc = String(rest.payoutDetails.accountNumber)
       rest.payoutDetails = {
         ...rest.payoutDetails,
         accountNumber: `**** **** ${rawAcc.slice(-4)}`
       }
     }
+    // Delete all private document URLs and sensitive metadata for non-self / non-admin callers
+    delete rest.aadhaarFrontUrl
+    delete rest.aadhaarBackUrl
+    delete rest.documentFrontUrl
+    delete rest.documentBackUrl
+    delete rest.drivingLicenseUrl
+    delete rest.drivingLicenseBackUrl
+    delete rest.governmentIdUrl
+    delete rest.collegeIdUrl
+    delete rest.panUrl
+    delete rest.selfieUrl
+    delete rest.panNumber
+    delete rest.kycDetails
+    delete rest.maskedDocumentNumber
+    delete rest.aadhaarNumber
+    delete rest.drivingLicenseNumber
+    delete rest.drivingLicenseExpiry
+    delete rest.drivingLicenseCategories
   }
+
+  // Prevent permanent raw identity document URLs from leaking in API responses
+  if (!isAdmin) {
+    delete rest.aadhaarFrontUrl
+    delete rest.aadhaarBackUrl
+    delete rest.documentFrontUrl
+    delete rest.documentBackUrl
+    delete rest.drivingLicenseUrl
+    delete rest.drivingLicenseBackUrl
+    delete rest.governmentIdUrl
+    delete rest.collegeIdUrl
+    delete rest.panUrl
+    delete rest.selfieUrl
+  }
+
+  // Strictly enforce Aadhaar privacy: NEVER expose full Aadhaar in API responses
+  if (rest.aadhaarNumber) {
+    rest.aadhaarNumber = maskAadhaarNumber(rest.aadhaarNumber)
+  }
+  if (rest.kycDetails && rest.kycDetails.aadhaarNumber) {
+    rest.kycDetails = {
+      ...rest.kycDetails,
+      aadhaarNumber: maskAadhaarNumber(rest.kycDetails.aadhaarNumber),
+    }
+  }
+  if (rest.drivingLicenseNumber && !isAdmin) {
+    rest.drivingLicenseNumber = maskDrivingLicenseNumber(rest.drivingLicenseNumber)
+  }
+
+  // Ensure computed verification state is accurate
+  const isOfficiallyVerified =
+    rest.verificationStatus === 'verified' ||
+    rest.isVerified === true ||
+    (rest.documentStatus === 'document_verified' && rest.faceStatus === 'face_verified') ||
+    String(rest.kycStatus || '').toLowerCase() === 'verified'
+
+  rest.isVerified = isOfficiallyVerified
+  if (isOfficiallyVerified && rest.verificationStatus !== 'verified') {
+    rest.verificationStatus = 'verified'
+  }
+
   return rest
 }
 
@@ -950,7 +1097,7 @@ app.get('/api/vehicles/:id/calendar', async (req, res, next) => {
   }
 })
 
-app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, kycPlaceholder, async (req, res, next) => {
+app.post('/api/bookings', verifyFirebaseToken, requireMongoUser, requireVerifiedRenter, async (req, res, next) => {
   try {
     const {
       startTime,
@@ -1682,7 +1829,7 @@ app.post('/api/users/request-account-deletion', verifyFirebaseToken, requireMong
 })
 
 
-app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, (req, res, next) => {
+app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, verificationSubmissionLimiter(), (req, res, next) => {
   kycUpload(req, res, (err) => {
     if (err) {
       return res.status(400).json({ message: err.message || 'File upload error during KYC submission' })
@@ -1696,7 +1843,7 @@ app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, (req, res, nex
 
     const getFileUrl = (fieldname) => {
       const file = files[fieldname]?.[0]
-      return file ? `/uploads/${file.filename}` : null
+      return file ? `/secure-uploads/${file.filename}` : null
     }
 
     const govUrl = getFileUrl('governmentIdUrl') || getFileUrl('governmentId') || body.governmentIdUrl
@@ -1722,8 +1869,16 @@ app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, (req, res, nex
     }
 
     if (body.kycType) updates.kycType = body.kycType
-    if (body.drivingLicenseNumber) updates.drivingLicenseNumber = body.drivingLicenseNumber
-    if (body.aadhaarNumber) updates.aadhaarNumber = body.aadhaarNumber
+    if (body.drivingLicenseNumber) {
+      const maskedDl = maskDrivingLicenseNumber(body.drivingLicenseNumber)
+      updates.drivingLicenseNumber = maskedDl
+      updates.maskedDocumentNumber = maskedDl
+    }
+    if (body.aadhaarNumber) {
+      const maskedAadhaar = maskAadhaarNumber(body.aadhaarNumber)
+      updates.aadhaarNumber = maskedAadhaar
+      updates.maskedDocumentNumber = maskedAadhaar
+    }
     if (body.panNumber) updates.panNumber = body.panNumber
 
     if (govUrl) updates.governmentIdUrl = govUrl
@@ -1737,8 +1892,8 @@ app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, (req, res, nex
     // Store consolidated details object
     const mergedDetails = {
       ...kycDetails,
-      ...(body.drivingLicenseNumber && { drivingLicenseNumber: body.drivingLicenseNumber }),
-      ...(body.aadhaarNumber && { aadhaarNumber: body.aadhaarNumber }),
+      ...(body.drivingLicenseNumber && { drivingLicenseNumber: updates.drivingLicenseNumber }),
+      ...(body.aadhaarNumber && { aadhaarNumber: updates.aadhaarNumber }),
       ...(body.panNumber && { panNumber: body.panNumber }),
       ...(govUrl && { governmentIdUrl: govUrl }),
       ...(collegeUrl && { collegeIdUrl: collegeUrl }),
@@ -1777,6 +1932,748 @@ app.post('/api/users/kyc', verifyFirebaseToken, requireMongoUser, (req, res, nex
   } catch (err) {
     console.error('KYC submit error:', err)
     res.status(500).json({ message: err.message || 'Internal server error during KYC submission' })
+  }
+})
+
+// ── Mandatory Verification System Endpoints ──────────────────────────────
+
+/**
+ * GET /api/users/verification/status
+ * Returns comprehensive verification and eligibility status for authenticated renter.
+ */
+app.get('/api/users/verification/status', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    const user = req.user
+    const verification = await Verification.findOne({ userId: user._id }).sort({ createdAt: -1 }).lean()
+
+    const isOfficiallyVerified =
+      user.verificationStatus === 'verified' ||
+      user.isVerified === true ||
+      (user.documentStatus === 'document_verified' && user.faceStatus === 'face_verified') ||
+      String(user.kycStatus || '').toLowerCase() === 'verified'
+
+    const overallStatus = isOfficiallyVerified ? 'verified' : (user.verificationStatus || verification?.overallStatus || 'not_started')
+    const documentStatus = user.documentStatus || verification?.documentStatus || 'not_started'
+    const faceStatus = user.faceStatus || verification?.faceStatus || 'not_started'
+    const documentType = user.documentType || verification?.documentType || user.kycType || null
+    const maskedDocumentNumber = user.maskedDocumentNumber || verification?.maskedDocumentNumber || null
+
+    res.json({
+      overallStatus,
+      documentStatus,
+      faceStatus,
+      documentType,
+      maskedDocumentNumber,
+      isVerified: isOfficiallyVerified,
+      drivingLicenseVerified: !!(user.drivingLicenseVerified || (isOfficiallyVerified && documentType === 'driving_license')),
+      drivingLicenseExpiry: user.drivingLicenseExpiry || verification?.drivingLicenseDetails?.expiryDate || null,
+      rejectionReason: user.kycRejectionReason || verification?.rejectionReason || null,
+      submittedAt: verification?.submittedAt || user.kycSubmittedAt || null,
+      reviewedAt: verification?.reviewedAt || null,
+      canBook: isOfficiallyVerified,
+      verificationId: verification?._id || null,
+    })
+  } catch (err) {
+    console.error('Error in GET /api/users/verification/status:', err)
+    res.status(500).json({ message: 'Error retrieving verification status' })
+  }
+})
+
+/**
+ * POST /api/users/verification/document
+ * Submits Student ID, Aadhaar Card, or Driving License for verification.
+ * Enforces masking, secure storage, and input validation.
+ */
+app.post('/api/users/verification/document', verifyFirebaseToken, requireMongoUser, verificationSubmissionLimiter(), (req, res, next) => {
+  kycUpload(req, res, (err) => {
+    if (err) return res.status(400).json({ message: err.message || 'File upload error during document submission' })
+    next()
+  })
+}, async (req, res) => {
+  try {
+    const files = req.files || {}
+    const body = req.body || {}
+    const user = req.user
+
+    const documentType = (body.documentType || body.kycType || 'student_id').toLowerCase().trim()
+    if (!['student_id', 'aadhaar', 'driving_license'].includes(documentType)) {
+      return res.status(400).json({ message: 'Invalid documentType. Must be student_id, aadhaar, or driving_license.' })
+    }
+
+    const frontFile = files.documentFront?.[0] || files.studentIdFront?.[0] || files.studentId?.[0] || files.collegeId?.[0] || files.aadhaarFront?.[0] || files.drivingLicenseFront?.[0] || files.drivingLicense?.[0] || files.document?.[0]
+    const backFile = files.documentBack?.[0] || files.aadhaarBack?.[0] || files.drivingLicenseBack?.[0]
+
+    if (!frontFile && !body.documentFrontUrl && !body.collegeIdUrl && !body.aadhaarFrontUrl && !body.drivingLicenseUrl) {
+      return res.status(400).json({ message: 'Document front photograph is required.' })
+    }
+
+    if (['aadhaar', 'driving_license'].includes(documentType) && !backFile && !body.documentBackUrl && !body.aadhaarBackUrl && !body.drivingLicenseBackUrl) {
+      return res.status(400).json({
+        message: `Both front and back photographs are required for ${documentType === 'aadhaar' ? 'Aadhaar Card' : 'Driving License'} verification.`
+      })
+    }
+
+    const rawDocNumber = (body.documentNumber || body.studentIdNumber || body.aadhaarNumber || body.drivingLicenseNumber || '').trim()
+    if (!rawDocNumber) {
+      return res.status(400).json({ message: 'Document number is required.' })
+    }
+
+    // Specific validation
+    if (documentType === 'aadhaar') {
+      const cleanDigits = rawDocNumber.replace(/\D/g, '')
+      if (cleanDigits.length < 12 && !rawDocNumber.includes('XXXX')) {
+        return res.status(400).json({ message: 'Please enter a valid 12-digit Aadhaar number.' })
+      }
+    } else if (documentType === 'driving_license') {
+      if (rawDocNumber.length < 6) {
+        return res.status(400).json({ message: 'Please enter a valid Driving License number.' })
+      }
+    } else if (documentType === 'student_id') {
+      const inst = (body.institutionName || user.college || '').trim()
+      if (!inst) {
+        return res.status(400).json({ message: 'Institution / College name is required for Student ID verification.' })
+      }
+    }
+
+    // Upload files to Cloudinary with authenticated type (with secure local fallback)
+    const [frontUrl, backUrl] = await Promise.all([
+      frontFile
+        ? uploadDocumentFileToCloud(frontFile, null, 'lupu/secure-identity')
+        : (body.documentFrontUrl?.startsWith('data:image')
+            ? uploadDataUrlToCloud(body.documentFrontUrl, 'lupu/secure-identity', 'doc-front')
+            : (body.documentFrontUrl || body.collegeIdUrl || body.aadhaarFrontUrl || body.drivingLicenseUrl || null)),
+      backFile
+        ? uploadDocumentFileToCloud(backFile, null, 'lupu/secure-identity')
+        : (body.documentBackUrl?.startsWith('data:image')
+            ? uploadDataUrlToCloud(body.documentBackUrl, 'lupu/secure-identity', 'doc-back')
+            : (body.documentBackUrl || body.aadhaarBackUrl || body.drivingLicenseBackUrl || null)),
+    ])
+
+    if (!frontUrl) {
+      return res.status(400).json({ message: 'Valid document front photograph is required. Image format invalid or unreadable.' })
+    }
+
+    const maskedNumber = maskDocumentNumber(documentType, rawDocNumber)
+
+    // Duplicate document check: Ensure document is not already registered with another user
+    const existingVerif = await Verification.findOne({
+      maskedDocumentNumber: maskedNumber,
+      documentType,
+      userId: { $ne: user._id },
+      overallStatus: { $in: ['verified', 'under_review', 'document_submitted'] },
+    }).lean()
+
+    if (existingVerif) {
+      return res.status(409).json({
+        message: 'This document number is already registered with another active LUPU account. Each identity document can only be used on one profile.'
+      })
+    }
+
+    // Build document metadata
+    const studentIdDetails = documentType === 'student_id' ? {
+      studentIdNumberMasked: maskedNumber,
+      institutionName: body.institutionName || user.college || 'Dibrugarh University',
+      department: body.department || '',
+      isVerified: false,
+    } : undefined
+
+    const aadhaarDetails = documentType === 'aadhaar' ? {
+      lastFourDigits: rawDocNumber.replace(/\D/g, '').slice(-4),
+      isCompliant: true,
+      isVerified: false,
+    } : undefined
+
+    const drivingLicenseDetails = documentType === 'driving_license' ? {
+      licenseNumberMasked: maskedNumber,
+      expiryDate: body.expiryDate ? new Date(body.expiryDate) : null,
+      categories: body.categories ? (Array.isArray(body.categories) ? body.categories : String(body.categories).split(',').map(c => c.trim())) : ['MCWG'],
+      isExpired: body.expiryDate ? new Date(body.expiryDate) <= new Date() : false,
+      isVerified: false,
+    } : undefined
+
+    // Create or update Verification record
+    const verification = await Verification.create({
+      userId: user._id,
+      documentType,
+      documentStatus: 'document_submitted',
+      faceStatus: user.faceStatus === 'face_verified' ? 'face_verified' : (user.faceStatus || 'face_pending'),
+      overallStatus: user.faceStatus === 'face_verified' ? 'under_review' : 'face_pending',
+      maskedDocumentNumber: maskedNumber,
+      documentFrontUrl: frontUrl,
+      documentBackUrl: backUrl,
+      studentIdDetails,
+      aadhaarDetails,
+      drivingLicenseDetails,
+      submittedAt: new Date(),
+      auditHistory: [
+        {
+          action: 'document_submitted',
+          performedBy: user._id,
+          performedByName: user.name,
+          note: `Submitted ${documentType} (${maskedNumber})`,
+        }
+      ]
+    })
+
+    // Update User record
+    const userUpdates = {
+      documentType,
+      documentStatus: 'document_submitted',
+      maskedDocumentNumber: maskedNumber,
+      verificationStatus: user.faceStatus === 'face_verified' ? 'under_review' : 'face_pending',
+      kycType: documentType,
+      kycStatus: 'pending',
+      kycSubmittedAt: new Date(),
+      kycRejectionReason: null,
+      isVerified: false,
+    }
+
+    if (documentType === 'student_id') {
+      userUpdates.collegeIdUrl = frontUrl
+      if (body.institutionName) userUpdates.college = body.institutionName
+    } else if (documentType === 'aadhaar') {
+      userUpdates.aadhaarFrontUrl = frontUrl
+      userUpdates.aadhaarBackUrl = backUrl
+      userUpdates.aadhaarNumber = maskedNumber
+    } else if (documentType === 'driving_license') {
+      userUpdates.drivingLicenseUrl = frontUrl
+      userUpdates.drivingLicenseBackUrl = backUrl
+      userUpdates.drivingLicenseNumber = maskedNumber
+      if (body.expiryDate) userUpdates.drivingLicenseExpiry = new Date(body.expiryDate)
+      if (drivingLicenseDetails?.categories) userUpdates.drivingLicenseCategories = drivingLicenseDetails.categories
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(user._id, userUpdates, { new: true, lean: true })
+
+    await sendNotification(user._id, {
+      type: 'general',
+      title: 'Identity Document Submitted 📋',
+      message: 'Your document was received. Please proceed to live Face Verification to complete the process.',
+      link: '/verify'
+    })
+
+    res.json({
+      success: true,
+      message: 'Document submitted successfully. Next, please complete Face Verification.',
+      documentStatus: 'document_submitted',
+      overallStatus: userUpdates.verificationStatus,
+      maskedDocumentNumber: maskedNumber,
+      verificationId: verification._id,
+      user: safeUser(updatedUser),
+    })
+  } catch (err) {
+    console.error('Document submission error:', err)
+    res.status(500).json({ message: err.message || 'Error submitting document' })
+  }
+})
+
+/**
+ * POST /api/users/verification/face
+ * Submits live captured selfie with mandatory biometric consent and liveness verification.
+ */
+app.post('/api/users/verification/face', verifyFirebaseToken, requireMongoUser, verificationSubmissionLimiter(), (req, res, next) => {
+  faceUpload(req, res, (err) => {
+    if (err) return res.status(400).json({ message: err.message || 'File upload error during face verification' })
+    next()
+  })
+}, async (req, res) => {
+  try {
+    const user = req.user
+    const body = req.body || {}
+    const files = req.files || {}
+
+    // 1. Mandatory Biometric Consent
+    const consent = body.biometricConsent === true || body.biometricConsent === 'true' || body.consent === true || body.consent === 'true'
+    if (!consent) {
+      return res.status(400).json({
+        message: 'Explicit user consent is legally required before collecting facial biometric verification data.'
+      })
+    }
+
+    // 2. Fetch or create verification document
+    let verification = await Verification.findOne({ userId: user._id }).sort({ createdAt: -1 })
+    if (!verification) {
+      return res.status(400).json({
+        message: 'Please submit your identity document before completing face verification.'
+      })
+    }
+
+    // Rate limiting: max 5 face verification attempts per 15 mins
+    const now = new Date()
+    if (verification.faceAttemptsCount >= 5 && verification.lastFaceAttemptAt && (now - verification.lastFaceAttemptAt < 15 * 60 * 1000)) {
+      return res.status(429).json({
+        message: 'Too many face verification attempts. Please wait 15 minutes before trying again.'
+      })
+    }
+
+    const selfieFile = files.selfie?.[0]
+    const selfieDataUrl = body.selfieDataUrl || body.selfie
+
+    if (!selfieFile && (!selfieDataUrl || !selfieDataUrl.startsWith('data:image'))) {
+      return res.status(400).json({ message: 'Live selfie capture is required.' })
+    }
+
+    // Upload selfie with authenticated type to secure storage
+    let selfieUrl = null
+    if (selfieFile) {
+      selfieUrl = await uploadDocumentFileToCloud(selfieFile, null, 'lupu/secure-identity')
+    } else if (selfieDataUrl) {
+      selfieUrl = await uploadDataUrlToCloud(selfieDataUrl, 'lupu/secure-identity', 'selfie')
+    }
+
+    if (!selfieUrl) {
+      return res.status(400).json({ message: 'Invalid selfie image format or upload failed. Please capture a clear live facial selfie.' })
+    }
+
+    // Record face attempt
+    verification.selfieUrl = selfieUrl
+    verification.biometricConsentGiven = true
+    verification.biometricConsentTimestamp = now
+    verification.faceAttemptsCount = (verification.faceAttemptsCount || 0) + 1
+    verification.lastFaceAttemptAt = now
+    verification.faceStatus = 'face_under_review'
+    verification.overallStatus = 'under_review'
+    // Explicit: Automated AI face matching & liveness provider not configured yet. Requires manual admin side-by-side review.
+    verification.livenessCheckPassed = false
+    verification.livenessScore = null
+
+    verification.auditHistory.push({
+      action: 'face_submitted',
+      performedBy: user._id,
+      performedByName: user.name,
+      note: 'Live selfie uploaded with biometric consent (pending admin side-by-side comparison)',
+    })
+    await verification.save()
+
+    // Update User
+    const updatedUser = await User.findByIdAndUpdate(user._id, {
+      selfieUrl,
+      biometricConsent: true,
+      biometricConsentAt: now,
+      faceStatus: 'face_under_review',
+      verificationStatus: 'under_review',
+      kycStatus: 'pending',
+      isVerified: false,
+    }, { new: true, lean: true })
+
+    await sendNotification(user._id, {
+      type: 'general',
+      title: 'Face Verification Submitted 📸',
+      message: 'Your live selfie has been securely recorded. Our team is reviewing your documents for final verification.',
+      link: '/customer-dashboard'
+    })
+
+    res.json({
+      success: true,
+      message: 'Face verification submitted successfully. Your identity and face verification are under review.',
+      faceStatus: 'face_under_review',
+      overallStatus: 'under_review',
+      user: safeUser(updatedUser),
+    })
+  } catch (err) {
+    console.error('Face verification error:', err)
+    res.status(500).json({ message: err.message || 'Error processing face verification' })
+  }
+})
+
+/**
+ * GET /api/admin/verifications
+ * Admin list of renter verifications for review.
+ */
+app.get('/api/admin/verifications', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+  try {
+    const { status, documentType, search } = req.query
+    const filter = {}
+
+    if (status && status !== 'all') {
+      filter.overallStatus = status
+    }
+    if (documentType && documentType !== 'all') {
+      filter.documentType = documentType
+    }
+
+    let query = Verification.find(filter)
+      .populate('userId', 'name email phone avatar college role kycStatus verificationStatus documentStatus faceStatus isVerified drivingLicenseVerified drivingLicenseExpiry')
+      .sort({ createdAt: -1 })
+      .limit(100)
+
+    const list = await query.lean()
+
+    let results = list
+    if (search && search.trim()) {
+      const s = search.trim().toLowerCase()
+      results = results.filter(v =>
+        v.userId?.name?.toLowerCase().includes(s) ||
+        v.userId?.email?.toLowerCase().includes(s) ||
+        v.maskedDocumentNumber?.toLowerCase().includes(s)
+      )
+    }
+
+    const secureResults = results.map(v => ({
+      ...v,
+      documentFrontSignedUrl: generateSecureDocumentUrl(v.documentFrontUrl),
+      documentBackSignedUrl: generateSecureDocumentUrl(v.documentBackUrl),
+      selfieSignedUrl: generateSecureDocumentUrl(v.selfieUrl),
+      // Mask raw permanent document storage URLs
+      documentFrontUrl: null,
+      documentBackUrl: null,
+      selfieUrl: null,
+    }))
+
+    res.json({ verifications: secureResults, total: secureResults.length })
+  } catch (err) {
+    console.error('GET /api/admin/verifications error:', err)
+    res.status(500).json({ message: 'Error retrieving verifications' })
+  }
+})
+
+/**
+ * GET /api/admin/verifications/secure-file
+ * Secure proxy endpoint for viewing locally stored identity documents.
+ * Requires a valid HMAC-SHA256 signature and non-expired timestamp (max 15 minutes).
+ */
+app.get('/api/admin/verifications/secure-file', async (req, res) => {
+  try {
+    const { path: relativePath, expires, token } = req.query
+
+    if (!relativePath || !expires || !token) {
+      return res.status(400).json({ success: false, message: 'Missing document access credentials.' })
+    }
+
+    // 1. Expiration check: strictly enforced (max 15 mins)
+    const now = Math.floor(Date.now() / 1000)
+    if (now > parseInt(expires, 10)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Signed document access URL has expired (15-minute limit exceeded). Please refresh the review dashboard.'
+      })
+    }
+
+    // 2. Cryptographic signature check
+    const isValid = verifyDocumentToken(relativePath, expires, token)
+    if (!isValid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid or tampered document access signature.'
+      })
+    }
+
+    // 3. Resolve path safely within allowed upload directories
+    const resolvedPath = resolveSecureFilePath(relativePath)
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ success: false, message: 'Document file not found.' })
+    }
+
+    // 4. Send file with strict privacy headers
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate')
+    res.setHeader('Pragma', 'no-cache')
+    res.setHeader('Expires', '0')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Disposition', 'inline')
+    return res.sendFile(path.resolve(resolvedPath))
+  } catch (err) {
+    console.error('Error serving secure document file:', err)
+    return res.status(500).json({ success: false, message: 'Error retrieving document file.' })
+  }
+})
+
+/**
+ * GET /api/admin/verifications/:id/document-urls
+ * Generates short-lived (max 15-minute) signed access URLs for identity documents.
+ * Strictly restricted to authorized administrators.
+ */
+app.get('/api/admin/verifications/:id/document-urls', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+  try {
+    const { id } = req.params
+    const verification = await Verification.findById(id).lean()
+    if (!verification) {
+      return res.status(404).json({ message: 'Verification record not found' })
+    }
+
+    const ttlSeconds = 15 * 60 // 15 minutes max
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString()
+
+    res.json({
+      success: true,
+      verificationId: verification._id,
+      expiresInSeconds: ttlSeconds,
+      expiresAt,
+      documentFrontSignedUrl: generateSecureDocumentUrl(verification.documentFrontUrl, ttlSeconds),
+      documentBackSignedUrl: generateSecureDocumentUrl(verification.documentBackUrl, ttlSeconds),
+      selfieSignedUrl: generateSecureDocumentUrl(verification.selfieUrl, ttlSeconds),
+    })
+  } catch (err) {
+    console.error('Error generating signed document URLs:', err)
+    res.status(500).json({ message: 'Error generating secure document access URLs' })
+  }
+})
+
+/**
+ * POST /api/webhooks/verification/:provider
+ * Handles asynchronous verification updates from Indian KYC providers (HyperVerge, Signzy).
+ * Enforces HMAC signature verification, timestamp clock-skew validation, and replay protection.
+ */
+app.post('/api/webhooks/verification/:provider', async (req, res) => {
+  try {
+    const { provider } = req.params
+    const adapter = verificationProviderManager.getAdapter(provider)
+    if (!adapter) {
+      return res.status(400).json({ success: false, message: `Unsupported verification provider: ${provider}` })
+    }
+
+    // 1. Signature Verification
+    const isSignatureValid = adapter.verifyWebhookSignature(req)
+    if (!isSignatureValid) {
+      console.warn(`[Webhook:${provider}] Invalid webhook signature received`)
+      return res.status(401).json({ success: false, message: 'Invalid or missing webhook signature' })
+    }
+
+    // 2. Process payload
+    const parsedResult = await adapter.processWebhookPayload(req.body)
+    const { transactionId } = parsedResult
+
+    // 3. Replay Protection: Check if transaction has already been processed
+    const isNew = verificationProviderManager.checkAndRecordReplay(transactionId)
+    if (!isNew) {
+      console.warn(`[Webhook:${provider}] Replay attack detected for transaction: ${transactionId}`)
+      return res.status(409).json({ success: false, message: 'Webhook callback has already been processed (duplicate replay)' })
+    }
+
+    // 4. Find matching verification record
+    const verification = await Verification.findOne({
+      $or: [
+        { verificationReference: transactionId },
+        { 'auditHistory.note': new RegExp(transactionId, 'i') }
+      ]
+    }).populate('userId')
+
+    if (!verification) {
+      console.warn(`[Webhook:${provider}] Verification record not found for transaction: ${transactionId}`)
+      return res.status(404).json({ success: false, message: 'No matching verification record found' })
+    }
+
+    const user = verification.userId
+
+    // 5. Update statuses atomically based on provider result
+    const now = new Date()
+    verification.livenessCheckPassed = parsedResult.livenessPassed || false
+    verification.livenessScore = parsedResult.livenessScore || null
+    verification.faceMatchScore = parsedResult.faceMatchScore || null
+    verification.overallStatus = parsedResult.status
+    verification.reviewedAt = now
+
+    if (parsedResult.isSuccess) {
+      verification.documentStatus = 'document_verified'
+      verification.faceStatus = 'face_verified'
+      verification.overallStatus = 'verified'
+      verification.verifiedAt = now
+
+      if (user) {
+        user.isVerified = true
+        user.verificationStatus = 'verified'
+        user.documentStatus = 'document_verified'
+        user.faceStatus = 'face_verified'
+        user.kycStatus = 'verified'
+        if (verification.documentType === 'driving_license') {
+          user.drivingLicenseVerified = true
+        }
+        await user.save()
+      }
+    } else if (parsedResult.isRejected) {
+      verification.documentStatus = 'document_rejected'
+      verification.faceStatus = 'face_failed'
+      verification.overallStatus = 'rejected'
+      verification.rejectionReason = parsedResult.rawResult?.reason || 'Verification rejected by verification provider.'
+
+      if (user) {
+        user.isVerified = false
+        user.verificationStatus = 'rejected'
+        user.kycStatus = 'rejected'
+        user.kycRejectionReason = verification.rejectionReason
+        await user.save()
+      }
+    }
+
+    verification.auditHistory.push({
+      action: 'provider_webhook_update',
+      performedByName: `${provider.toUpperCase()} Provider API`,
+      timestamp: now,
+      note: `Webhook processed for transaction ${transactionId}. Status: ${parsedResult.status}`
+    })
+
+    await verification.save()
+
+    return res.json({ success: true, message: 'Verification webhook processed successfully' })
+  } catch (err) {
+    console.error('Error handling verification webhook:', err)
+    return res.status(500).json({ success: false, message: err.message || 'Internal server error processing webhook' })
+  }
+})
+
+/**
+ * POST /api/users/verification/provider-session
+ * Initializes an Indian verification provider workflow session.
+ */
+app.post('/api/users/verification/provider-session', verifyFirebaseToken, requireMongoUser, async (req, res) => {
+  try {
+    const user = req.user
+    const { documentType } = req.body
+    const provider = verificationProviderManager.getActiveProvider()
+    const session = await provider.createVerificationSession({
+      userId: user._id,
+      documentType: documentType || user.documentType || 'student_id',
+      redirectUrl: `${req.protocol}://${req.get('host')}/verify`
+    })
+    res.json({ success: true, session })
+  } catch (err) {
+    console.error('Error creating provider session:', err)
+    res.status(500).json({ message: 'Error initiating verification session' })
+  }
+})
+
+
+/**
+ * PATCH /api/admin/verifications/:id/review
+ * Approves or rejects document and face verification with atomic audit logging.
+ */
+app.patch('/api/admin/verifications/:id/review', verifyFirebaseToken, requireMongoUser, authorize('admin', 'super_admin', 'founder'), async (req, res) => {
+  try {
+    const { id } = req.params
+    const {
+      documentDecision, // 'approved' | 'rejected' | 'keep'
+      faceDecision,     // 'approved' | 'rejected' | 'keep'
+      overallDecision,  // 'verified' | 'rejected' | 'resubmission_required'
+      rejectionReason,
+      licenseCategories,
+      licenseExpiry
+    } = req.body
+
+    const verification = await Verification.findById(id).populate('userId')
+    if (!verification) {
+      return res.status(404).json({ message: 'Verification record not found' })
+    }
+
+    const targetUser = verification.userId
+    if (!targetUser) {
+      return res.status(404).json({ message: 'Associated user not found' })
+    }
+
+    // Separation of duties: Admins cannot approve their own verification
+    if (targetUser._id.toString() === req.user._id.toString()) {
+      return res.status(403).json({
+        message: 'Security policy violation: Administrators cannot self-approve their own identity verification.'
+      })
+    }
+
+    // Update document decision
+    if (documentDecision === 'approved') {
+      verification.documentStatus = 'document_verified'
+      if (verification.documentType === 'student_id' && verification.studentIdDetails) {
+        verification.studentIdDetails.isVerified = true
+      } else if (verification.documentType === 'aadhaar' && verification.aadhaarDetails) {
+        verification.aadhaarDetails.isVerified = true
+      } else if (verification.documentType === 'driving_license' && verification.drivingLicenseDetails) {
+        verification.drivingLicenseDetails.isVerified = true
+        if (licenseExpiry) verification.drivingLicenseDetails.expiryDate = new Date(licenseExpiry)
+        if (licenseCategories) verification.drivingLicenseDetails.categories = Array.isArray(licenseCategories) ? licenseCategories : [licenseCategories]
+      }
+    } else if (documentDecision === 'rejected') {
+      verification.documentStatus = 'document_rejected'
+    }
+
+    // Update face decision
+    if (faceDecision === 'approved') {
+      verification.faceStatus = 'face_verified'
+      verification.manualFaceMatchApproved = true
+      verification.manualFaceMatchApprovedBy = req.user._id
+    } else if (faceDecision === 'rejected') {
+      verification.faceStatus = 'face_failed'
+      verification.faceMismatchReason = rejectionReason || 'Selfie did not match document photograph'
+    }
+
+    // Determine overall decision
+    let finalOverallStatus = overallDecision
+    if (!finalOverallStatus) {
+      if (verification.documentStatus === 'document_verified' && verification.faceStatus === 'face_verified') {
+        finalOverallStatus = 'verified'
+      } else if (verification.documentStatus === 'document_rejected' || verification.faceStatus === 'face_failed') {
+        finalOverallStatus = 'rejected'
+      } else {
+        finalOverallStatus = 'under_review'
+      }
+    }
+
+    // Critical rule: A renter can ONLY be marked verified if BOTH document & face are approved!
+    if (finalOverallStatus === 'verified') {
+      if (verification.documentStatus !== 'document_verified' || verification.faceStatus !== 'face_verified') {
+        return res.status(400).json({
+          message: 'Cannot mark verified: Both Document and Face verification must be approved.'
+        })
+      }
+    }
+
+    verification.overallStatus = finalOverallStatus
+    verification.reviewedBy = req.user._id
+    verification.reviewedAt = new Date()
+    if (finalOverallStatus === 'verified') {
+      verification.verifiedAt = new Date()
+      verification.rejectionReason = null
+    } else if (finalOverallStatus === 'rejected') {
+      verification.rejectionReason = rejectionReason || 'Verification rejected by administrator.'
+    }
+
+    verification.auditHistory.push({
+      action: `admin_review_${finalOverallStatus}`,
+      performedBy: req.user._id,
+      performedByName: req.user.name,
+      note: `Review decision: ${finalOverallStatus}. Reason: ${rejectionReason || 'None'}`,
+    })
+
+    await verification.save()
+
+    // Sync User record
+    const userUpdates = {
+      verificationStatus: finalOverallStatus,
+      documentStatus: verification.documentStatus,
+      faceStatus: verification.faceStatus,
+      isVerified: finalOverallStatus === 'verified',
+      kycStatus: finalOverallStatus === 'verified' ? 'verified' : (finalOverallStatus === 'rejected' ? 'rejected' : 'pending'),
+      kycRejectionReason: finalOverallStatus === 'rejected' ? (rejectionReason || 'Verification rejected') : null,
+    }
+
+    if (verification.documentType === 'driving_license') {
+      userUpdates.drivingLicenseVerified = verification.documentStatus === 'document_verified' && finalOverallStatus === 'verified'
+      if (licenseExpiry) userUpdates.drivingLicenseExpiry = new Date(licenseExpiry)
+      if (licenseCategories) userUpdates.drivingLicenseCategories = Array.isArray(licenseCategories) ? licenseCategories : [licenseCategories]
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(targetUser._id, userUpdates, { new: true, lean: true })
+
+    await logAdminAction(
+      req.user,
+      `renter_verification_${finalOverallStatus}`,
+      { collectionName: 'verifications', docId: verification._id.toString(), userId: targetUser._id.toString(), name: targetUser.name },
+      `Verification ${finalOverallStatus}. Reason: ${rejectionReason || 'None'}`
+    )
+
+    await sendNotification(targetUser._id, {
+      type: 'general',
+      title: finalOverallStatus === 'verified' ? 'Verification Approved! 🎉' : 'Verification Update ⚠️',
+      message: finalOverallStatus === 'verified'
+        ? 'Your identity and face verification are complete. You can now book vehicles on LUPU!'
+        : `Your verification was rejected. Reason: ${rejectionReason || 'Document or face verification failed'}`,
+      link: finalOverallStatus === 'verified' ? '/explore' : '/verify'
+    })
+
+    res.json({
+      success: true,
+      message: `Verification ${finalOverallStatus}`,
+      verification,
+      user: safeUser(updatedUser)
+    })
+  } catch (err) {
+    console.error('Admin review error:', err)
+    res.status(500).json({ message: err.message || 'Error processing verification review' })
   }
 })
 
@@ -1899,12 +2796,49 @@ app.patch('/api/admin/users/:id/kyc', verifyFirebaseToken, requireMongoUser, aut
     if (!['verified', 'rejected'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' })
     }
-    const updates = { kycStatus: status }
-    if (status === 'rejected') updates.kycRejectionReason = reason || 'Your documents were rejected.'
-    else updates.kycRejectionReason = null
-    
+
+    // Separation of duties: Admins cannot approve their own verification
+    if (req.params.id.toString() === req.user._id.toString()) {
+      return res.status(403).json({
+        message: 'Security policy violation: Administrators cannot self-approve their own identity verification.'
+      })
+    }
+    const updates = {
+      kycStatus: status,
+      verificationStatus: status,
+      documentStatus: status === 'verified' ? 'document_verified' : 'document_rejected',
+      faceStatus: status === 'verified' ? 'face_verified' : 'face_failed',
+      isVerified: status === 'verified',
+    }
+    if (status === 'rejected') {
+      updates.kycRejectionReason = reason || 'Your documents were rejected.'
+    } else {
+      updates.kycRejectionReason = null
+    }
+
+    const existingUser = await User.findById(req.params.id)
+    if (!existingUser) return res.status(404).json({ message: 'User not found' })
+
+    if (existingUser.kycType === 'driving_license' || existingUser.documentType === 'driving_license') {
+      updates.drivingLicenseVerified = status === 'verified'
+    }
+
     const updated = await User.findByIdAndUpdate(req.params.id, updates, { new: true, lean: true })
-    if (!updated) return res.status(404).json({ message: 'User not found' })
+
+    // Also sync latest Verification record if present
+    await Verification.findOneAndUpdate(
+      { userId: req.params.id },
+      {
+        overallStatus: status,
+        documentStatus: updates.documentStatus,
+        faceStatus: updates.faceStatus,
+        reviewedBy: req.user._id,
+        reviewedAt: new Date(),
+        rejectionReason: updates.kycRejectionReason,
+        verifiedAt: status === 'verified' ? new Date() : null,
+      },
+      { sort: { createdAt: -1 } }
+    )
 
     await logAdminAction(
       req.user,
@@ -4156,6 +5090,52 @@ app.get('/api/admin/audit-logs', verifyFirebaseToken, requireMongoUser, authoriz
   } catch (err) {
     next(err)
   }
+})
+
+// ── Android APK Download ────────────────────────────────────
+
+app.get('/api/app/info', (_req, res) => {
+  const possiblePaths = [
+    path.resolve(__dirname, '../frontend/public/lupu-release.apk'),
+    path.resolve(__dirname, '../lupu-release.apk'),
+    path.resolve(__dirname, '../mobile/android/app/build/outputs/apk/release/app-release.apk'),
+    path.resolve(__dirname, '../mobile/android/app/build/outputs/apk/debug/app-debug.apk'),
+  ]
+  const apkPath = possiblePaths.find((p) => fs.existsSync(p))
+  if (!apkPath) {
+    return res.status(404).json({ available: false, message: 'APK not found' })
+  }
+  const stats = fs.statSync(apkPath)
+  res.json({
+    available: true,
+    version: '1.0.0',
+    filename: 'LUPU-Rental.apk',
+    sizeBytes: stats.size,
+    sizeMb: (stats.size / (1024 * 1024)).toFixed(1) + ' MB',
+    downloadUrl: '/api/app/download',
+  })
+})
+
+app.get('/api/app/download', (_req, res) => {
+  const possiblePaths = [
+    path.resolve(__dirname, '../frontend/public/lupu-release.apk'),
+    path.resolve(__dirname, '../lupu-release.apk'),
+    path.resolve(__dirname, '../mobile/android/app/build/outputs/apk/release/app-release.apk'),
+    path.resolve(__dirname, '../mobile/android/app/build/outputs/apk/debug/app-debug.apk'),
+  ]
+  const apkPath = possiblePaths.find((p) => fs.existsSync(p))
+  if (!apkPath || !fs.existsSync(apkPath)) {
+    return res.status(404).json({
+      message: 'LUPU Android APK is currently unavailable. Please check back shortly.',
+    })
+  }
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive')
+  res.download(apkPath, 'LUPU-Rental.apk', (err) => {
+    if (err && !res.headersSent) {
+      console.error('APK download streaming error:', err)
+      res.status(500).json({ message: 'Error streaming APK download' })
+    }
+  })
 })
 
 // ── Health Check ───────────────────────────────────────────

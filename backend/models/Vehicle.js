@@ -73,6 +73,10 @@ const vehicleSchema = new mongoose.Schema(
       fuel: { type: String, default: 'Petrol' },
       transmission: { type: String, enum: ['Manual', 'Automatic'] },
     },
+    requiresDrivingLicense: {
+      type: Boolean,
+      default: true,
+    },
     verificationStatus: {
       type: String,
       enum: ['draft', 'submitted', 'pending_verification', 'under_review', 'approved', 'rejected'],

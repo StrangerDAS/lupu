@@ -62,6 +62,29 @@ export const userAPI = {
   requestAccountDeletion: () => api.post('/users/request-account-deletion'),
 }
 
+/* ── Verification System (Renter Identity, Documents & Face) ─────── */
+export const verificationAPI = {
+  getStatus: () => api.get('/users/verification/status'),
+  submitDocument: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/users/verification/document', data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    }
+    return api.post('/users/verification/document', data)
+  },
+  submitFace: (data) => {
+    if (data instanceof FormData) {
+      return api.post('/users/verification/face', data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    }
+    return api.post('/users/verification/face', data)
+  },
+  getAdminVerifications: (params) => api.get('/admin/verifications', { params }),
+  reviewVerification: (id, decisionData) => api.patch(`/admin/verifications/${id}/review`, decisionData),
+}
+
 /* ── Admin ──────────────────────────────────────────────── */
 export const adminAPI = {
   approveVehicle: (id, notes) => api.patch(`/admin/vehicles/${id}/approve`, { adminNotes: notes }),
@@ -175,6 +198,13 @@ export const adminSupportAPI = {
 /* ── Admin Audit Logs ───────────────────────────────────── */
 export const adminAuditAPI = {
   getLogs: () => api.get('/admin/audit-logs'),
+}
+
+/* ── App Info & Download ────────────────────────────────── */
+export const appAPI = {
+  getInfo: () => api.get('/app/info'),
+  downloadUrl: '/api/app/download',
+  staticDownloadUrl: '/lupu-release.apk',
 }
 
 

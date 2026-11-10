@@ -14,6 +14,7 @@ const navLinks = [
   { label: 'Explore', to: '/explore' },
   { label: 'How it works', to: '/how-it-works' },
   { label: 'About', to: '/about' },
+  { label: 'Get App', to: '/download' },
 ]
 
 export default function Navbar() {

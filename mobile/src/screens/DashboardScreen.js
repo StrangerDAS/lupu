@@ -33,8 +33,10 @@ import {
   paymentAPI,
   notificationAPI,
   userAPI,
+  verificationAPI,
   BASE_API_URL,
 } from '../services/api';
+import * as ImagePicker from 'expo-image-picker';
 
 /**
  * Optimizes thumbnail image URLs for mobile fleet display
@@ -208,10 +210,76 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
     setShowAddVehicleModal(true);
   };
 
-  // KYC Form State
-  const [kycType, setKycType] = useState('college_id'); // 'college_id' | 'aadhaar'
+  // KYC Multi-Step Form State (Step 1: Document, Step 2: Live Face Verification)
+  const [kycStep, setKycStep] = useState(1);
+  const [kycType, setKycType] = useState('college_id'); // 'college_id' | 'aadhaar' | 'driving_license'
   const [kycDocNumber, setKycDocNumber] = useState('');
+  const [kycInstitutionName, setKycInstitutionName] = useState('');
+  const [kycDlExpiry, setKycDlExpiry] = useState('');
+  const [kycBiometricConsent, setKycBiometricConsent] = useState(true);
+  const [kycFrontImage, setKycFrontImage] = useState(null); // { uri, base64 }
+  const [kycBackImage, setKycBackImage] = useState(null);   // { uri, base64 }
+  const [kycSelfieImage, setKycSelfieImage] = useState(null); // { uri, base64 }
   const [submittingKyc, setSubmittingKyc] = useState(false);
+
+  const handlePickKycPhoto = async (target, useCamera = false) => {
+    try {
+      if (useCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Camera permission is required to capture documents and live selfies.');
+          return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+          allowsEditing: true,
+          aspect: target === 'selfie' ? [1, 1] : [4, 3],
+          quality: 0.8,
+          base64: true,
+          cameraType: target === 'selfie' ? ImagePicker.CameraType?.front : ImagePicker.CameraType?.back,
+        });
+        if (!result.canceled && result.assets && result.assets[0]) {
+          const asset = result.assets[0];
+          const dataUrl = `data:image/jpeg;base64,${asset.base64}`;
+          if (target === 'front') setKycFrontImage({ uri: asset.uri, base64: dataUrl });
+          else if (target === 'back') setKycBackImage({ uri: asset.uri, base64: dataUrl });
+          else if (target === 'selfie') setKycSelfieImage({ uri: asset.uri, base64: dataUrl });
+        }
+      } else {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission Required', 'Gallery permission is required to select document photos.');
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          allowsEditing: true,
+          aspect: target === 'selfie' ? [1, 1] : [4, 3],
+          quality: 0.8,
+          base64: true,
+        });
+        if (!result.canceled && result.assets && result.assets[0]) {
+          const asset = result.assets[0];
+          const dataUrl = `data:image/jpeg;base64,${asset.base64}`;
+          if (target === 'front') setKycFrontImage({ uri: asset.uri, base64: dataUrl });
+          else if (target === 'back') setKycBackImage({ uri: asset.uri, base64: dataUrl });
+          else if (target === 'selfie') setKycSelfieImage({ uri: asset.uri, base64: dataUrl });
+        }
+      }
+    } catch (err) {
+      Alert.alert('Image Selection Error', err.message || 'Could not access camera or gallery.');
+    }
+  };
+
+  const showPhotoOptions = (target) => {
+    Alert.alert(
+      target === 'selfie' ? 'Capture Live Selfie' : 'Upload Document Photo',
+      'Choose image source:',
+      [
+        { text: 'Take Photo (Camera)', onPress: () => handlePickKycPhoto(target, true) },
+        { text: 'Choose from Gallery', onPress: () => handlePickKycPhoto(target, false) },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
 
   /* ── Fetch Live Dashboard Data ── */
   const fetchDashboardData = useCallback(async () => {
@@ -620,27 +688,93 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
     }
   };
 
-  const handleSubmitKyc = async () => {
+  const handleSubmitDocumentStep = async () => {
     if (!kycDocNumber.trim()) {
       Alert.alert('Missing ID', 'Please enter your document ID / registration number.');
       return;
     }
+    if (kycType === 'college_id' && !kycInstitutionName.trim()) {
+      Alert.alert('Missing College', 'Please enter your College or University name.');
+      return;
+    }
+    if (kycType === 'aadhaar' && kycDocNumber.replace(/\D/g, '').length !== 12) {
+      Alert.alert('Invalid Aadhaar', 'Please enter a valid 12-digit Aadhaar number.');
+      return;
+    }
+    if (!kycFrontImage?.base64) {
+      Alert.alert('Front Photo Required', 'Please capture or choose a front photo of your identity document.');
+      return;
+    }
+    if (['aadhaar', 'driving_license'].includes(kycType) && !kycBackImage?.base64) {
+      Alert.alert(
+        'Back Photo Required',
+        `Please capture or choose the back side photograph of your ${kycType === 'aadhaar' ? 'Aadhaar Card' : 'Driving License'}.`
+      );
+      return;
+    }
+
     setSubmittingKyc(true);
     try {
-      const res = await userAPI.submitKyc({
-        kycType,
+      const docTypeFormatted = kycType === 'college_id' ? 'student_id' : kycType;
+      const res = await verificationAPI.submitDocument({
+        documentType: docTypeFormatted,
         documentNumber: kycDocNumber.trim(),
+        institutionName: kycInstitutionName.trim(),
+        expiryDate: kycDlExpiry || null,
+        categories: kycType === 'driving_license' ? ['MCWG', 'LMV'] : [],
+        documentFrontUrl: kycFrontImage.base64,
+        documentBackUrl: kycBackImage?.base64 || null,
       });
+
       if (res.ok) {
         Alert.alert(
-          'KYC Verified',
-          'Your identity has been verified! You can now rent or list vehicles immediately.'
+          'Document Uploaded! 📄',
+          'Document details and photographs recorded. Please proceed to Live Face Verification.'
+        );
+        setKycStep(2);
+      } else {
+        Alert.alert('Verification Error', res.error || 'Failed to submit document details.');
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setSubmittingKyc(false);
+    }
+  };
+
+  const handleSubmitFaceStep = async () => {
+    if (!kycSelfieImage?.base64) {
+      Alert.alert('Live Selfie Required', 'Please capture your live selfie using your camera before submitting.');
+      return;
+    }
+    if (!kycBiometricConsent) {
+      Alert.alert('Consent Required', 'You must give biometric consent for face verification.');
+      return;
+    }
+
+    setSubmittingKyc(true);
+    try {
+      const res = await verificationAPI.submitFace({
+        selfieDataUrl: kycSelfieImage.base64,
+        biometricConsent: true,
+      });
+
+      if (res.ok) {
+        Alert.alert(
+          'Verification Submitted! 📸',
+          'Your identity documents and live selfie have been securely recorded. Our verification team is reviewing them. You will be notified once your account is approved for booking!'
         );
         setShowKycModal(false);
+        setKycStep(1);
         setKycDocNumber('');
+        setKycInstitutionName('');
+        setKycDlExpiry('');
+        setKycFrontImage(null);
+        setKycBackImage(null);
+        setKycSelfieImage(null);
         if (refreshUser) refreshUser();
       } else {
-        Alert.alert('KYC Error', res.error || 'Failed to update KYC status.');
+        Alert.alert('Face Verification Error', res.error || 'Failed to submit face verification.');
       }
     } catch (e) {
       Alert.alert('Error', e.message);
@@ -1323,47 +1457,78 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
                       />
                     </View>
 
-                    {/* KYC Document Verification Banner (Matching Website) */}
-                    <Card style={styles.kycBanner}>
+                    {/* Mandatory Verification Status Banner */}
+                    <Card style={[
+                      styles.kycBanner,
+                      (user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified') && {
+                        borderColor: 'rgba(34, 197, 94, 0.3)',
+                        backgroundColor: 'rgba(34, 197, 94, 0.05)',
+                      }
+                    ]}>
                       <View style={styles.kycBannerHeader}>
-                        <View style={styles.kycShieldCircle}>
-                          <Ionicons name="shield-checkmark" size={20} color={colors.brand} />
+                        <View style={[
+                          styles.kycShieldCircle,
+                          (user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified') && {
+                            backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                          }
+                        ]}>
+                          <Ionicons
+                            name="shield-checkmark"
+                            size={20}
+                            color={
+                              user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified'
+                                ? '#22C55E'
+                                : colors.brand
+                            }
+                          />
                         </View>
                         <View style={{ flex: 1, marginLeft: spacing.sm }}>
                           <Text style={styles.kycBannerTitle}>
-                            Document KYC Verification Required
+                            {user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified'
+                              ? 'Verified Renter Profile'
+                              : 'Mandatory Renter Verification'}
                           </Text>
                           <Text style={styles.kycBannerStatus}>
                             Status:{' '}
                             <Text
                               style={{
                                 color:
-                                  user?.isVerified || user?.kycStatus === 'verified'
+                                  user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified'
                                     ? '#22C55E'
-                                    : colors.brand,
+                                    : '#EAB308',
                                 fontWeight: '700',
                               }}
                             >
-                              {user?.isVerified || user?.kycStatus === 'verified'
+                              {user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified'
                                 ? 'Verified'
-                                : 'Pending'}
+                                : (user?.verificationStatus || user?.kycStatus || 'Not Started')}
                             </Text>
                           </Text>
                         </View>
                       </View>
 
                       <Text style={styles.kycBannerText}>
-                        Verify your identity using either a College Student ID or Aadhaar Card to bypass file validation at checkout and list or rent vehicles immediately.
+                        {user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified'
+                          ? `Your identity is fully verified with ${user?.documentType?.replace('_', ' ') || 'ID'} (${user?.maskedDocumentNumber || '••••'}). Live face verified. Eligible to book any vehicle!`
+                          : 'Identity document (Student ID, Aadhaar, or Driving License) and live face verification are mandatory before booking any ride on LUPU.'}
                       </Text>
 
                       <Pressable
-                        onPress={() => setShowKycModal(true)}
-                        style={styles.kycVerifyBtn}
+                        onPress={() => {
+                          setKycStep(1);
+                          setShowKycModal(true);
+                        }}
+                        style={[
+                          styles.kycVerifyBtn,
+                          (user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified') && {
+                            backgroundColor: 'rgba(255,255,255,0.08)',
+                          }
+                        ]}
                       >
                         <Text style={styles.kycVerifyBtnText}>
-                          {user?.isVerified || user?.kycStatus === 'verified'
-                            ? 'Update KYC Details'
-                            : 'Verify KYC Now'}
+                          {user?.isVerified || user?.verificationStatus === 'verified' || user?.kycStatus === 'verified'
+                            ? 'Update Verification'
+                            : 'Complete Verification'}
                         </Text>
                       </Pressable>
                     </Card>
@@ -1849,75 +2014,382 @@ export default function DashboardScreen({ onExplorePress, onLoginPress, bottomNa
       </Modal>
 
       {/* ═══════════════════════════════════════════════
-          MODAL 2: KYC VERIFICATION
+          MODAL 2: MANDATORY RENTER VERIFICATION
           ═══════════════════════════════════════════════ */}
       <Modal
         visible={showKycModal}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setShowKycModal(false)}
+        onRequestClose={() => {
+          setShowKycModal(false);
+          setKycStep(1);
+          setKycFrontImage(null);
+          setKycBackImage(null);
+          setKycSelfieImage(null);
+        }}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Document KYC Verification</Text>
-              <Pressable onPress={() => setShowKycModal(false)} style={styles.modalCloseBtn}>
+              <View>
+                <Text style={styles.modalTitle}>
+                  {kycStep === 1 ? 'Step 1: Identity Document' : 'Step 2: Live Face Verification'}
+                </Text>
+                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>
+                  {kycStep === 1 ? 'Choose and submit your government or student ID' : 'Real-time selfie biometric liveness check'}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  setShowKycModal(false);
+                  setKycStep(1);
+                  setKycFrontImage(null);
+                  setKycBackImage(null);
+                  setKycSelfieImage(null);
+                }}
+                style={styles.modalCloseBtn}
+              >
                 <Feather name="x" size={20} color={colors.textPrimary} />
               </Pressable>
             </View>
 
-            <Text style={styles.modalSubtitle}>
-              Upload or enter your College Student ID or Aadhaar Card number for instant verification.
-            </Text>
+            {kycStep === 1 ? (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <Text style={styles.inputLabel}>Select Document Type</Text>
+                <View style={styles.typeSelectorRow}>
+                  <Pressable
+                    onPress={() => setKycType('college_id')}
+                    style={[styles.typeBtn, kycType === 'college_id' && styles.typeBtnActive]}
+                  >
+                    <FontAwesome5
+                      name="id-card"
+                      size={12}
+                      color={kycType === 'college_id' ? '#FFFFFF' : colors.textMuted}
+                    />
+                    <Text style={[styles.typeBtnText, kycType === 'college_id' && styles.typeBtnTextActive]}>
+                      Student ID
+                    </Text>
+                  </Pressable>
 
-            <Text style={styles.inputLabel}>Document Type</Text>
-            <View style={styles.typeSelectorRow}>
-              <Pressable
-                onPress={() => setKycType('college_id')}
-                style={[styles.typeBtn, kycType === 'college_id' && styles.typeBtnActive]}
-              >
-                <FontAwesome5
-                  name="id-card"
-                  size={14}
-                  color={kycType === 'college_id' ? '#FFFFFF' : colors.textMuted}
+                  <Pressable
+                    onPress={() => setKycType('aadhaar')}
+                    style={[styles.typeBtn, kycType === 'aadhaar' && styles.typeBtnActive]}
+                  >
+                    <Feather
+                      name="shield"
+                      size={12}
+                      color={kycType === 'aadhaar' ? '#FFFFFF' : colors.textMuted}
+                    />
+                    <Text style={[styles.typeBtnText, kycType === 'aadhaar' && styles.typeBtnTextActive]}>
+                      Aadhaar
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => setKycType('driving_license')}
+                    style={[styles.typeBtn, kycType === 'driving_license' && styles.typeBtnActive]}
+                  >
+                    <MaterialCommunityIcons
+                      name="card-account-details-outline"
+                      size={14}
+                      color={kycType === 'driving_license' ? '#FFFFFF' : colors.textMuted}
+                    />
+                    <Text style={[styles.typeBtnText, kycType === 'driving_license' && styles.typeBtnTextActive]}>
+                      Driving License
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {kycType === 'college_id' && (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <Text style={styles.inputLabel}>College / University Name</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="e.g. Dibrugarh University, IIT Guwahati"
+                      placeholderTextColor={colors.textMuted}
+                      value={kycInstitutionName}
+                      onChangeText={setKycInstitutionName}
+                    />
+                    <Text style={styles.inputLabel}>Student ID / Roll Number</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="e.g. DU/2026/CS/042"
+                      placeholderTextColor={colors.textMuted}
+                      value={kycDocNumber}
+                      onChangeText={setKycDocNumber}
+                    />
+                  </View>
+                )}
+
+                {kycType === 'aadhaar' && (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <Text style={styles.inputLabel}>12-Digit Aadhaar Card Number</Text>
+                    <TextInput
+                      style={[styles.modalInput, { letterSpacing: 2 }]}
+                      placeholder="•••• •••• ••••"
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="number-pad"
+                      maxLength={14}
+                      value={kycDocNumber}
+                      onChangeText={(val) => setKycDocNumber(val.replace(/\D/g, '').slice(0, 12))}
+                    />
+                    <Text style={{ fontSize: 10, color: colors.textMuted, marginTop: 4 }}>
+                      🔒 UIDAI Compliant: Full Aadhaar is never stored; masked as XXXX-XXXX-1234.
+                    </Text>
+                  </View>
+                )}
+
+                {kycType === 'driving_license' && (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <Text style={styles.inputLabel}>Driving License Number</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="e.g. AS0620240012345"
+                      placeholderTextColor={colors.textMuted}
+                      autoCapitalize="characters"
+                      value={kycDocNumber}
+                      onChangeText={setKycDocNumber}
+                    />
+                    <Text style={styles.inputLabel}>License Expiry Date</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="YYYY-MM-DD (e.g. 2030-12-31)"
+                      placeholderTextColor={colors.textMuted}
+                      value={kycDlExpiry}
+                      onChangeText={setKycDlExpiry}
+                    />
+                    <Text style={{ fontSize: 10, color: '#22C55E', marginTop: 4 }}>
+                      🏍️ Enables booking geared motorcycles and motor vehicles across India.
+                    </Text>
+                  </View>
+                )}
+
+                {/* Front Photo Picker */}
+                <View style={{ marginTop: spacing.md }}>
+                  <Text style={styles.inputLabel}>
+                    Document Front Photograph *
+                  </Text>
+                  {kycFrontImage ? (
+                    <View style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: colors.surface2,
+                      borderRadius: radius.md,
+                      padding: spacing.sm,
+                      borderWidth: 1,
+                      borderColor: colors.brand,
+                      gap: spacing.md,
+                    }}>
+                      <Image
+                        source={{ uri: kycFrontImage.uri }}
+                        style={{ width: 64, height: 48, borderRadius: radius.sm, backgroundColor: '#000' }}
+                        resizeMode="cover"
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>Front Photo Attached</Text>
+                        <Text style={{ color: '#22C55E', fontSize: 10 }}>Ready to upload</Text>
+                      </View>
+                      <Pressable
+                        onPress={() => showPhotoOptions('front')}
+                        style={{ padding: spacing.xs, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: radius.sm }}
+                      >
+                        <Feather name="refresh-cw" size={14} color="#FFFFFF" />
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Pressable
+                      onPress={() => showPhotoOptions('front')}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: colors.surface2,
+                        borderRadius: radius.md,
+                        padding: spacing.md,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        borderStyle: 'dashed',
+                        gap: spacing.sm,
+                      }}
+                    >
+                      <Feather name="camera" size={18} color={colors.brand} />
+                      <Text style={{ color: colors.brand, fontSize: 12, fontWeight: 'bold' }}>
+                        Take Front Photo / Select Image
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+
+                {/* Back Photo Picker (for Aadhaar and Driving License) */}
+                {['aadhaar', 'driving_license'].includes(kycType) && (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <Text style={styles.inputLabel}>
+                      Document Back Photograph *
+                    </Text>
+                    {kycBackImage ? (
+                      <View style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: colors.surface2,
+                        borderRadius: radius.md,
+                        padding: spacing.sm,
+                        borderWidth: 1,
+                        borderColor: colors.brand,
+                        gap: spacing.md,
+                      }}>
+                        <Image
+                          source={{ uri: kycBackImage.uri }}
+                          style={{ width: 64, height: 48, borderRadius: radius.sm, backgroundColor: '#000' }}
+                          resizeMode="cover"
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>Back Photo Attached</Text>
+                          <Text style={{ color: '#22C55E', fontSize: 10 }}>Ready to upload</Text>
+                        </View>
+                        <Pressable
+                          onPress={() => showPhotoOptions('back')}
+                          style={{ padding: spacing.xs, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: radius.sm }}
+                        >
+                          <Feather name="refresh-cw" size={14} color="#FFFFFF" />
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <Pressable
+                        onPress={() => showPhotoOptions('back')}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: colors.surface2,
+                          borderRadius: radius.md,
+                          padding: spacing.md,
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          borderStyle: 'dashed',
+                          gap: spacing.sm,
+                        }}
+                      >
+                        <Feather name="camera" size={18} color={colors.brand} />
+                        <Text style={{ color: colors.brand, fontSize: 12, fontWeight: 'bold' }}>
+                          Take Back Photo / Select Image
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+                )}
+
+                <Button
+                  title={submittingKyc ? 'Submitting Details...' : 'Continue to Live Face Check →'}
+                  onPress={handleSubmitDocumentStep}
+                  loading={submittingKyc}
+                  style={{ marginTop: spacing.lg }}
                 />
-                <Text style={[styles.typeBtnText, kycType === 'college_id' && styles.typeBtnTextActive]}>
-                  Student ID
-                </Text>
-              </Pressable>
+              </ScrollView>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Step 2: Live Face Verification */}
+                <View style={{ alignItems: 'center', paddingVertical: spacing.md }}>
+                  {kycSelfieImage ? (
+                    <View style={{ alignItems: 'center', marginBottom: spacing.md }}>
+                      <Image
+                        source={{ uri: kycSelfieImage.uri }}
+                        style={{
+                          width: 120,
+                          height: 120,
+                          borderRadius: 60,
+                          borderWidth: 3,
+                          borderColor: '#22C55E',
+                        }}
+                        resizeMode="cover"
+                      />
+                      <Pressable
+                        onPress={() => handlePickKycPhoto('selfie', true)}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 6,
+                          marginTop: spacing.sm,
+                          paddingVertical: 6,
+                          paddingHorizontal: 12,
+                          backgroundColor: colors.surface2,
+                          borderRadius: radius.full,
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                        }}
+                      >
+                        <Feather name="refresh-cw" size={12} color={colors.brand} />
+                        <Text style={{ color: colors.brand, fontSize: 11, fontWeight: 'bold' }}>Retake Live Selfie</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Pressable
+                      onPress={() => handlePickKycPhoto('selfie', true)}
+                      style={{
+                        width: 110,
+                        height: 110,
+                        borderRadius: 55,
+                        backgroundColor: 'rgba(255, 107, 0, 0.15)',
+                        borderWidth: 2,
+                        borderColor: colors.brand,
+                        borderStyle: 'dashed',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginBottom: spacing.md,
+                      }}
+                    >
+                      <Feather name="camera" size={42} color={colors.brand} />
+                      <Text style={{ color: colors.brand, fontSize: 10, fontWeight: 'bold', marginTop: 4 }}>Capture Selfie</Text>
+                    </Pressable>
+                  )}
+                  <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 15, marginBottom: 4 }}>
+                    Live Face Verification
+                  </Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center', paddingHorizontal: spacing.md, lineHeight: 18 }}>
+                    Capture a clear live selfie using your front camera. Ensure good lighting and remove sunglasses, hats, or masks.
+                  </Text>
+                </View>
 
-              <Pressable
-                onPress={() => setKycType('aadhaar')}
-                style={[styles.typeBtn, kycType === 'aadhaar' && styles.typeBtnActive]}
-              >
-                <Feather
-                  name="shield"
-                  size={14}
-                  color={kycType === 'aadhaar' ? '#FFFFFF' : colors.textMuted}
-                />
-                <Text style={[styles.typeBtnText, kycType === 'aadhaar' && styles.typeBtnTextActive]}>
-                  Aadhaar Card
-                </Text>
-              </Pressable>
-            </View>
+                {/* Biometric Consent */}
+                <Pressable
+                  onPress={() => setKycBiometricConsent(!kycBiometricConsent)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: colors.surface2,
+                    padding: spacing.md,
+                    borderRadius: radius.md,
+                    borderWidth: 1,
+                    borderColor: kycBiometricConsent ? colors.brand : colors.border,
+                    gap: spacing.sm,
+                    marginTop: spacing.sm,
+                  }}
+                >
+                  <Ionicons
+                    name={kycBiometricConsent ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={kycBiometricConsent ? colors.brand : colors.textMuted}
+                  />
+                  <Text style={{ flex: 1, color: colors.textSecondary, fontSize: 11, lineHeight: 16 }}>
+                    I provide explicit biometric consent to LUPU to verify my facial selfie against my submitted identity document for renter safety.
+                  </Text>
+                </Pressable>
 
-            <Text style={styles.inputLabel}>
-              {kycType === 'college_id' ? 'College Registration / Roll No.' : '12-Digit Aadhaar Number'}
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder={kycType === 'college_id' ? 'e.g. DU/2026/CS/042' : '•••• •••• ••••'}
-              placeholderTextColor={colors.textMuted}
-              value={kycDocNumber}
-              onChangeText={setKycDocNumber}
-            />
-
-            <Button
-              title={submittingKyc ? 'Verifying...' : 'Submit & Verify Identity'}
-              onPress={handleSubmitKyc}
-              loading={submittingKyc}
-              style={{ marginTop: spacing.lg }}
-            />
+                <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg }}>
+                  <Button
+                    title="← Back"
+                    variant="secondary"
+                    onPress={() => setKycStep(1)}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    title={submittingKyc ? 'Submitting...' : 'Submit for Review'}
+                    onPress={handleSubmitFaceStep}
+                    loading={submittingKyc}
+                    style={{ flex: 2 }}
+                  />
+                </View>
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
