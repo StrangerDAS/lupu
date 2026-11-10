@@ -5,6 +5,7 @@ import {
   Text,
   Pressable,
   useWindowDimensions,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -18,10 +19,11 @@ import { typography } from '../../theme/typography';
  * content is never obscured by the navigation bar across any device or navigation mode.
  */
 export function getBottomNavHeight(insets, isCompact = false) {
-  const bottomInset = Math.max(insets?.bottom || 0, 0);
-  const itemHeight = isCompact ? 44 : 48;
-  const topPadding = isCompact ? 4 : 6;
-  const bottomPadding = bottomInset > 0 ? bottomInset + (isCompact ? 2 : 4) : spacing.sm;
+  const bottomInset = insets?.bottom || 0;
+  const minAndroidPadding = Platform.OS === 'android' ? 28 : spacing.sm;
+  const bottomPadding = bottomInset > 0 ? bottomInset + (isCompact ? 4 : 6) : minAndroidPadding;
+  const itemHeight = isCompact ? 46 : 50;
+  const topPadding = isCompact ? 6 : 8;
   return itemHeight + topPadding + bottomPadding;
 }
 
@@ -41,9 +43,10 @@ export default function BottomNavigationBar({
   const fontSize = isCompact ? 10 : 11;
 
   // Safe area bottom inset: respects Android 3-button nav, gesture bar, or edge-to-edge
-  const bottomInset = Math.max(insets.bottom, 0);
-  const bottomPadding = bottomInset > 0 ? bottomInset + (isCompact ? 2 : 4) : spacing.sm;
-  const horizontalPadding = Math.max(insets.left, insets.right, spacing.xs);
+  const bottomInset = insets?.bottom || 0;
+  const minAndroidPadding = Platform.OS === 'android' ? 28 : spacing.sm;
+  const bottomPadding = bottomInset > 0 ? bottomInset + (isCompact ? 4 : 6) : minAndroidPadding;
+  const horizontalPadding = Math.max(insets?.left || 0, insets?.right || 0, spacing.xs);
 
   const tabs = [
     {

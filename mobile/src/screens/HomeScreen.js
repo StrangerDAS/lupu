@@ -11,6 +11,7 @@ import {
   Modal,
   Image,
   useWindowDimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
@@ -885,7 +886,12 @@ export default function HomeScreen() {
           onPress={() => setShowVehicleDetailModal(false)}
         >
           <Pressable
-            style={[styles.detailModalContent, { paddingBottom: Math.max(insets.bottom, 16) }]}
+            style={[
+              styles.detailModalContent,
+              {
+                paddingBottom: Math.max(insets?.bottom || 0, Platform.OS === 'android' ? 36 : 24),
+              },
+            ]}
             onPress={(e) => e.stopPropagation()}
           >
             {/* Sheet Handle */}
@@ -1094,35 +1100,37 @@ export default function HomeScreen() {
               </ScrollView>
 
               {/* Book Now Button — fixed footer outside ScrollView */}
-              <Pressable
-                onPress={handleCreateBooking}
-                disabled={submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0}
-                style={[
-                  styles.bookNowBtn,
-                  { marginTop: spacing.sm },
-                  (submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0) && {
-                    opacity: 0.6,
-                    backgroundColor: conflictInfo.hasConflict ? '#2A2A2A' : colors.brand,
-                  },
-                ]}
-              >
-                {submittingBooking ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Feather
-                      name={conflictInfo.hasConflict ? 'alert-circle' : 'zap'}
-                      size={18}
-                      color="#FFFFFF"
-                    />
-                    <Text style={styles.bookNowBtnText}>
-                      {conflictInfo.hasConflict
-                        ? 'Vehicle Booked for Selected Time'
-                        : `Request Ride • ₹${rentalPricing.totalPrice}`}
-                    </Text>
-                  </>
-                )}
-              </Pressable>
+              <View style={{ paddingTop: spacing.xs, paddingBottom: Platform.OS === 'android' ? 12 : 4 }}>
+                <Pressable
+                  onPress={handleCreateBooking}
+                  disabled={submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0}
+                  style={[
+                    styles.bookNowBtn,
+                    { marginTop: spacing.xs },
+                    (submittingBooking || conflictInfo.hasConflict || rentalPricing.totalPrice <= 0) && {
+                      opacity: 0.6,
+                      backgroundColor: conflictInfo.hasConflict ? '#2A2A2A' : colors.brand,
+                    },
+                  ]}
+                >
+                  {submittingBooking ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Feather
+                        name={conflictInfo.hasConflict ? 'alert-circle' : 'zap'}
+                        size={18}
+                        color="#FFFFFF"
+                      />
+                      <Text style={styles.bookNowBtnText}>
+                        {conflictInfo.hasConflict
+                          ? 'Vehicle Booked for Selected Time'
+                          : `Request Ride • ₹${rentalPricing.totalPrice}`}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
               </>
             )}
           </Pressable>
