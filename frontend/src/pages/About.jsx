@@ -53,27 +53,21 @@ const steps = [
 const founders = [
   {
     name: 'Ruhan Das',
-    role: 'Founder & Developer',
     institution: 'Department of Commerce, Dibrugarh University',
     hometown: 'Doomdooma, Tinsukia, Assam',
     image: '/ruhan-das.jpg',
-    badge: 'Founder & Developer',
   },
   {
     name: 'Abhigyan Handique',
-    role: 'Co-Founder',
     institution: 'Department of Commerce, Dibrugarh University',
     hometown: 'Sivasagar, Assam',
     image: '/abhigyan-handique.jpg',
-    badge: 'Co-Founder',
   },
   {
     name: 'Ankit Dutta',
-    role: 'Co-Founder',
     institution: 'Department of Commerce, Dibrugarh University',
     hometown: 'Dibrugarh, Assam',
     image: '/ankit-dutta.jpg',
-    badge: 'Co-Founder',
   },
 ]
 
@@ -330,18 +324,10 @@ export default function About() {
                     />
                   </div>
 
-                  {/* Details */}
-                  <span className="inline-block text-[11px] font-bold uppercase tracking-wider text-brand bg-brand/10 border border-brand/25 px-3 py-1 rounded-full mb-3">
-                    {founder.badge}
-                  </span>
-
-                  <h3 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight drop-shadow-sm">
+                  {/* Name only (no designation) */}
+                  <h3 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight drop-shadow-sm mb-4">
                     {founder.name}
                   </h3>
-
-                  <p className="text-brand font-semibold text-sm sm:text-base mt-1 mb-4">
-                    {founder.role}
-                  </p>
 
                   <div className="w-full pt-4 border-t border-white/10 space-y-1.5 mt-auto">
                     <p className="text-white/85 text-xs sm:text-sm font-medium leading-relaxed">
