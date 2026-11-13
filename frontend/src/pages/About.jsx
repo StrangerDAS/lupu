@@ -66,7 +66,7 @@ const founders = [
   {
     name: 'Ankit Dutta',
     institution: 'Department of Commerce, Dibrugarh University',
-    hometown: 'Dibrugarh, Assam',
+    hometown: 'Rupai, Doomdooma, Tinsukia, Assam',
     image: '/ankit-dutta.jpg',
   },
 ]
